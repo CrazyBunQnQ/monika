@@ -14,6 +14,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from core.database import Base
 from core.config import settings
 
+# Import all models here for Alembic autogenerate support
+from models.user import User  # noqa: F401
+
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
