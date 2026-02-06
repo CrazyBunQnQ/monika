@@ -42,8 +42,12 @@ def client(db_session):
 
 @pytest.fixture(scope="function")
 def test_db():
+    # Create all tables
+    Base.metadata.create_all(bind=engine)
     db = TestingSessionLocal()
     try:
         yield db
     finally:
         db.close()
+        # Clean up
+        Base.metadata.drop_all(bind=engine)
