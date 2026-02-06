@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.api import auth
+from backend.api import auth, characters
 from backend.core.database import Base, engine
 
 
@@ -38,6 +38,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(auth.router)
+app.include_router(characters.router)
 
 
 @app.get("/")
