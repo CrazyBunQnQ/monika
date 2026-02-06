@@ -10,30 +10,33 @@ from src.core.database import Base, get_db
 # Use SQLite for testing
 SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
 
-engine = create_engine(
+_engine = create_engine(
     SQLALCHEMY_DATABASE_URL,
     connect_args={"check_same_thread": False},
     poolclass=StaticPool,
 )
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
 
 
 @pytest.fixture(scope="function")
-def db_session():
+def _db():
+    """Create and manage a database session for testing."""
     # Create all tables
-    Base.metadata.create_all(bind=engine)
-    yield
+    Base.metadata.create_all(bind=_engine)
+    db = TestingSessionLocal()
+    yield db
+    db.close()
     # Clean up
-    Base.metadata.drop_all(bind=engine)
+    Base.metadata.drop_all(bind=_engine)
 
 
 @pytest.fixture(scope="function")
-def client(db_session):
+def client(_db):
+    """Create a test client with database session override."""
+    db_session = _db  # Get the session from the fixture
+
     def override_get_db():
-        try:
-            yield db_session
-        finally:
-            pass
+        yield db_session
 
     app.dependency_overrides[get_db] = override_get_db
     yield TestClient(app)
@@ -42,12 +45,9 @@ def client(db_session):
 
 @pytest.fixture(scope="function")
 def test_db():
-    # Create all tables
-    Base.metadata.create_all(bind=engine)
+    """Alias for backwards compatibility - returns a session directly."""
+    Base.metadata.create_all(bind=_engine)
     db = TestingSessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-        # Clean up
-        Base.metadata.drop_all(bind=engine)
+    yield db
+    db.close()
+    Base.metadata.drop_all(bind=_engine)
