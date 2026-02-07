@@ -33,6 +33,7 @@ class GameSession(Base):
 
     # Ownership
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    character_id = Column(Integer, ForeignKey("characters.id"), nullable=True)
 
     # Session info
     name = Column(String(200), nullable=False)
@@ -75,6 +76,11 @@ class GameSession(Base):
     # events = relationship("Event", backref="session", cascade="all, delete-orphan")
     # combats = relationship("Combat", backref="session", cascade="all, delete-orphan")
     # chases = relationship("Chase", backref="session", cascade="all, delete-orphan")
+
+    @property
+    def current_scene(self) -> str | None:
+        """Alias for current_scene_name for API compatibility."""
+        return self.current_scene_name
 
     def __repr__(self) -> str:
         return f"<GameSession {self.id} {self.name} state={self.state}>"

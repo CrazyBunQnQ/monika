@@ -3,9 +3,13 @@ from datetime import datetime
 import uuid
 from enum import Enum
 
-from sqlalchemy import Column, String, DateTime, Integer, Text, ForeignKey, JSON
+from sqlalchemy import Column, String, DateTime, Integer, Text, ForeignKey, JSON, Enum as SQLEnum
 from sqlalchemy.sql import func
-from sqlalchemy.dialects.postgresql import UUID, ENUM
+try:
+    from sqlalchemy.dialects.postgresql import UUID
+except ImportError:
+    from sqlalchemy import String
+    UUID = String
 
 from src.core.database import Base
 
@@ -78,13 +82,13 @@ class Event(Base):
 
     # Who triggered the event
     actor_player_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
-    actor_role = Column(ENUM("kp", "player", "system", name="actor_role"), nullable=False)
+    actor_role = Column(SQLEnum("kp", "player", "system", name="actor_role"), nullable=False)
 
     # Which character was affected (if applicable)
     character_id = Column(Integer, ForeignKey("characters.id"), nullable=True, index=True)
 
     # Event type
-    event_type = Column(ENUM(EventType, name="event_type", create_type=False), nullable=False, index=True)
+    event_type = Column(SQLEnum(EventType, name="event_type", create_constraint=False, native_enum=False), nullable=False, index=True)
 
     # Event payload - structured data specific to event type
     # Examples:
@@ -95,7 +99,7 @@ class Event(Base):
 
     # Visibility: who can see this event
     visibility = Column(
-        ENUM(VisibilityLevel, name="visibility_level", create_type=False),
+        SQLEnum(VisibilityLevel, name="visibility_level", create_constraint=False, native_enum=False),
         nullable=False,
         default=VisibilityLevel.PUBLIC
     )
