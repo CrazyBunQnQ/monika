@@ -1,9 +1,9 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { UserRun, Skull, Plus, Minus } from "lucide-react"
+import { Skull, Plus, Minus } from "lucide-react"
 import { cn } from "@/lib/utils"
-import type { Chase, ChaseParticipant } from "@/types/chase"
+import type { Chase, ChaseParticipant, ChaseParticipantRole } from "@/types/chase"
 
 interface ParticipantListProps {
   chase: Chase

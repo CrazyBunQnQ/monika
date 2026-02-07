@@ -299,3 +299,22 @@ export interface ChaseEndedEvent {
   chase_id: string
   winner?: 'fugitive' | 'pursuer'
 }
+
+/**
+ * Single entry in chase log
+ */
+export interface ChaseLogEntry {
+  id: string
+  round: number
+  type: 'action' | 'obstacle' | 'round_change' | 'chase_start' | 'chase_end'
+  actor?: string
+  target?: string
+  description: string
+  success_level?: SuccessLevel
+  damage?: number
+  san_lost?: number
+  speed_change?: number
+  position_change?: number
+  obstacle_overcome?: boolean
+  timestamp: Date
+}
