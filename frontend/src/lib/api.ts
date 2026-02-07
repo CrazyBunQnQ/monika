@@ -15,6 +15,22 @@ import type {
   SuccessLevel,
   DamageType,
 } from '../types/combat'
+import type {
+  Chase,
+  ChaseRoundRequest,
+  ChaseRoundResponse,
+  ObstacleCheckRequest,
+  ObstacleResponse,
+  ChaseEndRequest,
+  ChaseCreateRequest,
+  ChaseParticipantCreateRequest,
+  ChaseParticipant,
+  ChaseState,
+  ChaseEndReason,
+  ChaseParticipantRole,
+  ObstacleType,
+  ObstacleDifficulty,
+} from '../types/chase'
 
 // 存储键名常量
 export const STORAGE_KEYS = {
@@ -234,6 +250,85 @@ export const combatApi = {
 
   end: async (id: string): Promise<Combat> => {
     const response = await api.post<Combat>(`/combat/${id}/end`)
+    return response.data
+  },
+}
+
+// Re-export chase types
+export type {
+  Chase,
+  ChaseRoundRequest,
+  ChaseRoundResponse,
+  ObstacleCheckRequest,
+  ObstacleResponse,
+  ChaseEndRequest,
+  ChaseCreateRequest,
+  ChaseParticipantCreateRequest,
+  ChaseParticipant,
+  ChaseState,
+  ChaseEndReason,
+  ChaseParticipantRole,
+  ObstacleType,
+  ObstacleDifficulty,
+}
+
+// Chase API
+export const chaseApi = {
+  // Get chase session by ID
+  getById: async (id: string): Promise<Chase> => {
+    const response = await api.get<Chase>(`/chase/${id}`)
+    return response.data
+  },
+
+  // Create a new chase session
+  create: async (data: ChaseCreateRequest): Promise<Chase> => {
+    const response = await api.post<Chase>('/chase/start', data)
+    return response.data
+  },
+
+  // Execute round actions
+  executeRound: async (id: string, data: ChaseRoundRequest): Promise<ChaseRoundResponse> => {
+    const response = await api.post<ChaseRoundResponse>(`/chase/${id}/round`, data)
+    return response.data
+  },
+
+  // Perform obstacle check
+  obstacleCheck: async (id: string, data: ObstacleCheckRequest): Promise<ObstacleResponse> => {
+    const response = await api.post<ObstacleResponse>(`/chase/${id}/obstacle-check`, data)
+    return response.data
+  },
+
+  // Generate obstacles
+  generateObstacles: async (id: string): Promise<ObstacleResponse[]> => {
+    const response = await api.post<ObstacleResponse[]>(`/chase/${id}/obstacles/generate`)
+    return response.data
+  },
+
+  // End chase
+  end: async (id: string, data?: ChaseEndRequest): Promise<void> => {
+    await api.post(`/chase/${id}/end`, data || {})
+  },
+
+  // Add participant
+  addParticipant: async (id: string, data: ChaseParticipantCreateRequest): Promise<ChaseParticipant> => {
+    const response = await api.post<ChaseParticipant>(`/chase/${id}/participants`, data)
+    return response.data
+  },
+
+  // Remove participant
+  removeParticipant: async (id: string, participantId: string): Promise<void> => {
+    await api.delete(`/chase/${id}/participants/${participantId}`)
+  },
+
+  // Get obstacles
+  getObstacles: async (id: string): Promise<ObstacleResponse[]> => {
+    const response = await api.get<ObstacleResponse[]>(`/chase/${id}/obstacles`)
+    return response.data
+  },
+
+  // Get participants
+  getParticipants: async (id: string): Promise<ChaseParticipant[]> => {
+    const response = await api.get<ChaseParticipant[]>(`/chase/${id}/participants`)
     return response.data
   },
 }
