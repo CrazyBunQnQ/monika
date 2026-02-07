@@ -247,10 +247,10 @@ export function ChaseOverlay({
           </div>
         </div>
 
-        {/* Three-Column Layout */}
-        <div className="grid grid-cols-3 gap-4 p-4 h-[600px] overflow-hidden">
+        {/* Three-Column Layout - Responsive */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 p-4 h-[600px] overflow-hidden">
           {/* Left: Chase Info Panel */}
-          <div className="flex-shrink-0 overflow-hidden">
+          <div className="lg:col-span-1 flex-shrink-0 overflow-hidden">
             <ChaseInfoPanel
               chase={chase}
               pressure={pressure}
@@ -260,7 +260,7 @@ export function ChaseOverlay({
           </div>
 
           {/* Center: Action Panel */}
-          <div className="flex-shrink-0 overflow-hidden">
+          <div className="lg:col-span-1 flex-shrink-0 overflow-hidden">
             <ChaseActionPanel
               chase={chase}
               currentParticipant={currentParticipant}
@@ -276,7 +276,7 @@ export function ChaseOverlay({
           </div>
 
           {/* Right: Chase Log Panel */}
-          <div className="flex-shrink-0 overflow-hidden">
+          <div className="lg:col-span-1 flex-shrink-0 overflow-hidden">
             <ChaseLogPanel
               logs={logs}
               onClear={handleClearLogs}
