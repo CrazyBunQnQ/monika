@@ -3,11 +3,18 @@ import { Header } from "@/components/Header"
 import { MessageList } from "@/components/MessageList"
 import { StatePanel } from "@/components/StatePanel"
 import { Footer } from "@/components/Footer"
+import { CombatOverlay } from "@/components/combat/CombatOverlay"
 import { useGameWebSocket } from "@/hooks/useGameWebSocket"
 import { useLLMResponse } from "@/hooks/useLLMResponse"
+import { useCombatState } from "@/hooks/useCombatState"
+import { useCombatActions } from "@/hooks/useCombatActions"
 import { useAuth } from "@/contexts/AuthContext"
 import type { ServerMessage, KeeperMessage, StateUpdate } from "@/types/websocket"
+import type { Combat, AttackRequest, HealRequest } from "@/types/combat"
 import { toast } from "sonner"
+import { Card } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Maximize2, Sword } from "lucide-react"
 
 interface Message {
   id: string
@@ -37,6 +44,27 @@ interface WorldState {
 
 export function GameConsole() {
   const { user } = useAuth()
+
+  // Combat state management
+  const [combatId, setCombatId] = useState<string | null>(null)
+  const [isCombatMinimized, setIsCombatMinimized] = useState(false)
+
+  const {
+    combat,
+    combatants,
+    currentTurn,
+    isLoading: isCombatLoading,
+    fetchCombat,
+    updateFromTurnResponse,
+    updateCombatant,
+  } = useCombatState(combatId)
+
+  const {
+    nextTurn,
+    attack,
+    heal,
+    endCombat,
+  } = useCombatActions(combatId)
 
   // State management
   const [messages, setMessages] = useState<Message[]>([
@@ -213,6 +241,102 @@ export function GameConsole() {
     }
   }, [error])
 
+  /**
+   * Handle combat attack action
+   */
+  const handleCombatAttack = async (request: AttackRequest) => {
+    try {
+      const response = await attack(request)
+
+      // Update the target combatant with new HP
+      const targetCombatant = combatants.find(c => c.id === request.target_id)
+      if (targetCombatant) {
+        updateCombatant({
+          ...targetCombatant,
+          hp: response.target_hp_after,
+        })
+      }
+
+      toast.success(`${response.attacker} attacked ${response.target} for ${response.damage} damage!`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Attack failed")
+    }
+  }
+
+  /**
+   * Handle combat heal action
+   */
+  const handleCombatHeal = async (request: HealRequest) => {
+    try {
+      const response = await heal(request)
+
+      // Update the target combatant with new HP
+      const targetCombatant = combatants.find(c => c.id === request.target_id)
+      if (targetCombatant) {
+        updateCombatant({
+          ...targetCombatant,
+          hp: response.hp_after,
+        })
+      }
+
+      toast.success(`Healed ${response.target} for ${response.healing} HP!`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Heal failed")
+    }
+  }
+
+  /**
+   * Handle dodge action
+   */
+  const handleCombatDodge = async () => {
+    try {
+      toast.success("Dodge prepared!")
+      // TODO: Implement dodge API and state update
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Dodge failed")
+    }
+  }
+
+  /**
+   * Handle next turn action
+   */
+  const handleCombatNextTurn = async () => {
+    try {
+      const response = await nextTurn()
+      updateFromTurnResponse(response)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Next turn failed")
+    }
+  }
+
+  /**
+   * Handle end combat action
+   */
+  const handleCombatEnd = async () => {
+    try {
+      await endCombat()
+      setCombatId(null)
+      setIsCombatMinimized(false)
+      toast.success("Combat ended!")
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "End combat failed")
+    }
+  }
+
+  /**
+   * Handle combat minimize
+   */
+  const handleCombatMinimize = () => {
+    setIsCombatMinimized(true)
+  }
+
+  /**
+   * Handle combat expand (from minimized state)
+   */
+  const handleCombatExpand = () => {
+    setIsCombatMinimized(false)
+  }
+
   return (
     <div className="flex flex-col h-screen">
       <Header characterName="调查员" />
@@ -235,6 +359,46 @@ export function GameConsole() {
           }}
         />
       </div>
+
+      {/* Combat Overlay */}
+      {combat && !isCombatMinimized && (
+        <CombatOverlay
+          combat={combat}
+          onAttack={handleCombatAttack}
+          onHeal={handleCombatHeal}
+          onDodge={handleCombatDodge}
+          onNextTurn={handleCombatNextTurn}
+          onEndCombat={handleCombatEnd}
+          onMinimize={handleCombatMinimize}
+          isLoading={isCombatLoading}
+          combatLogs={[]} // TODO: Implement combat log state
+        />
+      )}
+
+      {/* Minimized Combat Card */}
+      {combat && isCombatMinimized && (
+        <Card className="fixed bottom-4 right-4 w-[200px] p-3 shadow-lg border-2 border-primary">
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Sword className="h-4 w-4 text-primary" />
+              <span className="text-sm font-semibold">Round {combat.round}</span>
+            </div>
+            {currentTurn && (
+              <div className="text-xs text-muted-foreground">
+                {currentTurn.name}&apos;s turn
+              </div>
+            )}
+            <Button
+              onClick={handleCombatExpand}
+              size="sm"
+              className="w-full"
+            >
+              <Maximize2 className="h-3 w-3 mr-1" />
+              Expand
+            </Button>
+          </div>
+        </Card>
+      )}
     </div>
   )
 }
