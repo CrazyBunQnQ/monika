@@ -23,6 +23,9 @@ export { ChaseActionPanel } from "./ChaseActionPanel"
 // Log Panels
 export { ChaseLogPanel } from "./ChaseLogPanel"
 
+// Main Overlay
+export { ChaseOverlay } from "./ChaseOverlay"
+
 // Re-export types for convenience
 export type {
   Chase,
