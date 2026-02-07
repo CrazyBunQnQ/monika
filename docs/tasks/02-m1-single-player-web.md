@@ -132,25 +132,25 @@
 |----|------|------|----------|------|------|
 | M1-046 | [x] 创建 FastAPI 项目骨架 | backend | 2h | M0 | [x] |
 | M1-047 | [x] 实现消息接收 POST /game/message | backend | 4h | M1-046 | [x] |
-| M1-048 | [ ] 实现意图识别服务 | backend | 6h | M1-047 | [ ] |
-| M1-049 | [ ] 实现 TRPG 门禁检查 | backend | 4h | M1-048 | [ ] |
-| M1-050 | [ ] 实现拒绝模板响应 | backend | 4h | M1-049 | [ ] |
+| M1-048 | [x] 实现意图识别服务 | backend | 6h | M1-047 | [x] |
+| M1-049 | [x] 实现 TRPG 门禁检查 | backend | 4h | M1-048 | [x] |
+| M1-050 | [x] 实现拒绝模板响应 | backend | 4h | M1-049 | [x] |
 
 #### 后端 - LLM 集成 (12h)
 
 | ID | 任务 | 类型 | 预估工时 | 依赖 | 状态 |
 |----|------|------|----------|------|------|
-| M1-051 | [ ] 集成 OpenAI API | backend | 4h | M1-046 | [ ] |
-| M1-052 | [ ] 实现 LLM Prompt 模板 | backend | 2h | M1-051 | [ ] |
-| M1-053 | [ ] 实现流式响应 Streaming | backend | 4h | M1-051 | [ ] |
-| M1-054 | [ ] 实现响应解析器 | backend | 2h | M1-053 | [ ] |
+| M1-051 | [x] 集成 OpenAI API | backend | 4h | M1-046 | [x] |
+| M1-052 | [x] 实现 LLM Prompt 模板 | backend | 2h | M1-051 | [x] |
+| M1-053 | [x] 实现流式响应 Streaming | backend | 4h | M1-051 | [x] |
+| M1-054 | [x] 实现响应解析器 | backend | 2h | M1-053 | [x] |
 
 #### 前端 - WebSocket (4h)
 
 | ID | 任务 | 类型 | 预估工时 | 依赖 | 状态 |
 |----|------|------|----------|------|------|
-| M1-055 | [ ] 实现 WebSocket 连接服务 | frontend | 2h | M1-046 | [ ] |
-| M1-056 | [ ] 实现消息发送/接收 | frontend | 2h | M1-055 | [ ] |
+| M1-055 | [x] 实现 WebSocket 连接服务 | frontend | 2h | M1-046 | [x] |
+| M1-056 | [x] 实现消息发送/接收 | frontend | 2h | M1-055 | [x] |
 
 ---
 
