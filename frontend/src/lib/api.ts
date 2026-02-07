@@ -274,15 +274,15 @@ export type {
 
 // Chase API
 export const chaseApi = {
-  // Get chase session by ID
-  getById: async (id: string): Promise<Chase> => {
-    const response = await api.get<Chase>(`/chase/${id}`)
+  // Start a new chase session
+  start: async (data: ChaseCreateRequest): Promise<Chase> => {
+    const response = await api.post<Chase>('/chase/start', data)
     return response.data
   },
 
-  // Create a new chase session
-  create: async (data: ChaseCreateRequest): Promise<Chase> => {
-    const response = await api.post<Chase>('/chase/start', data)
+  // Get chase session by ID
+  getById: async (id: string): Promise<Chase> => {
+    const response = await api.get<Chase>(`/chase/${id}`)
     return response.data
   },
 
@@ -292,15 +292,9 @@ export const chaseApi = {
     return response.data
   },
 
-  // Perform obstacle check
-  obstacleCheck: async (id: string, data: ObstacleCheckRequest): Promise<ObstacleResponse> => {
-    const response = await api.post<ObstacleResponse>(`/chase/${id}/obstacle-check`, data)
-    return response.data
-  },
-
   // Generate obstacles
-  generateObstacles: async (id: string): Promise<ObstacleResponse[]> => {
-    const response = await api.post<ObstacleResponse[]>(`/chase/${id}/obstacles/generate`)
+  generateObstacles: async (id: string): Promise<ObstacleResponse> => {
+    const response = await api.post<ObstacleResponse>(`/chase/${id}/obstacles/generate`)
     return response.data
   },
 
@@ -312,23 +306,6 @@ export const chaseApi = {
   // Add participant
   addParticipant: async (id: string, data: ChaseParticipantCreateRequest): Promise<ChaseParticipant> => {
     const response = await api.post<ChaseParticipant>(`/chase/${id}/participants`, data)
-    return response.data
-  },
-
-  // Remove participant
-  removeParticipant: async (id: string, participantId: string): Promise<void> => {
-    await api.delete(`/chase/${id}/participants/${participantId}`)
-  },
-
-  // Get obstacles
-  getObstacles: async (id: string): Promise<ObstacleResponse[]> => {
-    const response = await api.get<ObstacleResponse[]>(`/chase/${id}/obstacles`)
-    return response.data
-  },
-
-  // Get participants
-  getParticipants: async (id: string): Promise<ChaseParticipant[]> => {
-    const response = await api.get<ChaseParticipant[]>(`/chase/${id}/participants`)
     return response.data
   },
 }
