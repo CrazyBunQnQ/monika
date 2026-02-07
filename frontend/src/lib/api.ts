@@ -160,3 +160,91 @@ export const characterApi = {
     await api.delete(`/characters/${id}`)
   },
 }
+
+// Combat types
+export type {
+  Combat,
+  Combatant,
+  TurnResponse,
+  AttackRequest,
+  AttackResponse,
+  HealRequest,
+  HealResponse,
+  CombatCreateRequest,
+  CombatantCreateRequest,
+  CombatLogEntry,
+  CombatState,
+  CombatantRole,
+  SuccessLevel,
+} from '../types/combat'
+
+// Combat API
+export const combatApi = {
+  start: async (data: { session_id: string; location?: string; description?: string }) => {
+    const response = await api.post('/combat/start', data)
+    return response.data
+  },
+
+  getById: async (id: string) => {
+    const response = await api.get(`/combat/${id}`)
+    return response.data
+  },
+
+  getTurnOrder: async (id: string) => {
+    const response = await api.get(`/combat/${id}/turn-order`)
+    return response.data
+  },
+
+  nextTurn: async (id: string) => {
+    const response = await api.post(`/combat/${id}/turn`)
+    return response.data
+  },
+
+  attack: async (
+    id: string,
+    data: {
+      attacker_id: string
+      target_id: string
+      attack_skill: number
+      attack_roll?: number
+      damage_roll?: number
+      damage_bonus: number
+    }
+  ) => {
+    const response = await api.post(`/combat/${id}/attack`, data)
+    return response.data
+  },
+
+  heal: async (
+    id: string,
+    data: {
+      target_id: string
+      heal_amount: number
+      first_aid_skill: number
+      first_aid_roll?: number
+    }
+  ) => {
+    const response = await api.post(`/combat/${id}/heal`, data)
+    return response.data
+  },
+
+  addCombatant: async (
+    id: string,
+    data: {
+      name: string
+      hp: number
+      hp_max: number
+      dex: number
+      role: 'pc' | 'npc' | 'ally'
+      character_id?: number
+    }
+  ) => {
+    const response = await api.post(`/combat/${id}/combatants`, data)
+    return response.data
+  },
+
+  end: async (id: string) => {
+    const response = await api.post(`/combat/${id}/end`)
+    return response.data
+  },
+}
