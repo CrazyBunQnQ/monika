@@ -1,6 +1,4 @@
 """Prompt template engine for building LLM prompts."""
-from typing import Optional
-
 from src.models.character import Character
 from src.models.session import GameSession
 
