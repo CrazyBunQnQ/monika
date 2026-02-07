@@ -76,6 +76,11 @@ class GameSession(Base):
     # combats = relationship("Combat", backref="session", cascade="all, delete-orphan")
     # chases = relationship("Chase", backref="session", cascade="all, delete-orphan")
 
+    @property
+    def current_scene(self) -> str | None:
+        """Alias for current_scene_name for API compatibility."""
+        return self.current_scene_name
+
     def __repr__(self) -> str:
         return f"<GameSession {self.id} {self.name} state={self.state}>"
 

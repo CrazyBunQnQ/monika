@@ -48,7 +48,7 @@ class StateSyncService:
 
         # Record original state for event logging
         original_state = {
-            "current_scene": session.current_scene_name,
+            "current_scene": session.current_scene,
             "world_state": session.world_state.copy() if session.world_state else {}
         }
 
@@ -107,7 +107,7 @@ class StateSyncService:
             session=session,
             original_state=original_state,
             new_state={
-                "current_scene": session.current_scene_name,
+                "current_scene": session.current_scene,
                 "world_state": session.world_state
             },
             source=source_description

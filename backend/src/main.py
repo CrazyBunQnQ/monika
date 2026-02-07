@@ -5,6 +5,7 @@ from fastapi.security import OAuth2PasswordBearer
 from src.api.auth import router as auth_router
 from src.api.characters import router as characters_router
 from src.api.game import router as game_router
+from src.api.websocket import websocket_router
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
@@ -27,6 +28,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(characters_router)
 app.include_router(game_router)
+app.include_router(websocket_router, prefix="/ws", tags=["WebSocket"])
 
 
 @app.get("/health")
