@@ -1,7 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider } from '@/contexts/AuthContext'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
-import { Toaster } from '@/components/ui/toaster'
 import { LandingPage } from '@/pages/LandingPage'
 import { AuthPage } from '@/pages/AuthPage'
 import { CharacterSelectPage } from '@/pages/CharacterSelectPage'
@@ -55,7 +54,6 @@ function App() {
           {/* 404 重定向 */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
-        <Toaster />
       </AuthProvider>
     </BrowserRouter>
   )
