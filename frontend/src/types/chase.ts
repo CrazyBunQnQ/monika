@@ -1,74 +1,223 @@
-// 追逐状态
+/**
+ * Chase-related TypeScript types for Monika frontend
+ *
+ * These types correspond to the backend chase API schemas in
+ * backend/src/api/chase.py and models in backend/src/models/chase.py
+ */
+
+/**
+ * Chase session state
+ */
 export type ChaseState = 'active' | 'paused' | 'ended'
 
-// 参与者角色
+/**
+ * Why a chase ended
+ */
+export type ChaseEndReason = 'escaped' | 'caught' | 'abandoned' | 'failed_forward'
+
+/**
+ * Role in the chase
+ */
 export type ChaseParticipantRole = 'fugitive' | 'pursuer'
 
-// 障碍物类型
+/**
+ * Types of obstacles in a chase
+ */
 export type ObstacleType = 'physical' | 'environmental' | 'skill_check' | 'combat'
 
-// 行动类型
-export type ActionType = 'accelerate' | 'decouple' | 'overcome_obstacle' | 'attack'
+/**
+ * Obstacle difficulty levels
+ */
+export type ObstacleDifficulty = 'regular' | 'hard' | 'extreme'
 
-// 追逐主体
+/**
+ * Success level for skill rolls in CoC 7e
+ */
+export type SuccessLevel = 'extreme' | 'hard' | 'regular' | 'failure'
+
+/**
+ * Action types available during a chase
+ */
+export type ActionType = 'accelerate' | 'decelerate' | 'overcome_obstacle' | 'attack'
+
+/**
+ * Chase session with all participants and obstacles
+ */
 export interface Chase {
   id: string
   session_id: string
   state: ChaseState
-  current_round: number
-  distance_level: number
-  pressure: number
-  environment_type: string
+  round: number
+  location: string
+  setting: string
+  started_at: string
+  ended_at: string | null
+  end_reason: ChaseEndReason | null
+  failed_forward_scene: string | null
+  chase_metadata: Record<string, unknown>
   participants: ChaseParticipant[]
-  obstacles: Obstacle[]
+  obstacles: ChaseObstacle[]
+}
+
+/**
+ * Participant in a chase session
+ */
+export interface ChaseParticipant {
+  id: string
+  chase_id: string
+  character_id: number | null
+  name: string
+  role: ChaseParticipantRole
+  is_player: boolean
+  move_rate: number
+  current_speed: number
+  position_index: number
+  is_active: boolean
+  is_exhausted: boolean
+  failed_obstacle_count: number
+  speed_penalty: number
+  consecutive_failures: number
+  participant_metadata: Record<string, unknown>
   created_at: string
   updated_at: string
 }
 
-// 追逐参与者
-export interface ChaseParticipant {
+/**
+ * Obstacle encountered during a chase
+ */
+export interface ChaseObstacle {
   id: string
   chase_id: string
-  character_id: string | null
-  role: ChaseParticipantRole
-  position_index: number
-  move_rate: number
-  current_speed: number
-  is_active: boolean
-  name?: string
-  icon?: string
-}
-
-// 障碍物
-export interface Obstacle {
-  id: string
-  chase_id: string
-  type: ObstacleType
-  difficulty: 'easy' | 'medium' | 'hard' | 'extreme'
-  required_skill: string | null
+  name: string
   description: string
-  penalty: number
-  damage: number
+  obstacle_type: ObstacleType
+  appears_at_round: number
+  appears_at_distance: number
+  difficulty: ObstacleDifficulty
+  skill_required: string | null
+  failure_penalty: number
+  failure_damage: number | null
+  failure_san_cost: number | null
+  fail_forward_result: string | null
+  details: Record<string, unknown>
+  created_at: string
 }
 
-// 行动请求
-export interface ChaseActionRequest {
+/**
+ * Record of an action taken during a chase
+ */
+export interface ChaseAction {
+  id: string
+  chase_id: string
+  round: number
   participant_id: string
-  action: ActionType
-  target_id?: string
-  check_value?: number
+  obstacle_id: string | null
+  action_type: ActionType
+  skill_used: string | null
+  roll_value: number | null
+  skill_value: number | null
+  success_level: SuccessLevel | null
+  speed_change: number
+  position_change: number
+  damage_taken: number | null
+  san_lost: number | null
+  details: Record<string, unknown>
+  created_at: string
 }
 
-// 技能检定请求
-export interface ObstacleCheckRequest {
+/**
+ * Request to create a new chase session
+ */
+export interface ChaseCreateRequest {
+  session_id: string
+  location: string
+  setting?: string
+}
+
+/**
+ * Request to add a participant to a chase
+ */
+export interface ChaseParticipantCreateRequest {
+  name: string
+  role: ChaseParticipantRole
+  move_rate?: number
+  is_player?: boolean
+  character_id?: number
+}
+
+/**
+ * Request to resolve a chase round
+ */
+export interface ChaseRoundRequest {
+  actions: ChaseActionRequestItem[]
+}
+
+/**
+ * Request for a single chase action
+ */
+export interface ChaseActionRequestItem {
   participant_id: string
-  obstacle_id: string
-  skill_name: string
-  skill_value: number
-  use_luck?: boolean
+  action_type: ActionType
+  obstacle_id?: string
+  skill?: number
 }
 
-// 回合结果
+/**
+ * Request to manually end a chase
+ */
+export interface ChaseEndRequest {
+  reason: ChaseEndReason
+  fail_forward_scene?: string
+}
+
+/**
+ * Response with chase data
+ */
+export interface ChaseResponse {
+  id: string
+  state: ChaseState
+  round: number
+  location: string
+  setting: string
+  started_at: string | null
+  ended_at: string | null
+  end_reason: string | null
+  failed_forward_scene: string | null
+  participants: Record<string, unknown>[]
+  obstacles: Record<string, unknown>[]
+}
+
+/**
+ * Response for round resolution
+ */
+export interface ChaseRoundResponse {
+  chase_id: string
+  round: number
+  actions: Record<string, unknown>[]
+  positions: Record<string, unknown>[]
+  chase_ended: boolean
+  end_reason: string | null
+}
+
+/**
+ * Response for obstacle data
+ */
+export interface ObstacleResponse {
+  id: string
+  name: string
+  description: string
+  type: ObstacleType
+  difficulty: ObstacleDifficulty
+  skill_required: string | null
+  failure_penalty: number
+  failure_damage: number | null
+  fail_forward_result: string | null
+}
+
+/**
+ * Legacy: Round result (for backward compatibility)
+ * @deprecated Use ChaseRoundResponse instead
+ */
 export interface RoundResult {
   round: number
   actions: ActionResult[]
@@ -78,7 +227,10 @@ export interface RoundResult {
   winner?: 'fugitive' | 'pursuer'
 }
 
-// 行动结果
+/**
+ * Legacy: Action result (for backward compatibility)
+ * @deprecated Use ChaseAction instead
+ */
 export interface ActionResult {
   participant_id: string
   action: ActionType
@@ -88,7 +240,10 @@ export interface ActionResult {
   obstacle_overcome?: boolean
 }
 
-// 检定结果
+/**
+ * Legacy: Check result (for backward compatibility)
+ * @deprecated Use SuccessLevel and related types instead
+ */
 export interface CheckResult {
   success: boolean
   roll_value: number
@@ -98,17 +253,48 @@ export interface CheckResult {
   message: string
 }
 
-// WebSocket事件类型
+/**
+ * Legacy: Obstacle check request (for backward compatibility)
+ * @deprecated Use ChaseActionRequestItem instead
+ */
+export interface ObstacleCheckRequest {
+  participant_id: string
+  obstacle_id: string
+  skill_name: string
+  skill_value: number
+  use_luck?: boolean
+}
+
+/**
+ * Legacy: Chase action request (for backward compatibility)
+ * @deprecated Use ChaseActionRequestItem instead
+ */
+export interface ChaseActionRequest {
+  participant_id: string
+  action: ActionType
+  target_id?: string
+  check_value?: number
+}
+
+/**
+ * WebSocket event: Chase started
+ */
 export interface ChaseStartedEvent {
   chase_id: string
   chase: Chase
 }
 
+/**
+ * WebSocket event: Chase updated
+ */
 export interface ChaseUpdatedEvent {
   chase_id: string
   chase: Chase
 }
 
+/**
+ * WebSocket event: Chase ended
+ */
 export interface ChaseEndedEvent {
   chase_id: string
   winner?: 'fugitive' | 'pursuer'
