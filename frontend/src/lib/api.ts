@@ -59,27 +59,47 @@ export interface User {
 
 export interface Character {
   id: number
+  owner_id: number
   name: string
-  archetype: string
   age: number
+  gender: string
   occupation: string
+  mental_illness: string
+  backstory: string
+  str: number
+  con: number
+  dex: number
+  app: number
+  pow: number
+  int: number
+  siz: number
+  edu: number
   hp: number
-  hp_max: number
-  san: number
-  san_max: number
-  luck: number
-  luck_max: number
   mp: number
-  mp_max: number
-  strength: number
-  dexterity: number
-  intelligence: number
-  constitution: number
-  appearance: number
-  power: number
-  education: number
-  size: number
-  skills: Record<string, number>
+  san: number
+  max_san: number
+  luck: number
+  created_at: string
+  updated_at: string
+}
+
+// 创建/更新时使用的类型（排除只读字段）
+export interface CharacterCreate {
+  name: string
+  age: number
+  gender: string
+  occupation: string
+  mental_illness?: string
+  backstory?: string
+  str: number
+  con: number
+  dex: number
+  app: number
+  pow: number
+  int: number
+  siz: number
+  edu: number
+  luck?: number
 }
 
 // 认证 API
@@ -120,12 +140,12 @@ export const characterApi = {
     return response.data
   },
 
-  create: async (data: Partial<Character>): Promise<Character> => {
+  create: async (data: CharacterCreate): Promise<Character> => {
     const response = await api.post<Character>('/characters', data)
     return response.data
   },
 
-  update: async (id: number, data: Partial<Character>): Promise<Character> => {
+  update: async (id: number, data: Partial<CharacterCreate>): Promise<Character> => {
     const response = await api.put<Character>(`/characters/${id}`, data)
     return response.data
   },
@@ -134,5 +154,3 @@ export const characterApi = {
     await api.delete(`/characters/${id}`)
   },
 }
-
-export { api as axiosApi }
