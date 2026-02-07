@@ -9,12 +9,13 @@ import { useLLMResponse } from "@/hooks/useLLMResponse"
 import { useCombatState } from "@/hooks/useCombatState"
 import { useCombatActions } from "@/hooks/useCombatActions"
 import { useAuth } from "@/contexts/AuthContext"
-import type { ServerMessage, KeeperMessage, StateUpdate } from "@/types/websocket"
+import type { ServerMessage, KeeperMessage, StateUpdate, ChaseStartedMessage, ChaseEndedMessage } from "@/types/websocket"
 import type { Combat, AttackRequest, HealRequest } from "@/types/combat"
 import { toast } from "sonner"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Maximize2, Sword } from "lucide-react"
+import { Maximize2, Sword, GitFork } from "lucide-react"
+import { ChaseOverlay } from "@/components/chase"
 
 interface Message {
   id: string
@@ -48,6 +49,10 @@ export function GameConsole() {
   // Combat state management
   const [combatId, setCombatId] = useState<string | null>(null)
   const [isCombatMinimized, setIsCombatMinimized] = useState(false)
+
+  // Chase state management
+  const [chaseId, setChaseId] = useState<string | null>(null)
+  const [isChaseMinimized, setIsChaseMinimized] = useState(false)
 
   const {
     combat,
@@ -121,7 +126,7 @@ export function GameConsole() {
 
   /**
    * Handle incoming messages from the WebSocket server
-   * Processes keeper messages and updates the message list
+   * Processes keeper messages, chase events, and updates the message list
    */
   const handleServerMessage = useCallback((message: ServerMessage) => {
     if (message.type === 'keeper_message') {
@@ -139,6 +144,19 @@ export function GameConsole() {
       }
     } else if (message.type === 'error') {
       toast.error(message.content)
+    } else if (message.type === 'chase_started') {
+      const chaseEvent = message as ChaseStartedMessage
+      setChaseId(chaseEvent.chase_id)
+      toast.success('Chase started!')
+    } else if (message.type === 'chase_ended') {
+      const chaseEvent = message as ChaseEndedMessage
+      setChaseId(null)
+      setIsChaseMinimized(false)
+      if (chaseEvent.winner) {
+        toast.info(`Chase ended! Winner: ${chaseEvent.winner}`)
+      } else {
+        toast.info('Chase ended')
+      }
     }
   }, [processStream, finalizeResponse, addKeeperMessage])
 
@@ -337,6 +355,29 @@ export function GameConsole() {
     setIsCombatMinimized(false)
   }
 
+  /**
+   * Handle chase end action
+   */
+  const handleChaseEnd = () => {
+    setChaseId(null)
+    setIsChaseMinimized(false)
+    toast.success("Chase ended!")
+  }
+
+  /**
+   * Handle chase minimize
+   */
+  const handleChaseMinimize = () => {
+    setIsChaseMinimized(true)
+  }
+
+  /**
+   * Handle chase expand (from minimized state)
+   */
+  const handleChaseExpand = () => {
+    setIsChaseMinimized(false)
+  }
+
   return (
     <div className="flex flex-col h-screen">
       <Header characterName="调查员" />
@@ -392,6 +433,39 @@ export function GameConsole() {
               onClick={handleCombatExpand}
               size="sm"
               className="w-full"
+            >
+              <Maximize2 className="h-3 w-3 mr-1" />
+              Expand
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      {/* Chase Overlay */}
+      {chaseId && !isChaseMinimized && (
+        <ChaseOverlay
+          chaseId={chaseId}
+          onClose={handleChaseEnd}
+          onMinimize={handleChaseMinimize}
+        />
+      )}
+
+      {/* Minimized Chase Card */}
+      {chaseId && isChaseMinimized && (
+        <Card className="fixed bottom-4 left-4 w-[200px] p-3 shadow-lg border-2 border-orange-500">
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <GitFork className="h-4 w-4 text-orange-500" />
+              <span className="text-sm font-semibold">Chase Active</span>
+            </div>
+            <div className="text-xs text-muted-foreground">
+              In progress
+            </div>
+            <Button
+              onClick={handleChaseExpand}
+              size="sm"
+              className="w-full"
+              variant="outline"
             >
               <Maximize2 className="h-3 w-3 mr-1" />
               Expand

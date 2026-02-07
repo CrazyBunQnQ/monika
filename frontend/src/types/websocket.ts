@@ -50,4 +50,15 @@ export interface ErrorMessage {
   content: string;
 }
 
-export type ServerMessage = KeeperMessage | StateUpdate | ErrorMessage;
+export interface ChaseStartedMessage {
+  type: 'chase_started';
+  chase_id: string;
+}
+
+export interface ChaseEndedMessage {
+  type: 'chase_ended';
+  chase_id: string;
+  winner?: 'fugitive' | 'pursuer';
+}
+
+export type ServerMessage = KeeperMessage | StateUpdate | ErrorMessage | ChaseStartedMessage | ChaseEndedMessage;
