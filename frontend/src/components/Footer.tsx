@@ -1,36 +1,59 @@
-import { useState } from 'react'
-import { Button } from '@/components/ui/button'
-import { Send } from 'lucide-react'
+import { useState } from "react"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Send, Dice3 } from "lucide-react"
 
 interface FooterProps {
   onSendMessage: (content: string) => void
+  onRoll?: () => void
 }
 
-export function Footer({ onSendMessage }: FooterProps) {
-  const [input, setInput] = useState('')
+export function Footer({ onSendMessage, onRoll }: FooterProps) {
+  const [input, setInput] = useState("")
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (input.trim()) {
       onSendMessage(input.trim())
-      setInput('')
+      setInput("")
     }
   }
 
   return (
     <footer className="border-t bg-card p-4">
-      <form onSubmit={handleSubmit} className="flex gap-2">
-        <input
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="输入你的行动..."
-          className="flex-1 px-4 py-2 bg-muted rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-        />
-        <Button type="submit" size="icon">
-          <Send className="w-4 h-4" />
-        </Button>
-      </form>
+      <div className="flex gap-2">
+        <form onSubmit={handleSubmit} className="flex-1 flex gap-2">
+          <Input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="描述你的行动..."
+            className="flex-1"
+          />
+          <Button type="submit" size="icon">
+            <Send className="h-4 w-4" />
+          </Button>
+        </form>
+        {onRoll && (
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            onClick={onRoll}
+            title="Quick Roll"
+          >
+            <Dice3 className="h-4 w-4" />
+          </Button>
+        )}
+      </div>
+      {/* Quick action hints */}
+      <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
+        <span>快捷键:</span>
+        <kbd className="px-1.5 py-0.5 bg-muted rounded text-xs">Enter</kbd>
+        <span>发送</span>
+        <kbd className="px-1.5 py-0.5 bg-muted rounded text-xs">/roll</kbd>
+        <span>检定</span>
+      </div>
     </footer>
   )
 }

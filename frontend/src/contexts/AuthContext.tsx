@@ -1,5 +1,5 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
-import { authApi, type User } from '@/lib/api'
+import { createContext, useContext, useState, useEffect, ReactNode, useMemo } from 'react'
+import { authApi, type User, STORAGE_KEYS } from '@/lib/api'
 import { toast } from 'sonner'
 
 interface AuthContextType {
@@ -9,7 +9,7 @@ interface AuthContextType {
   isLoading: boolean
   login: (username: string, password: string, rememberMe?: boolean) => Promise<void>
   register: (username: string, email: string, password: string) => Promise<void>
-  logout: () => Promise<void>
+  logout: () => void
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -21,17 +21,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // 从 localStorage 恢复登录状态
   useEffect(() => {
-    const storedToken = localStorage.getItem('monika_token')
-    const storedUser = localStorage.getItem('monika_user')
+    const storedToken = localStorage.getItem(STORAGE_KEYS.TOKEN)
+    const storedUser = localStorage.getItem(STORAGE_KEYS.USER)
 
     if (storedToken && storedUser) {
       setToken(storedToken)
-      setUser(JSON.parse(storedUser))
+      try {
+        setUser(JSON.parse(storedUser))
+      } catch {
+        localStorage.removeItem(STORAGE_KEYS.TOKEN)
+        localStorage.removeItem(STORAGE_KEYS.USER)
+      }
     }
     setIsLoading(false)
   }, [])
 
-  const login = async (username: string, password: string, rememberMe = true) => {
+  const login = async (
+    username: string,
+    password: string,
+    rememberMe = true,
+    showToast = true
+  ) => {
     setIsLoading(true)
     try {
       const response = await authApi.login({ username, password })
@@ -43,11 +53,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(userData)
 
       if (rememberMe) {
-        localStorage.setItem('monika_token', response.access_token)
-        localStorage.setItem('monika_user', JSON.stringify(userData))
+        localStorage.setItem(STORAGE_KEYS.TOKEN, response.access_token)
+        localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(userData))
       }
 
-      toast.success('登录成功')
+      if (showToast) {
+        toast.success('登录成功')
+      }
     } catch (error: any) {
       const message = error.response?.data?.detail || '登录失败'
       toast.error(message)
@@ -62,8 +74,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await authApi.register({ username, email, password })
 
-      // 注册成功后自动登录
-      await login(username, password)
+      // 注册成功后自动登录（不显示登录成功的 toast）
+      await login(username, password, true, false)
       toast.success('注册成功')
     } catch (error: any) {
       const message = error.response?.data?.detail || '注册失败'
@@ -74,28 +86,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  const logout = async () => {
-    setIsLoading(true)
-    try {
-      localStorage.removeItem('monika_token')
-      localStorage.removeItem('monika_user')
-      setToken(null)
-      setUser(null)
-      toast.success('已登出')
-    } finally {
-      setIsLoading(false)
-    }
+  const logout = () => {
+    localStorage.removeItem(STORAGE_KEYS.TOKEN)
+    localStorage.removeItem(STORAGE_KEYS.USER)
+    setToken(null)
+    setUser(null)
+    toast.success('已登出')
   }
 
-  const value: AuthContextType = {
-    user,
-    token,
-    isAuthenticated: !!user,
-    isLoading,
-    login,
-    register,
-    logout,
-  }
+  const value = useMemo<AuthContextType>(
+    () => ({
+      user,
+      token,
+      isAuthenticated: !!user,
+      isLoading,
+      login,
+      register,
+      logout,
+    }),
+    [user, token, isLoading]
+  )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

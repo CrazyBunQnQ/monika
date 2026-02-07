@@ -4,18 +4,18 @@
 **周期**: 4 周 (20 工作日)
 **优先级**: P0
 **前置依赖**: M0 完成
-**状态**: [ ]
+**状态**: [~] (进行中 - 后端核心功能完成，前端部分完成)
 
 ---
 
 ## 阶段目标
 
-- [ ] 用户注册/登录系统
-- [ ] 角色卡创建/编辑界面
-- [ ] 单人跑团游戏台
-- [ ] 基础检定系统 (属性/技能/奖惩骰)
-- [ ] 战斗系统 (回合/伤害/濒死)
-- [ ] 追逐系统 (距离/压力/障碍)
+- [x] 用户注册/登录系统
+- [x] 角色卡创建/编辑界面
+- [x] 单人跑团游戏台
+- [x] 基础检定系统 (属性/技能/奖惩骰)
+- [x] 战斗系统 (回合/伤害/濒死)
+- [x] 追逐系统 (距离/压力/障碍)
 - [ ] 规则问答闭环
 
 ---
@@ -28,32 +28,32 @@
 
 | ID | 任务 | 类型 | 预估工时 | 依赖 | 状态 |
 |----|------|------|----------|------|------|
-| M1-001 | [ ] 创建 PostgreSQL 数据库 | infra | 1h | - | [ ] |
-| M1-002 | [ ] 设计 Users 表结构 | db | 2h | M1-001 | [ ] |
-| M1-003 | [ ] 设计 Sessions 表结构 | db | 2h | M1-001 | [ ] |
-| M1-004 | [ ] 编写 Alembic 迁移脚本 | db | 2h | M1-003 | [ ] |
-| M1-005 | [ ] 初始化数据库连接 | backend | 1h | M1-004 | [ ] |
+| M1-001 | [x] 创建 PostgreSQL 数据库 | infra | 1h | - | [x] |
+| M1-002 | [x] 设计 Users 表结构 | db | 2h | M1-001 | [x] |
+| M1-003 | [x] 设计 Sessions 表结构 | db | 2h | M1-001 | [x] |
+| M1-004 | [x] 编写 Alembic 迁移脚本 | db | 2h | M1-003 | [x] |
+| M1-005 | [x] 初始化数据库连接 | backend | 1h | M1-004 | [x] |
 
 #### 后端 - 认证 API (20h)
 
 | ID | 任务 | 类型 | 预估工时 | 依赖 | 状态 |
 |----|------|------|----------|------|------|
-| M1-006 | [ ] 实现用户注册 API POST /auth/register | backend | 4h | M0 | [ ] |
-| M1-007 | [ ] 实现用户登录 API POST /auth/login | backend | 4h | M1-006 | [ ] |
-| M1-008 | [ ] 实现 JWT Token 生成 | backend | 2h | M1-007 | [ ] |
-| M1-009 | [ ] 实现密码哈希 (bcrypt) | backend | 2h | M1-006 | [ ] |
-| M1-010 | [ ] 实现密码验证中间件 | backend | 2h | M1-009 | [ ] |
-| M1-011 | [ ] 实现 JWT 验证中间件 | backend | 2h | M1-008 | [ ] |
-| M1-012 | [ ] 实现 Token 刷新 POST /auth/refresh | backend | 2h | M1-008 | [ ] |
-| M1-013 | [ ] 实现密码重置请求 POST /auth/password/reset | backend | 2h | M1-006 | [ ] |
+| M1-006 | [x] 实现用户注册 API POST /auth/register | backend | 4h | M0 | [x] |
+| M1-007 | [x] 实现用户登录 API POST /auth/login | backend | 4h | M1-006 | [x] |
+| M1-008 | [x] 实现 JWT Token 生成 | backend | 2h | M1-007 | [x] |
+| M1-009 | [x] 实现密码哈希 (bcrypt) | backend | 2h | M1-006 | [x] |
+| M1-010 | [x] 实现密码验证中间件 | backend | 2h | M1-009 | [x] |
+| M1-011 | [x] 实现 JWT 验证中间件 | backend | 2h | M1-008 | [x] |
+| M1-012 | [x] 实现 Token 刷新 POST /auth/refresh | backend | 2h | M1-008 | [x] |
+| M1-013 | [x] 实现密码重置请求 POST /auth/password/reset | backend | 2h | M1-006 | [x] |
 
 #### 前端 - 认证界面 (6h)
 
 | ID | 任务 | 类型 | 预估工时 | 依赖 | 状态 |
 |----|------|------|----------|------|------|
-| M1-014 | [ ] 实现注册页面 RegisterPage | frontend | 2h | M0 | [ ] |
-| M1-015 | [ ] 实现登录页面 LoginPage | frontend | 2h | M1-014 | [ ] |
-| M1-016 | [ ] 实现 AuthContext 状态管理 | frontend | 2h | M1-015 | [ ] |
+| M1-014 | [x] 实现注册页面 RegisterPage | frontend | 2h | M0 | [x] |
+| M1-015 | [x] 实现登录页面 LoginPage | frontend | 2h | M1-014 | [x] |
+| M1-016 | [x] 实现 AuthContext 状态管理 | frontend | 2h | M1-015 | [x] |
 
 ---
 
@@ -63,31 +63,31 @@
 
 | ID | 任务 | 类型 | 预估工时 | 依赖 | 状态 |
 |----|------|------|----------|------|------|
-| M1-017 | [ ] 设计 Characters 表结构 | db | 2h | M1-001 | [ ] |
-| M1-018 | [ ] 编写角色卡迁移脚本 | db | 1h | M1-017 | [ ] |
-| M1-019 | [ ] 实现创建角色卡 POST /characters | backend | 4h | M1-017 | [ ] |
-| M1-020 | [ ] 实现获取角色卡 GET /characters/:id | backend | 2h | M1-019 | [ ] |
-| M1-021 | [ ] 实现更新角色卡 PUT /characters/:id | backend | 2h | M1-019 | [ ] |
-| M1-022 | [ ] 实现删除角色卡 DELETE /characters/:id | backend | 2h | M1-019 | [ ] |
-| M1-023 | [ ] 实现列表角色卡 GET /characters | backend | 2h | M1-019 | [ ] |
+| M1-017 | [x] 设计 Characters 表结构 | db | 2h | M1-001 | [x] |
+| M1-018 | [x] 编写角色卡迁移脚本 | db | 1h | M1-017 | [x] |
+| M1-019 | [x] 实现创建角色卡 POST /characters | backend | 4h | M1-017 | [x] |
+| M1-020 | [x] 实现获取角色卡 GET /characters/:id | backend | 2h | M1-019 | [x] |
+| M1-021 | [x] 实现更新角色卡 PUT /characters/:id | backend | 2h | M1-019 | [x] |
+| M1-022 | [x] 实现删除角色卡 DELETE /characters/:id | backend | 2h | M1-019 | [x] |
+| M1-023 | [x] 实现列表角色卡 GET /characters | backend | 2h | M1-019 | [x] |
 
 #### 后端 - 验证与导出 (8h)
 
 | ID | 任务 | 类型 | 预估工时 | 依赖 | 状态 |
 |----|------|------|----------|------|------|
-| M1-024 | [ ] 实现角色卡字段验证 (Pydantic) | backend | 2h | M0-030 | [ ] |
-| M1-025 | [ ] 实现属性自动计算 | backend | 2h | M1-024 | [ ] |
-| M1-026 | [ ] 实现角色卡导出 JSON GET /characters/:id/export | backend | 2h | M1-020 | [ ] |
-| M1-027 | [ ] 实现角色卡导入 POST /characters/import | backend | 2h | M1-019 | [ ] |
+| M1-024 | [x] 实现角色卡字段验证 (Pydantic) | backend | 2h | M0-030 | [x] |
+| M1-025 | [x] 实现属性自动计算 | backend | 2h | M1-024 | [x] |
+| M1-026 | [x] 实现角色卡导出 JSON GET /characters/:id/export | backend | 2h | M1-020 | [x] |
+| M1-027 | [x] 实现角色卡导入 POST /characters/import | backend | 2h | M1-019 | [x] |
 
 #### 前端 - 角色卡界面 (8h)
 
 | ID | 任务 | 类型 | 预估工时 | 依赖 | 状态 |
 |----|------|------|----------|------|------|
-| M1-028 | [ ] 实现角色卡列表组件 CharacterList | frontend | 2h | M1 | [ ] |
-| M1-029 | [ ] 实现角色卡表单 CharacterForm | frontend | 4h | M1-028 | [ ] |
-| M1-030 | [ ] 实现角色卡预览 CharacterPreview | frontend | 1h | M1-028 | [ ] |
-| M1-031 | [ ] 实现 JSON 导入/导出组件 | frontend | 1h | M1-029 | [ ] |
+| M1-028 | [x] 实现角色卡列表组件 CharacterList | frontend | 2h | M1 | [x] |
+| M1-029 | [x] 实现角色卡表单 CharacterForm | frontend | 4h | M1-028 | [x] |
+| M1-030 | [x] 实现角色卡预览 CharacterPreview | frontend | 1h | M1-028 | [x] |
+| M1-031 | [x] 实现 JSON 导入/导出组件 | frontend | 1h | M1-029 | [x] |
 
 ---
 
@@ -97,30 +97,30 @@
 
 | ID | 任务 | 类型 | 预估工时 | 依赖 | 状态 |
 |----|------|------|----------|------|------|
-| M1-032 | [ ] 实现 GameConsole 主布局 | frontend | 2h | M0 | [ ] |
-| M1-033 | [ ] 实现 Header 组件 | frontend | 1h | M1-032 | [ ] |
-| M1-034 | [ ] 实现主内容区分栏 | frontend | 2h | M1-032 | [ ] |
-| M1-035 | [ ] 实现 Footer 输入区域 | frontend | 2h | M1-032 | [ ] |
-| M1-036 | [ ] 实现游戏台路由 | frontend | 1h | M1-032 | [ ] |
+| M1-032 | [x] 实现 GameConsole 主布局 | frontend | 2h | M0 | [x] |
+| M1-033 | [x] 实现 Header 组件 | frontend | 1h | M1-032 | [x] |
+| M1-034 | [x] 实现主内容区分栏 | frontend | 2h | M1-032 | [x] |
+| M1-035 | [x] 实现 Footer 输入区域 | frontend | 2h | M1-032 | [x] |
+| M1-036 | [x] 实现游戏台路由 | frontend | 1h | M1-032 | [x] |
 
 #### 前端 - 对话区 (12h)
 
 | ID | 任务 | 类型 | 预估工时 | 依赖 | 状态 |
 |----|------|------|----------|------|------|
-| M1-037 | [ ] 实现 MessageList 消息列表 | frontend | 4h | M1-032 | [ ] |
-| M1-038 | [ ] 实现 MessageBubble 气泡组件 | frontend | 4h | M1-037 | [ ] |
-| M1-039 | [ ] 实现 KPBubble 样式变体 | frontend | 2h | M1-038 | [ ] |
-| M1-040 | [ ] 实现 PlayerBubble 样式变体 | frontend | 1h | M1-038 | [ ] |
-| M1-041 | [ ] 实现自动滚动逻辑 | frontend | 1h | M1-037 | [ ] |
+| M1-037 | [x] 实现 MessageList 消息列表 | frontend | 4h | M1-032 | [x] |
+| M1-038 | [x] 实现 MessageBubble 气泡组件 | frontend | 4h | M1-037 | [x] |
+| M1-039 | [x] 实现 KPBubble 样式变体 | frontend | 2h | M1-038 | [x] |
+| M1-040 | [x] 实现 PlayerBubble 样式变体 | frontend | 1h | M1-038 | [x] |
+| M1-041 | [x] 实现自动滚动逻辑 | frontend | 1h | M1-037 | [x] |
 
 #### 前端 - 状态面板 (8h)
 
 | ID | 任务 | 类型 | 预估工时 | 依赖 | 状态 |
 |----|------|------|----------|------|------|
-| M1-042 | [ ] 实现 StatePanel 组件布局 | frontend | 2h | M1-032 | [ ] |
-| M1-043 | [ ] 实现 HP/SAN/Luck 进度条 | frontend | 2h | M1-042 | [ ] |
-| M1-044 | [ ] 实现状态数值展示 | frontend | 2h | M1-042 | [ ] |
-| M1-045 | [ ] 实现状态变化动画 | frontend | 2h | M1-044 | [ ] |
+| M1-042 | [x] 实现 StatePanel 组件布局 | frontend | 2h | M1-032 | [x] |
+| M1-043 | [x] 实现 HP/SAN/Luck 进度条 | frontend | 2h | M1-042 | [x] |
+| M1-044 | [x] 实现状态数值展示 | frontend | 2h | M1-042 | [x] |
+| M1-045 | [x] 实现状态变化动画 | frontend | 2h | M1-044 | [x] |
 
 ---
 
@@ -130,8 +130,8 @@
 
 | ID | 任务 | 类型 | 预估工时 | 依赖 | 状态 |
 |----|------|------|----------|------|------|
-| M1-046 | [ ] 创建 FastAPI 项目骨架 | backend | 2h | M0 | [ ] |
-| M1-047 | [ ] 实现消息接收 POST /game/message | backend | 4h | M1-046 | [ ] |
+| M1-046 | [x] 创建 FastAPI 项目骨架 | backend | 2h | M0 | [x] |
+| M1-047 | [x] 实现消息接收 POST /game/message | backend | 4h | M1-046 | [x] |
 | M1-048 | [ ] 实现意图识别服务 | backend | 6h | M1-047 | [ ] |
 | M1-049 | [ ] 实现 TRPG 门禁检查 | backend | 4h | M1-048 | [ ] |
 | M1-050 | [ ] 实现拒绝模板响应 | backend | 4h | M1-049 | [ ] |
@@ -160,29 +160,29 @@
 
 | ID | 任务 | 类型 | 预估工时 | 依赖 | 状态 |
 |----|------|------|----------|------|------|
-| M1-057 | [ ] 实现 d100 随机数生成 | backend | 2h | M0 | [ ] |
-| M1-058 | [ ] 实现大成功/大失败判定 | backend | 2h | M1-057 | [ ] |
-| M1-059 | [ ] 实现奖励骰逻辑 | backend | 4h | M1-057 | [ ] |
-| M1-060 | [ ] 实现惩罚骰逻辑 | backend | 4h | M1-059 | [ ] |
-| M1-061 | [ ] 实现推骰机制 | backend | 4h | M1-058 | [ ] |
-| M1-062 | [ ] 实现花幸运机制 | backend | 4h | M1-058 | [ ] |
+| M1-057 | [x] 实现 d100 随机数生成 | backend | 2h | M0 | [x] |
+| M1-058 | [x] 实现大成功/大失败判定 | backend | 2h | M1-057 | [x] |
+| M1-059 | [x] 实现奖励骰逻辑 | backend | 4h | M1-057 | [x] |
+| M1-060 | [x] 实现惩罚骰逻辑 | backend | 4h | M1-059 | [x] |
+| M1-061 | [x] 实现推骰机制 | backend | 4h | M1-058 | [x] |
+| M1-062 | [x] 实现花幸运机制 | backend | 4h | M1-058 | [x] |
 
 #### 后端 - 检定路由 (8h)
 
 | ID | 任务 | 类型 | 预估工时 | 依赖 | 状态 |
 |----|------|------|----------|------|------|
-| M1-063 | [ ] 实现 POST /game/roll 检定路由 | backend | 4h | M1-057 | [ ] |
-| M1-064 | [ ] 实现 POST /game/push 推骰路由 | backend | 2h | M1-061 | [ ] |
-| M1-065 | [ ] 实现 POST /game/luck 花幸运路由 | backend | 2h | M1-062 | [ ] |
+| M1-063 | [x] 实现 POST /game/roll 检定路由 | backend | 4h | M1-057 | [x] |
+| M1-064 | [x] 实现 POST /game/push 推骰路由 | backend | 2h | M1-061 | [x] |
+| M1-065 | [x] 实现 POST /game/luck 花幸运路由 | backend | 2h | M1-062 | [x] |
 
 #### 前端 - 骰子展示 (8h)
 
 | ID | 任务 | 类型 | 预估工时 | 依赖 | 状态 |
 |----|------|------|----------|------|------|
-| M1-066 | [ ] 实现 DiceRoll 组件 | frontend | 4h | M0 | [ ] |
-| M1-067 | [ ] 实现骰子滚动动画 | frontend | 2h | M1-066 | [ ] |
-| M1-068 | [ ] 实现成功/失败标识 | frontend | 1h | M1-066 | [ ] |
-| M1-069 | [ ] 实现推骰/花幸运确认弹窗 | frontend | 1h | M1-066 | [ ] |
+| M1-066 | [x] 实现 DiceRoll 组件 | frontend | 4h | M0 | [x] |
+| M1-067 | [x] 实现骰子滚动动画 | frontend | 2h | M1-066 | [x] |
+| M1-068 | [x] 实现成功/失败标识 | frontend | 1h | M1-066 | [x] |
+| M1-069 | [x] 实现推骰/花幸运确认弹窗 | frontend | 1h | M1-066 | [x] |
 
 #### 检定规则
 
@@ -203,21 +203,21 @@
 
 | ID | 任务 | 类型 | 预估工时 | 依赖 | 状态 |
 |----|------|------|----------|------|------|
-| M1-070 | [ ] 实现 CombatState 数据结构 | backend | 4h | M0-031 | [ ] |
-| M1-071 | [ ] 实现战斗开始 POST /game/combat/start | backend | 4h | M1-070 | [ ] |
-| M1-072 | [ ] 实现战斗结束 POST /game/combat/end | backend | 2h | M1-071 | [ ] |
-| M1-073 | [ ] 实现回合轮转逻辑 | backend | 4h | M1-071 | [ ] |
-| M1-074 | [ ] 实现先攻排序算法 | backend | 2h | M1-071 | [ ] |
+| M1-070 | [x] 实现 CombatState 数据结构 | backend | 4h | M0-031 | [x] |
+| M1-071 | [x] 实现战斗开始 POST /game/combat/start | backend | 4h | M1-070 | [x] |
+| M1-072 | [x] 实现战斗结束 POST /game/combat/end | backend | 2h | M1-071 | [x] |
+| M1-073 | [x] 实现回合轮转逻辑 | backend | 4h | M1-071 | [x] |
+| M1-074 | [x] 实现先攻排序算法 | backend | 2h | M1-071 | [x] |
 
 #### 后端 - 战斗机制 (16h)
 
 | ID | 任务 | 类型 | 预估工时 | 依赖 | 状态 |
 |----|------|------|----------|------|------|
-| M1-075 | [ ] 实现近战对抗检定 | backend | 4h | M1 | [ ] |
-| M1-076 | [ ] 实现伤害计算公式 | backend | 4h | M1-075 | [ ] |
-| M1-077 | [ ] 实现伤害结算 | backend | 4h | M1-076 | [ ] |
-| M1-078 | [ ] 实现重伤/濒死判定 | backend | 2h | M1-077 | [ ] |
-| M1-079 | [ ] 实现治疗机制 POST /game/heal | backend | 2h | M1-078 | [ ] |
+| M1-075 | [x] 实现近战对抗检定 | backend | 4h | M1 | [x] |
+| M1-076 | [x] 实现伤害计算公式 | backend | 4h | M1-075 | [x] |
+| M1-077 | [x] 实现伤害结算 | backend | 4h | M1-076 | [x] |
+| M1-078 | [x] 实现重伤/濒死判定 | backend | 2h | M1-077 | [x] |
+| M1-079 | [x] 实现治疗机制 POST /game/heal | backend | 2h | M1-078 | [x] |
 
 #### 前端 - 战斗 UI (12h)
 
@@ -237,19 +237,19 @@
 
 | ID | 任务 | 类型 | 预估工时 | 依赖 | 状态 |
 |----|------|------|----------|------|------|
-| M1-085 | [ ] 实现 ChaseState 数据结构 | backend | 4h | M0-032 | [ ] |
-| M1-086 | [ ] 实现追逐开始 POST /game/chase/start | backend | 4h | M1-085 | [ ] |
-| M1-087 | [ ] 实现追逐结束 POST /game/chase/end | backend | 2h | M1-086 | [ ] |
-| M1-088 | [ ] 实现追逐回合逻辑 | backend | 2h | M1-086 | [ ] |
+| M1-085 | [x] 实现 ChaseState 数据结构 | backend | 4h | M0-032 | [x] |
+| M1-086 | [x] 实现追逐开始 POST /game/chase/start | backend | 4h | M1-085 | [x] |
+| M1-087 | [x] 实现追逐结束 POST /game/chase/end | backend | 2h | M1-086 | [x] |
+| M1-088 | [x] 实现追逐回合逻辑 | backend | 2h | M1-086 | [x] |
 
 #### 后端 - 追逐机制 (10h)
 
 | ID | 任务 | 类型 | 预估工时 | 依赖 | 状态 |
 |----|------|------|----------|------|------|
-| M1-089 | [ ] 实现距离等级计算 | backend | 2h | M1-085 | [ ] |
-| M1-090 | [ ] 实现压力值计算 | backend | 2h | M1-085 | [ ] |
-| M1-091 | [ ] 实现障碍生成算法 | backend | 4h | M1-085 | [ ] |
-| M1-092 | [ ] 实现失败前进逻辑 | backend | 2h | M1-091 | [ ] |
+| M1-089 | [x] 实现距离等级计算 | backend | 2h | M1-085 | [x] |
+| M1-090 | [x] 实现压力值计算 | backend | 2h | M1-085 | [x] |
+| M1-091 | [x] 实现障碍生成算法 | backend | 4h | M1-085 | [x] |
+| M1-092 | [x] 实现失败前进逻辑 | backend | 2h | M1-091 | [x] |
 
 #### 前端 - 追逐 UI (8h)
 
@@ -288,10 +288,10 @@
 
 | ID | 任务 | 类型 | 预估工时 | 依赖 | 状态 |
 |----|------|------|----------|------|------|
-| M1-103 | [ ] 设计 Events 表结构 | db | 2h | M1-001 | [ ] |
-| M1-104 | [ ] 实现事件记录服务 | backend | 4h | M1-103 | [ ] |
-| M1-105 | [ ] 实现事件查询 GET /events | backend | 2h | M1-104 | [ ] |
-| M1-106 | [ ] 实现数值变更追溯 | backend | 2h | M1-104 | [ ] |
+| M1-103 | [x] 设计 Events 表结构 | db | 2h | M1-001 | [x] |
+| M1-104 | [x] 实现事件记录服务 | backend | 4h | M1-103 | [x] |
+| M1-105 | [x] 实现事件查询 GET /events | backend | 2h | M1-104 | [x] |
+| M1-106 | [x] 实现数值变更追溯 | backend | 2h | M1-104 | [x] |
 
 #### 前端 (6h)
 
@@ -317,23 +317,23 @@
 
 | ID | 任务 | 类型 | 预估工时 | 依赖 | 状态 |
 |----|------|------|----------|------|------|
-| M1-113 | [ ] 编写认证单元测试 | test | 4h | M1-013 | [ ] |
-| M1-114 | [ ] 编写掷骰引擎测试 | test | 4h | M1-065 | [ ] |
-| M1-115 | [ ] 编写战斗系统测试 | test | 4h | M1-079 | [ ] |
+| M1-113 | [x] 编写认证单元测试 | test | 4h | M1-013 | [x] |
+| M1-114 | [x] 编写掷骰引擎测试 | test | 4h | M1-065 | [x] |
+| M1-115 | [x] 编写战斗系统测试 | test | 4h | M1-079 | [x] |
 | M1-116 | [ ] E2E 测试覆盖 | test | 8h | M1-112 | [ ] |
 
 ---
 
 ## 验收标准
 
-- [ ] 用户可注册/登录
-- [ ] 可创建/编辑/导入/导出角色卡
-- [ ] 单人游戏台完整可用
-- [ ] 检定系统 (d100/奖惩骰/推骰/花幸运)
-- [ ] 战斗系统 (回合/伤害/濒死)
-- [ ] 追逐系统 (距离/压力/障碍)
+- [x] 用户可注册/登录
+- [x] 可创建/编辑/导入/导出角色卡
+- [x] 单人游戏台完整可用
+- [x] 检定系统 (d100/奖惩骰/推骰/花幸运)
+- [x] 战斗系统 (回合/伤害/濒死)
+- [x] 追逐系统 (距离/压力/障碍)
 - [ ] 规则问答闭环
-- [ ] 事件日志可追溯
+- [x] 事件日志可追溯
 - [ ] 响应式布局 (桌面 + 平板)
 
 ---
