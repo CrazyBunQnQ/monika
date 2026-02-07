@@ -1,18 +1,63 @@
-import { useState } from 'react'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { AuthProvider } from '@/contexts/AuthContext'
+import { ProtectedRoute } from '@/components/ProtectedRoute'
+import { Toaster } from '@/components/ui/toaster'
+import { LandingPage } from '@/pages/LandingPage'
+import { AuthPage } from '@/pages/AuthPage'
+import { CharacterSelectPage } from '@/pages/CharacterSelectPage'
 import { GameConsole } from '@/components/GameConsole'
-import { LoginPage } from '@/pages/LoginPage'
 
 function App() {
-  const [isLoggedIn, setIsLoggedIn] = useState(false)
-
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      {isLoggedIn ? (
-        <GameConsole />
-      ) : (
-        <LoginPage onLogin={() => setIsLoggedIn(true)} />
-      )}
-    </div>
+    <BrowserRouter>
+      <AuthProvider>
+        <Routes>
+          <Route path="/" element={<LandingPage />} />
+          <Route path="/auth" element={<AuthPage />} />
+
+          <Route
+            path="/select-character"
+            element={
+              <ProtectedRoute>
+                <CharacterSelectPage />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/game"
+            element={
+              <ProtectedRoute>
+                <GameConsole />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* 添加角色编辑路由 */}
+          <Route
+            path="/character/:id/edit"
+            element={
+              <ProtectedRoute>
+                <div>角色编辑页（待实现）</div>
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/character/new"
+            element={
+              <ProtectedRoute>
+                <div>角色创建页（待实现）</div>
+              </ProtectedRoute>
+            }
+          />
+
+          {/* 404 重定向 */}
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+        <Toaster />
+      </AuthProvider>
+    </BrowserRouter>
   )
 }
 
