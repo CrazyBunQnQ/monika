@@ -51,12 +51,12 @@ export interface Combat {
   id: string
   state: CombatState
   round: number
-  location: string | null
-  description: string | null
-  started_at: string | null
-  ended_at: string | null
+  location?: string
+  description?: string
+  started_at?: string
+  ended_at?: string
   combatants: Combatant[]
-  current_turn: Combatant | null
+  current_turn?: Combatant
   total_actions?: number  // Optional: total actions in current turn
 }
 
@@ -159,5 +159,5 @@ export interface CombatLogEntry {
   success_level?: SuccessLevel
   damage?: number
   healing?: number
-  timestamp: string
+  timestamp: Date
 }
