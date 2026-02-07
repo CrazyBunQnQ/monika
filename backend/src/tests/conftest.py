@@ -15,6 +15,8 @@ _engine = create_engine(
     connect_args={"check_same_thread": False},
     poolclass=StaticPool,
 )
+# Export for tests that need direct access to engine
+engine = _engine
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
 
 

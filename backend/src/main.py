@@ -1,7 +1,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import OAuth2PasswordBearer
 
 from src.api.auth import router as auth_router
+from src.api.characters import router as characters_router
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 app = FastAPI(
     title="Monika API",
@@ -20,6 +24,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(auth_router)
+app.include_router(characters_router)
 
 
 @app.get("/health")

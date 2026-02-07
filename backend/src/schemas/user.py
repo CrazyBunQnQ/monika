@@ -1,4 +1,6 @@
 """User Pydantic schemas."""
+from typing import Optional
+
 from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 
 
@@ -35,8 +37,8 @@ class Token(BaseModel):
 class TokenData(BaseModel):
     """Schema for token payload data."""
 
-    username: str | None = None
-    user_id: int | None = None
+    username: Optional[str] = None
+    user_id: Optional[int] = None
 
 
 class UserResponse(BaseModel):
