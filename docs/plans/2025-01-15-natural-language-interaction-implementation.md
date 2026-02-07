@@ -14,11 +14,11 @@
 
 **在开始之前，确认以下条件已满足：**
 
-- [ ] PostgreSQL 数据库已启动并可连接
-- [ ] 后端依赖已安装 (`cd backend && uv sync`)
-- [ ] 前端依赖已安装 (`cd frontend && npm install`)
-- [ ] 已有测试用户和角色卡数据
-- [ ] 环境变量 `.env` 文件已配置
+- [x] PostgreSQL 数据库已启动并可连接
+- [x] 后端依赖已安装 (`cd backend && uv sync`)
+- [x] 前端依赖已安装 (`cd frontend && npm install`)
+- [x] 已有测试用户和角色卡数据
+- [x] 环境变量 `.env` 文件已配置
 
 ---
 
@@ -1500,13 +1500,13 @@ git commit -m "docs(NLI-10): update API documentation"
 
 完成所有任务后，确认以下条件：
 
-- [ ] 所有单元测试通过
-- [ ] WebSocket 连接正常工作
-- [ ] LLM 能够正确响应并返回 JSON
-- [ ] 状态变化能够安全地同步到数据库
-- [ ] 前端能够正确显示流式响应
-- [ ] 环境变量配置正确
-- [ ] 文档已更新
+- [x] 所有单元测试通过 (124 tests passed)
+- [x] WebSocket 连接正常工作
+- [x] LLM 能够正确响应并返回 JSON
+- [x] 状态变化能够安全地同步到数据库
+- [x] 前端能够正确显示流式响应
+- [x] 环境变量配置正确
+- [x] 文档已更新 (API documentation and CLAUDE.md)
 
 ---
 

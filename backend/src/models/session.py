@@ -33,6 +33,7 @@ class GameSession(Base):
 
     # Ownership
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    character_id = Column(Integer, ForeignKey("characters.id"), nullable=True)
 
     # Session info
     name = Column(String(200), nullable=False)
