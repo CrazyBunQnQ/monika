@@ -11,9 +11,16 @@ import { Loader2, AlertCircle } from 'lucide-react'
 
 type AuthMode = 'login' | 'register'
 
+interface AuthFormData {
+  username: string
+  email: string
+  password: string
+  confirmPassword: string
+}
+
 export function AuthPage() {
   const [mode, setMode] = useState<AuthMode>('login')
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<AuthFormData>({
     username: '',
     email: '',
     password: '',
@@ -27,6 +34,10 @@ export function AuthPage() {
   const validateForm = (): string | null => {
     if (formData.username.length < 3) {
       return '用户名至少需要3个字符'
+    }
+
+    if (!formData.password) {
+      return '请输入密码'
     }
 
     if (mode === 'register') {
@@ -71,8 +82,8 @@ export function AuthPage() {
         await register(formData.username, formData.email, formData.password)
       }
       navigate('/select-character')
-    } catch (err) {
-      // Error already handled by AuthContext
+    } catch {
+      // Error already handled by AuthContext with toast
     }
   }
 
@@ -191,6 +202,12 @@ export function AuthPage() {
               onClick={() => {
                 setMode(mode === 'login' ? 'register' : 'login')
                 setError('')
+                setFormData({
+                  username: '',
+                  email: '',
+                  password: '',
+                  confirmPassword: '',
+                })
               }}
             >
               {mode === 'login' ? '去注册' : '去登录'}
