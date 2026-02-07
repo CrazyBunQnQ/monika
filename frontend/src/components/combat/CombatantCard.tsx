@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
@@ -71,6 +72,8 @@ interface CombatantCardProps {
   showHpChange?: boolean
   previousHp?: number
   className?: string
+  /** Damage value to animate (negative for damage, positive for healing) */
+  damageAnim?: number
 }
 
 export function CombatantCard({
@@ -81,23 +84,66 @@ export function CombatantCard({
   showHpChange = false,
   previousHp,
   className,
+  damageAnim,
 }: CombatantCardProps) {
+  const [showDamageFloat, setShowDamageFloat] = useState(false)
+  const [shake, setShake] = useState(false)
+
   const hpPercentage = combatant.hp_max > 0
     ? (combatant.hp / combatant.hp_max) * 100
     : 0
   const hpChange = showHpChange && previousHp !== undefined ? combatant.hp - previousHp : 0
 
+  /**
+   * Trigger damage animation when damageAnim prop changes
+   */
+  useEffect(() => {
+    if (damageAnim !== undefined && damageAnim !== 0) {
+      // Trigger shake animation
+      setShake(true)
+      // Trigger floating damage number
+      setShowDamageFloat(true)
+
+      // Reset animations after they complete
+      const shakeTimer = setTimeout(() => setShake(false), 500)
+      const floatTimer = setTimeout(() => setShowDamageFloat(false), 1000)
+
+      return () => {
+        clearTimeout(shakeTimer)
+        clearTimeout(floatTimer)
+      }
+    }
+  }, [damageAnim])
+
   return (
     <Card
       onClick={onSelect}
       className={cn(
-        "transition-all duration-200 cursor-pointer",
+        "transition-all duration-200 cursor-pointer relative",
         isCurrentTurn && "ring-2 ring-green-500",
         isSelected && "ring-2 ring-blue-500",
         !combatant.is_active && "opacity-50",
+        shake && "animate-shake",
         className
       )}
     >
+      {/* Floating Damage/Healing Number */}
+      {showDamageFloat && damageAnim !== undefined && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+          <span
+            className={cn(
+              "text-2xl font-bold animate-float-up-fade-out",
+              damageAnim < 0
+                ? "text-red-600 dark:text-red-400"
+                : "text-green-600 dark:text-green-400"
+            )}
+          >
+            {damageAnim > 0 && "+"}
+            {damageAnim}
+          </span>
+        </div>
+      )}
+
       <CardContent className="p-3 space-y-2">
         {/* Name and Role Badge */}
         <div className="flex items-center justify-between">
