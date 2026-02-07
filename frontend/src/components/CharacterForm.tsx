@@ -10,7 +10,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Save, Upload, Download, User, Swords, BookOpen, Heart } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { characterApi, CharacterCreate } from "@/lib/api"
-import { toast } from "@/components/ui/use-toast"
+import { toast } from "sonner"
 
 // Skill presets from CoC 7e
 const PRESET_SKILLS: Record<string, number> = {
@@ -181,17 +181,11 @@ export function CharacterForm({ initialData, characterId, onSave, onCancel, isLo
       if (characterId) {
         // Update existing character
         await characterApi.update(characterId, apiData)
-        toast({
-          title: "Success",
-          description: "Character updated successfully",
-        })
+        toast.success("Character updated successfully")
       } else {
         // Create new character
         await characterApi.create(apiData)
-        toast({
-          title: "Success",
-          description: "Character created successfully",
-        })
+        toast.success("Character created successfully")
       }
 
       // Call parent callback if provided
@@ -200,11 +194,7 @@ export function CharacterForm({ initialData, characterId, onSave, onCancel, isLo
       }
     } catch (error) {
       console.error("Failed to save character:", error)
-      toast({
-        title: "Error",
-        description: characterId ? "Failed to update character" : "Failed to create character",
-        variant: "destructive",
-      })
+      toast.error(characterId ? "Failed to update character" : "Failed to create character")
     }
   }
 

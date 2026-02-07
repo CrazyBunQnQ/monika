@@ -99,8 +99,8 @@ export function CharacterSelectScreen() {
   // Handle play/start game with character
   const handlePlay = (character: Character) => {
     toast.success(`开始游戏: ${character.name}`)
-    // TODO: Navigate to game screen with character
-    navigate(`/game/${character.id}`)
+    // Navigate to game screen with character data in state
+    navigate('/game', { state: { character } })
   }
 
   // Handle edit character
