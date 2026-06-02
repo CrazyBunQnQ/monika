@@ -13,15 +13,24 @@ import (
 
 type lspTool struct {
 	manager *Manager
+	xyzTest  int // DELIBERATE ERROR
+
+
+
 }
 
 func NewLSPTool(projectDir string) (tool.Tool, error) {
 	m := NewManager(projectDir)
 	m.Start()
+
 	return &lspTool{manager: m}, nil
 }
 
 func (t *lspTool) Manager() *Manager { return t.manager }
+
+func (t *lspTool) ReadyForFile(ctx context.Context, filePath string) bool {
+	return t.manager.ReadyForFile(ctx, filePath)
+}
 
 func (t *lspTool) Name() string { return "lsp" }
 
@@ -29,21 +38,22 @@ func (t *lspTool) Description() string {
 	return `Language Server Protocol client. Provides code intelligence via LSP servers.
 
 Actions:
-- diagnostics: Get diagnostics (errors, warnings) for a file
-- definition: Go to definition at a position in a file
-- type_definition: Go to type definition at a position
-- implementation: Find implementations of an interface or type at a position
-- references: Find all references to a symbol at a position
-- hover: Get hover information (type docs) at a position
-- symbols: Get document symbols (outline) for a file
-- code_actions: List available code actions for a range in a file
-- execute_code_action: Execute a specific code action by title
-- rename: Rename a symbol at a position across the workspace
-- status: Show configured and running LSP servers
+- diagnostics: Get diagnostics (errors, warnings) for a file. Automatically triggered after file edits.
+- definition: Go to definition at a position in a file. **Call this when you encounter an unfamiliar function, type, or variable to understand its implementation.**
+- type_definition: Go to type definition at a position. Use when you need to see the underlying type declaration rather than the value.
+- implementation: Find implementations of an interface or type at a position. **Call this before modifying an interface or abstract method to identify all concrete implementations that may need updates.**
+- references: Find all references to a symbol at a position. **Call this before changing a function signature, type definition, or exported variable to assess the impact and ensure all call sites are updated.**
+- hover: Get hover information (type, signature, docs) at a position. **Call this when you are unsure about a symbol's type, parameters, or return value instead of guessing.**
+- symbols: Get document symbols (outline) for a file. **Call this when first exploring a complex file to quickly understand its structure (types, functions, methods, fields).**
+- code_actions: List available code actions (quick fixes, refactoring) for a position or range. **Call this when diagnostics show errors to find auto-fixes like adding missing imports, creating stub functions, or correcting signatures.**
+- execute_code_action: Execute a specific code action by title. Use after listing available code actions with code_actions.
+- rename: Rename a symbol at a position across the workspace. **Prefer this over manual find-and-replace across files — it correctly handles all references, including cross-file, and avoids false matches.**
+- status: Show configured and running LSP servers.
 
 The file path must be absolute or relative to the project directory.
 Line and character are 0-based (same as LSP protocol).`
 }
+
 
 func (t *lspTool) Parameters() map[string]any {
 	return map[string]any{

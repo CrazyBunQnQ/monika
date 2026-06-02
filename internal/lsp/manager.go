@@ -83,9 +83,20 @@ func (m *Manager) ClientForFile(ctx context.Context, filePath string) (*Client, 
 
 	name := names[0]
 	return m.getOrStart(ctx, name)
+
+}
+
+// ReadyForFile returns true if an LSP client is running and initialized for this file.
+func (m *Manager) ReadyForFile(ctx context.Context, filePath string) bool {
+	client, _, err := m.ClientForFile(ctx, filePath)
+	if err != nil {
+		return false
+	}
+	return client.Ready()
 }
 
 func (m *Manager) Status() string {
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -154,12 +165,21 @@ func (m *Manager) getOrStart(ctx context.Context, name string) (*Client, string,
 
 	m.mu.Lock()
 	if mc, ok := m.clients[name]; ok {
-		mc.lastUsed = time.Now()
+		if mc.client.IsAlive() {
+			mc.lastUsed = time.Now()
+			m.mu.Unlock()
+			return mc.client, name, nil
+		}
+		// Client died; clean up and reconnect
+		delete(m.clients, name)
 		m.mu.Unlock()
-		return mc.client, name, nil
+		return m.startClient(ctx, name)
 	}
 	m.mu.Unlock()
+	return m.startClient(ctx, name)
+}
 
+func (m *Manager) startClient(ctx context.Context, name string) (*Client, string, error) {
 	cfg, ok := m.servers[name]
 	if !ok {
 		return nil, "", fmt.Errorf("lsp: unknown server %q", name)

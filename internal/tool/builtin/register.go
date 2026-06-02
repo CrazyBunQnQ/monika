@@ -3,6 +3,9 @@ package builtin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
 
 	"monika/internal/agent"
 	"monika/internal/config"
@@ -38,6 +41,117 @@ func RegisterLSP(r *tool.ToolRegistry, projectDir string) error {
 	}
 	r.Register(t)
 	return nil
+}
+
+// WireLSPHooks connects LSP diagnostics and symbols hooks to file tools.
+// Must be called after both RegisterDefaults and RegisterLSP.
+func WireLSPHooks(r *tool.ToolRegistry) {
+	lspTool, ok := r.Get("lsp")
+	if !ok {
+		return
+	}
+
+	diagFunc := func(ctx context.Context, filePath string) string {
+		if filePath == "" {
+			return ""
+		}
+
+		// Wait for LSP server to be ready before querying diagnostics.
+		// On first edit after startup, gopls may still be initializing.
+		if checker, ok := lspTool.(interface{ ReadyForFile(context.Context, string) bool }); ok {
+			deadline := time.Now().Add(10 * time.Second)
+			for !checker.ReadyForFile(ctx, filePath) {
+				if time.Now().After(deadline) {
+					return "" // LSP server not ready after timeout
+				}
+				select {
+				case <-ctx.Done():
+					return ""
+				case <-time.After(300 * time.Millisecond):
+				}
+			}
+		}
+
+		// Give LSP server a moment to publish diagnostics after file change
+		time.Sleep(500 * time.Millisecond)
+
+		// Step 1: Run diagnostics
+		diagArgs, _ := json.Marshal(map[string]string{"action": "diagnostics", "file": filePath})
+		diagResult, err := lspTool.Execute(ctx, diagArgs)
+		if err != nil {
+			return fmt.Sprintf("\n\n--- LSP Diagnostics ---\n(error running diagnostics: %s)", err)
+		}
+		if diagResult.IsError {
+			return fmt.Sprintf("\n\n--- LSP Diagnostics ---\n(error: %s)", diagResult.Content)
+		}
+
+		if !strings.Contains(diagResult.Content, "Error") && !strings.Contains(diagResult.Content, "Warning") {
+			return ""
+		}
+
+		var sb strings.Builder
+		sb.WriteString("\n\n--- LSP Diagnostics ---\n")
+		sb.WriteString(diagResult.Content)
+
+		// Step 2: If errors exist, fetch code actions for quick fixes
+		if strings.Contains(diagResult.Content, "Error") {
+			caArgs, _ := json.Marshal(map[string]string{"action": "code_actions", "file": filePath})
+			caResult, caErr := lspTool.Execute(ctx, caArgs)
+			if caErr == nil && caResult.Content != "" && !strings.Contains(caResult.Content, "No code") {
+				sb.WriteString("\n--- Available Code Actions ---\n")
+				sb.WriteString(caResult.Content)
+			}
+		}
+
+		return sb.String()
+	}
+
+	symFunc := func(ctx context.Context, filePath string) string {
+		if filePath == "" {
+			return ""
+		}
+		symArgs, _ := json.Marshal(map[string]string{"action": "symbols", "file": filePath})
+		symResult, err := lspTool.Execute(ctx, symArgs)
+		if err != nil || symResult.IsError {
+			return ""
+		}
+		if symResult.Content == "" || strings.Contains(symResult.Content, "No symbols") {
+			return ""
+		}
+		return "\n\n--- LSP Symbol Outline ---\n" + symResult.Content
+	}
+
+	if t, ok := r.Get("file_edit"); ok {
+		if fe, ok := t.(interface{ SetDiagFunc(LSPDiagFunc) }); ok {
+			fe.SetDiagFunc(diagFunc)
+		}
+	}
+	if t, ok := r.Get("file_write"); ok {
+		if fw, ok := t.(interface{ SetDiagFunc(LSPDiagFunc) }); ok {
+			fw.SetDiagFunc(diagFunc)
+		}
+	}
+	if t, ok := r.Get("file_read"); ok {
+		if fr, ok := t.(interface{ SetSymFunc(LSPDiagFunc) }); ok {
+			fr.SetSymFunc(symFunc)
+		}
+	}
+}
+
+// LSPStatusPrompt returns a system prompt fragment describing available LSP servers.
+func LSPStatusPrompt(r *tool.ToolRegistry) string {
+	t, ok := r.Get("lsp")
+	if !ok {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	statusArgs, _ := json.Marshal(map[string]string{"action": "status"})
+	result, err := t.Execute(ctx, statusArgs)
+	if err != nil || result.IsError || result.Content == "" {
+		return ""
+	}
+	return "\n## Available LSP Servers\n" + result.Content
 }
 
 // RegisterAskUser registers the ask_user tool for user interaction.
