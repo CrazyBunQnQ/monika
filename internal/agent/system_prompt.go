@@ -43,7 +43,7 @@ const PromptToolUsage = `## Tool Usage
 ### Search before reading
 - ALWAYS grep before reading. Find the file AND the exact line numbers, then read only those lines
 - Use glob to discover file structure, or file_list 'tree' parameter for directory tree view
-- grep supports 'ast_pattern' for structural code search via tree-sitter queries
+- Prefer grep with 'ast_pattern' for structural code searches (finding functions, types, interfaces). Only fall back to regex pattern for text-level searches (comments, string literals, config files).
 - Never call file_read without first narrowing scope via grep/glob
 
 ### Read with precision
@@ -51,7 +51,7 @@ const PromptToolUsage = `## Tool Usage
 - Use the 'ranges' parameter to read multiple non-contiguous sections in one call (e.g. ranges='5-16,40-80')
 - Always provide offset and limit; the smaller the better for context efficiency
 - When output ends with "[N more lines below]", use the suggested offset to continue
-- Output has line-number prefixes (e.g. " 42 | code") — strip these when using old_string in file_edit
+- Output has line-number and hash prefixes (e.g. "42│a1b2c3│ code") — copy 'a1b2c3:42' as anchor for file_edit
 - For large files (100+ lines), use 'summary' parameter to get structured AST summary instead
 - Never read an entire file blindly — grep for the specific symbols you need instead
 
@@ -62,13 +62,10 @@ const PromptToolUsage = `## Tool Usage
 
 ### Editing files
 - ALWAYS read with file_read before editing — never edit blind
-- file_edit uses exact string matching: copy old_string from file_read output (strip line-number prefix)
-- Preserve exact indentation (tabs/spaces) in old_string as it appears in the file
-- The edit fails if old_string is not unique; use a larger string with more surrounding context
-- Use replace_all to replace every occurrence of the same old_string
-- If an edit fails, re-read the file first — it may have changed or your old_string is wrong
+- file_edit uses anchor-based line positioning: copy the 'hash:lineNumber' prefix from file_read output as anchor
+- Set line_count to the number of lines to replace (default 1), or 0 to insert after the anchor line
+- If an edit fails due to hash mismatch, re-read the file to get the current content
 - For multi-region changes, prefer file_edit_hunks over multiple file_edit calls
-- Use 'anchor' parameter to verify context hasn't changed (format: "FNV1a-hex:lineNumber")
 - file_edit refuses to edit files with unresolved merge conflict markers
 
 ### MCP tool usage
@@ -303,7 +300,7 @@ const PromptRemember = `## Remember
 - NEVER hardcode secrets (API keys, passwords, tokens)
 - NEVER revert changes you did not make
 - NEVER ask "Should I proceed?" — just proceed and mention what you did
-- NEVER pass the entire file as old_string — use the smallest snippet that uniquely identifies the change
+- NEVER pass the entire file as new_string — edit only the lines that need to change
 - ALWAYS use absolute file paths
 - ALWAYS read with file_read before editing with file_edit — never edit blind
 - ALWAYS prefer editing existing files over creating new ones
