@@ -1,4 +1,4 @@
-import { useRef, useEffect, useMemo, useState } from 'react'
+import { useRef, useEffect, useMemo, useState, useLayoutEffect } from 'react'
 import { IDockviewPanelProps } from 'dockview'
 import { App } from '../../../bindings/monika'
 import { useStore } from '../../store'
@@ -257,6 +257,7 @@ function ChatArea(props: IDockviewPanelProps) {
 
   // IntersectionObserver for lazy loading older messages on scroll to top
   const sentinelRef = useRef<HTMLDivElement>(null)
+  const prevScrollHeightRef = useRef(0)
   useEffect(() => {
     const el = sentinelRef.current
     if (!el || !hasMore) return
@@ -265,13 +266,8 @@ function ChatArea(props: IDockviewPanelProps) {
         if (entry.isIntersecting) {
           const scrollEl = scrollRef.current
           if (!scrollEl) return
-          const prevScrollHeight = scrollEl.scrollHeight
+          prevScrollHeightRef.current = scrollEl.scrollHeight
           loadMoreMessages(effectiveSessionId)
-          // After React re-renders, restore scroll position so content doesn't jump
-          requestAnimationFrame(() => {
-            const newScrollHeight = scrollEl.scrollHeight
-            scrollEl.scrollTop += newScrollHeight - prevScrollHeight
-          })
         }
       },
       { root: scrollRef.current, threshold: 0 }
@@ -279,6 +275,20 @@ function ChatArea(props: IDockviewPanelProps) {
     observer.observe(el)
     return () => observer.disconnect()
   }, [hasMore, effectiveSessionId, loadMoreMessages])
+
+  // Restore scroll position after prepending older messages (useLayoutEffect runs before paint)
+  useLayoutEffect(() => {
+    if (prevScrollHeightRef.current > 0) {
+      const scrollEl = scrollRef.current
+      if (scrollEl) {
+        const delta = scrollEl.scrollHeight - prevScrollHeightRef.current
+        if (delta > 0) {
+          scrollEl.scrollTop += delta
+        }
+      }
+      prevScrollHeightRef.current = 0
+    }
+  }, [displayCount])
 
   // Reset scroll when overlay changes
   useEffect(() => {

@@ -284,7 +284,6 @@ interface AppState {
 
 const INITIAL_DISPLAY_COUNT = 15
 const LOAD_MORE_COUNT = 20
-const DISPLAY_ALL_THRESHOLD = 200
 
 export const useStore = create<AppState>((set, get) => ({
   messages: [{ id: 'welcome', role: 'system', content: 'Welcome to Monika. Type /help for commands.' }],
@@ -767,6 +766,9 @@ export const useStore = create<AppState>((set, get) => ({
       const newParents = { ...s.sessionParents }
       delete newParents[id]
 
+      const nextDisplayCounts = { ...s.displayCounts }
+      delete nextDisplayCounts[id]
+
       const newMessages: Message[] = newActive ? (msgCache[newActive] || []) : [{ id: 'welcome', role: 'system' as const, content: 'Welcome to Monika.' }]
 
       return {
@@ -776,6 +778,7 @@ export const useStore = create<AppState>((set, get) => ({
         messages: newMessages,
         generatingSessionIds: s.generatingSessionIds.filter((sid) => sid !== id),
         sessionParents: newParents,
+        displayCounts: nextDisplayCounts,
       }
     })
   },
@@ -812,7 +815,7 @@ export const useStore = create<AppState>((set, get) => ({
     set((s) => {
       const current = s.displayCounts[sessionId] || INITIAL_DISPLAY_COUNT
       const total = (s.sessionMessages[sessionId] || []).length
-      const next = Math.min(current + count, total > DISPLAY_ALL_THRESHOLD ? total : total)
+      const next = Math.min(current + count, total)
       return { displayCounts: { ...s.displayCounts, [sessionId]: next } }
     })
   },
@@ -922,6 +925,7 @@ export const useStore = create<AppState>((set, get) => ({
         messages: msgs,
         tokenCount: get().sessionTokens[activeId]?.count ?? 0,
         tokenMax: get().sessionTokens[activeId]?.max ?? 0,
+        displayCounts: { ...get().displayCounts, [activeId]: INITIAL_DISPLAY_COUNT },
       })
     }
   },
