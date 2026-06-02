@@ -163,6 +163,7 @@ interface AppState {
 
   openSessions: SessionTabInfo[]
   sessionMessages: Record<string, Message[]>
+  displayCounts: Record<string, number>
   tasks: Record<string, TaskItem[]>
   todoCollapsed: Record<string, boolean>
   changeStats: { stats: ChangeStat[]; loading: boolean; error: string }
@@ -228,6 +229,7 @@ interface AppState {
   openSessionTab: (id: string, title: string) => Promise<void>
   closeSessionTab: (id: string) => void
   switchSessionTab: (id: string) => void
+  loadMoreMessages: (sessionId: string, count?: number) => void
   restoreSessionTabs: (tabs: { id: string; title: string }[]) => Promise<void>
   loadSessionList: () => Promise<void>
 
@@ -280,6 +282,10 @@ interface AppState {
   clearSelection: () => void
 }
 
+const INITIAL_DISPLAY_COUNT = 15
+const LOAD_MORE_COUNT = 20
+const DISPLAY_ALL_THRESHOLD = 200
+
 export const useStore = create<AppState>((set, get) => ({
   messages: [{ id: 'welcome', role: 'system', content: 'Welcome to Monika. Type /help for commands.' }],
   generatingSessionIds: [],
@@ -304,6 +310,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   openSessions: [],
   sessionMessages: {},
+  displayCounts: {},
   tasks: {},
   todoCollapsed: {},
   changeStats: { stats: [], loading: false, error: '' },
@@ -672,6 +679,7 @@ export const useStore = create<AppState>((set, get) => ({
         ...(s.activeSessionId ? { [s.activeSessionId]: s.messages } : {}),
         [id]: s.sessionMessages[id] || [],
       },
+      displayCounts: { ...s.displayCounts, [id]: INITIAL_DISPLAY_COUNT },
       activeSessionId: id,
       sessionParents: s.sessionParents,
       messages: [],
@@ -786,6 +794,7 @@ export const useStore = create<AppState>((set, get) => ({
         activeSessionId: id,
         sessionMessages: currentCache,
         messages: restored,
+        displayCounts: { ...s.displayCounts, [id]: INITIAL_DISPLAY_COUNT },
         tokenCount: s.sessionTokens[id]?.count ?? 0,
         tokenMax: s.sessionTokens[id]?.max ?? 0,
         sessionParents: s.sessionParents,
@@ -796,6 +805,15 @@ export const useStore = create<AppState>((set, get) => ({
         App.MarkSessionViewed(project, id).catch(() => {})
       }
       return updates
+    })
+  },
+
+  loadMoreMessages: (sessionId, count = LOAD_MORE_COUNT) => {
+    set((s) => {
+      const current = s.displayCounts[sessionId] || INITIAL_DISPLAY_COUNT
+      const total = (s.sessionMessages[sessionId] || []).length
+      const next = Math.min(current + count, total > DISPLAY_ALL_THRESHOLD ? total : total)
+      return { displayCounts: { ...s.displayCounts, [sessionId]: next } }
     })
   },
 
@@ -1270,6 +1288,7 @@ export const useStore = create<AppState>((set, get) => ({
       lastEditVersion: 0,
       openSessions: [],
       sessionMessages: {},
+      displayCounts: {},
       tasks: {},
       changeStats: { stats: [], loading: false, error: '' },
       allBranches: [],

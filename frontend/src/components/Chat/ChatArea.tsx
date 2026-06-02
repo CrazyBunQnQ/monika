@@ -63,6 +63,16 @@ function ChatArea(props: IDockviewPanelProps) {
     if (msgFilter === 'assistant') return rawMessages.filter((m: any) => m.role === 'assistant')
     return rawMessages
   }, [rawMessages, msgFilter])
+
+  // Lazy loading: only render the last N messages
+  const effectiveSessionId = isOverlay ? (overlaySessionId || sessionId) : sessionId
+  const displayCount = useStore((s) => s.displayCounts[effectiveSessionId] || 0)
+  const loadMoreMessages = useStore((s) => s.loadMoreMessages)
+  const hasMore = displayCount < messages.length
+  const visibleMessages = useMemo(() => {
+    if (displayCount <= 0 || displayCount >= messages.length) return messages
+    return messages.slice(messages.length - displayCount)
+  }, [messages, displayCount])
   const hideExtras = msgFilter === 'chat' || msgFilter === 'assistant'
 
   const sessionTokens = useStore((s) => s.sessionTokens)
@@ -178,18 +188,7 @@ function ChatArea(props: IDockviewPanelProps) {
     }
   }
 
-  const effectiveSessionId = isOverlay ? overlaySessionId! : sessionId
   const isGenerating = generatingSessionIds.includes(effectiveSessionId)
-
-  let generatingIdx = -1
-  if (isGenerating) {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'assistant' || (messages[i].role === 'compaction' && !messages[i].content)) {
-        generatingIdx = i
-        break
-      }
-    }
-  }
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottomRef = useRef(true)
@@ -255,6 +254,31 @@ function ChatArea(props: IDockviewPanelProps) {
   useEffect(() => {
     stickToBottomRef.current = true
   }, [isGenerating])
+
+  // IntersectionObserver for lazy loading older messages on scroll to top
+  const sentinelRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = sentinelRef.current
+    if (!el || !hasMore) return
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          const scrollEl = scrollRef.current
+          if (!scrollEl) return
+          const prevScrollHeight = scrollEl.scrollHeight
+          loadMoreMessages(effectiveSessionId)
+          // After React re-renders, restore scroll position so content doesn't jump
+          requestAnimationFrame(() => {
+            const newScrollHeight = scrollEl.scrollHeight
+            scrollEl.scrollTop += newScrollHeight - prevScrollHeight
+          })
+        }
+      },
+      { root: scrollRef.current, threshold: 0 }
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [hasMore, effectiveSessionId, loadMoreMessages])
 
   // Reset scroll when overlay changes
   useEffect(() => {
@@ -420,19 +444,27 @@ function ChatArea(props: IDockviewPanelProps) {
             {isOverlay ? 'Loading subagent...' : 'No messages yet. Start a conversation.'}
           </div>
         ) : (
-          messages.map((msg, idx) => (
-            <MessageBubble
-              key={msg.id}
-              message={msg}
-              isGenerating={idx === generatingIdx}
-              hideExtras={hideExtras}
-              onQuote={msg.content && (msg.role === 'user' || msg.role === 'assistant') ? handleQuote : undefined}
-              onForward={msg.content && (msg.role === 'user' || msg.role === 'assistant') ? handleForward : undefined}
-              multiSelectMode={selection?.mode ?? null}
-              isSelected={selection?.ids?.includes(msg.id) ?? false}
-              onToggleSelect={toggleMessageSelection}
-            />
-          ))
+          <>
+            {hasMore && (
+              <div ref={sentinelRef} className="flex items-center justify-center py-2 text-[11px]" style={{ color: 'var(--text-dim)' }}>
+                ↑ Scroll up to load earlier messages
+              </div>
+            )}
+            {visibleMessages.map((msg, idx) => (
+              <MessageBubble
+                key={msg.id}
+                message={msg}
+                isGenerating={idx === visibleMessages.length - 1 && isGenerating && (msg.role === 'assistant' || (msg.role === 'compaction' && !msg.content))}
+                hideExtras={hideExtras}
+                onQuote={msg.content && (msg.role === 'user' || msg.role === 'assistant') ? handleQuote : undefined}
+                onForward={msg.content && (msg.role === 'user' || msg.role === 'assistant') ? handleForward : undefined}
+                multiSelectMode={selection?.mode ?? null}
+                isSelected={selection?.ids?.includes(msg.id) ?? false}
+                onToggleSelect={toggleMessageSelection}
+              />
+            ))
+            }
+          </>
         )}
       </div>
       {isOverlay ? (
