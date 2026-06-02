@@ -4,6 +4,7 @@ import App from './App'
 import './index.css'
 import { TrayPopup } from './components/TrayPopup/TrayPopup'
 import { setupWailsEvents, initProject } from './store'
+import { initTreeSitter } from './lib/treeSitter'
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -33,6 +34,7 @@ class ErrorBoundary extends React.Component<
 
 try {
   setupWailsEvents()
+  initTreeSitter().catch(e => console.error('[tree-sitter] init failed:', e))
 } catch (e) {
   document.getElementById('root')!.innerHTML = `<pre style="color:#d4d4dc;background:#08090d;padding:40px;height:100%">setupWailsEvents error: ${String(e)}\n${(e as Error).stack || ''}</pre>`
   throw e

@@ -32,7 +32,7 @@ function AskUserBar({ sessionId }: AskUserBarProps) {
   }
 
   const handleSubmit = () => {
-    if (customActive) {
+    if (!hasOptions || customActive) {
       if (customText.trim()) submitAnswer(customText.trim())
     } else if (selected) {
       submitAnswer(selected)
@@ -46,7 +46,11 @@ function AskUserBar({ sessionId }: AskUserBarProps) {
     }
   }
 
-  const canSubmit = customActive ? customText.trim().length > 0 : selected !== null
+  const canSubmit = !hasOptions
+    ? customText.trim().length > 0
+    : customActive
+      ? customText.trim().length > 0
+      : selected !== null
 
   // Auto-focus textarea when custom mode activates
   useEffect(() => {

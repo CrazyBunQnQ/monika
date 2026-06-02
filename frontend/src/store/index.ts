@@ -123,6 +123,13 @@ export interface MCPServerInfo {
   status: 'connected' | 'disconnected'
 }
 
+export interface LSPServerStatus {
+  name: string
+  command: string
+  fileTypes: string[]
+  running: boolean
+}
+
 export interface ProviderFull {
   id: string
   display_name: string
@@ -173,6 +180,7 @@ interface AppState {
   skills: SkillInfo[]
   skillPaths: string[]
   mcpServers: MCPServerInfo[]
+  lspServers: LSPServerStatus[]
   providerDetails: ProviderFull[]
   availableProvidersCatalog: AvailableProviderInfo[]
   settingsOpen: boolean
@@ -254,6 +262,7 @@ interface AppState {
   openInFileManager: (path: string) => Promise<void>
   setSkillEnabled: (name: string) => Promise<void>
   loadMCPServers: () => Promise<void>
+  loadLSPStatus: () => Promise<void>
   saveMCPServer: (srv: MCPServerInfo) => Promise<void>
   deleteMCPServer: (id: string) => Promise<void>
   importMCPServers: (json: string) => Promise<string[]>
@@ -312,6 +321,7 @@ export const useStore = create<AppState>((set, get) => ({
   skills: [],
   skillPaths: [],
   mcpServers: [],
+  lspServers: [] as LSPServerStatus[],
   providerDetails: [],
   availableProvidersCatalog: [] as AvailableProviderInfo[],
   settingsOpen: false,
@@ -1162,6 +1172,13 @@ export const useStore = create<AppState>((set, get) => ({
     } catch { set({ mcpServers: [] }) }
   },
 
+  loadLSPStatus: async () => {
+    try {
+      const servers = await Call.ByName('monika/internal/api.App.GetLSPStatus')
+      set({ lspServers: servers || [] })
+    } catch { set({ lspServers: [] }) }
+  },
+
   saveMCPServer: async (srv) => {
     await Call.ByName('monika/internal/api.App.SaveMCPServer', srv)
     await get().loadMCPServers()
@@ -1269,6 +1286,7 @@ export const useStore = create<AppState>((set, get) => ({
       skills: [],
       skillPaths: [],
       mcpServers: [],
+      lspServers: [],
       providerDetails: [],
 
       settingsOpen: false,

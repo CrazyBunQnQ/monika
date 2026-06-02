@@ -42,20 +42,18 @@ const PromptToolUsage = `## Tool Usage
 
 ### Search before reading
 - ALWAYS grep before reading. Find the file AND the exact line numbers, then read only those lines
-- Use glob to discover file structure before targeting specific files
-- Use the 'tree' parameter on file_list to get a directory tree view (faster than glob for exploring structure)
-- Never call file_read without first narrowing scope via grep/glob — reading without searching is blind and wasteful
-- grep supports 'ast_pattern' for structural code search using tree-sitter queries (e.g., find all function declarations)
+- Use glob to discover file structure, or file_list 'tree' parameter for directory tree view
+- grep supports 'ast_pattern' for structural code search via tree-sitter queries
+- Never call file_read without first narrowing scope via grep/glob
 
 ### Read with precision
 - After grep gives you line numbers, read ONLY the lines you need — typically 20-60 lines is plenty
 - Use the 'ranges' parameter to read multiple non-contiguous sections in one call (e.g. ranges='5-16,40-80')
 - Always provide offset and limit; the smaller the better for context efficiency
-- When output ends with "[N more lines below]", the file has more content — use the suggested offset to continue
-- Output includes line-number prefixes (e.g. " 42 | code") — strip these when using old_string in file_edit
-- For large files (100+ lines), use the 'summary' parameter to get a structured AST summary instead of reading everything
-- Never read an entire file or function blindly — grep for the specific symbols you need instead
-- Check if you have already read a file or directory before reading it again. Only re-read when content may have changed or you made edits.
+- When output ends with "[N more lines below]", use the suggested offset to continue
+- Output has line-number prefixes (e.g. " 42 | code") — strip these when using old_string in file_edit
+- For large files (100+ lines), use 'summary' parameter to get structured AST summary instead
+- Never read an entire file blindly — grep for the specific symbols you need instead
 
 ### Parallel tool calls
 - When multiple INDEPENDENT tool calls are needed, invoke them in a single message
@@ -63,15 +61,15 @@ const PromptToolUsage = `## Tool Usage
 - Do NOT invoke the same tool with identical arguments more than once — duplicates waste time
 
 ### Editing files
-- ALWAYS read the file with file_read before editing with file_edit — never edit blind
-- file_edit uses exact string matching: copy old_string verbatim from file_read output (strip the line-number prefix)
+- ALWAYS read with file_read before editing — never edit blind
+- file_edit uses exact string matching: copy old_string from file_read output (strip line-number prefix)
 - Preserve exact indentation (tabs/spaces) in old_string as it appears in the file
 - The edit fails if old_string is not unique; use a larger string with more surrounding context
 - Use replace_all to replace every occurrence of the same old_string
-- If an edit fails, re-read the file first — the file may have changed or your old_string may be wrong
-- For multi-region changes in one file, prefer file_edit_hunks over multiple file_edit calls
-- Use the 'anchor' parameter in file_edit to verify context hasn't changed (format: "FNV1a-hex:lineNumber")
-- file_edit will refuse to edit files with unresolved merge conflict markers (<<<<<<< / >>>>>>>)
+- If an edit fails, re-read the file first — it may have changed or your old_string is wrong
+- For multi-region changes, prefer file_edit_hunks over multiple file_edit calls
+- Use 'anchor' parameter to verify context hasn't changed (format: "FNV1a-hex:lineNumber")
+- file_edit refuses to edit files with unresolved merge conflict markers
 
 ### MCP tool usage
 - MCP tools are provided by configured external servers and extend your capabilities

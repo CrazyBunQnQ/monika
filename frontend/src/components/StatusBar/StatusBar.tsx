@@ -1,8 +1,21 @@
+import { useEffect } from 'react'
 import { useStore } from '../../store'
 
 function StatusBar() {
   const generating = useStore((s) => s.generatingSessionIds.length > 0)
   const toggleSettings = useStore((s) => s.toggleSettings)
+  const lspServers = useStore((s) => s.lspServers)
+  const loadLSPStatus = useStore((s) => s.loadLSPStatus)
+
+  const running = lspServers.filter((s) => s.running)
+  const available = lspServers.filter((s) => !s.running)
+  const hasServers = lspServers.length > 0
+
+  useEffect(() => {
+    loadLSPStatus()
+    const id = setInterval(loadLSPStatus, 10_000)
+    return () => clearInterval(id)
+  }, [loadLSPStatus])
 
   return (
     <div
@@ -23,6 +36,23 @@ function StatusBar() {
           {generating ? 'generating...' : 'ready'}
         </span>
       </div>
+
+      {hasServers && (
+        <div className="flex items-center gap-1.5 ml-3" style={{ paddingLeft: 8, borderLeft: '1px solid var(--border)' }}>
+          <span
+            className="block rounded-full"
+            style={{
+              width: 6, height: 6,
+              background: running.length > 0 ? 'var(--green)' : 'var(--text-dim)',
+              boxShadow: running.length > 0 ? '0 0 4px rgba(84,192,138,0.4)' : undefined,
+            }}
+          />
+          <span className="text-[var(--text-dim)]">
+            LSP{running.length > 0 ? ` ${running.map((s) => s.name).join(', ')}` : available.length > 0 ? ' idle' : ''}
+          </span>
+        </div>
+      )}
+
       <div className="flex-1" />
       <div className="flex items-center gap-2">
         <button

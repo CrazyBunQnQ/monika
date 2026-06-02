@@ -40,6 +40,10 @@ func (f *fileWrite) Parameters() map[string]any {
 	}
 }
 
+func (f *fileWrite) resolvePath(ctx context.Context, p string) (string, error) {
+	return resolveToolPath(p, tool.ProjectDirOrDefault(ctx, f.projectDir))
+}
+
 func (f *fileWrite) Execute(ctx context.Context, args json.RawMessage) (tool.ExecutionResult, error) {
 	var params struct {
 		FilePath string `json:"filePath"`
@@ -49,7 +53,7 @@ func (f *fileWrite) Execute(ctx context.Context, args json.RawMessage) (tool.Exe
 		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 	}
 
-	safePath, err := resolveToolPath(params.FilePath, tool.ProjectDirOrDefault(ctx, f.projectDir))
+	safePath, err := f.resolvePath(ctx, params.FilePath)
 	if err != nil {
 		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 	}

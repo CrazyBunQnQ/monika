@@ -73,7 +73,12 @@ func main() {
 	syncModelsDev(home, &pr.Config)
 
 	registry := tool.NewRegistry()
-	builtin.RegisterDefaults(registry, cwd)
+
+	// Create a standalone tsBridge for tree-sitter IPC (uses application.Get(), no app ref needed).
+	tsBridge := api.NewTSBridge()
+	tsQueryFn := tsBridge.QueryFunc()
+	builtin.RegisterDefaults(registry, cwd, builtin.TSQueryFunc(tsQueryFn))
+	builtin.RegisterLSP(registry, cwd)
 
 	taskStore := builtin.NewTaskStore(nil)
 	builtin.RegisterTasks(registry, taskStore)
@@ -158,6 +163,7 @@ func main() {
 	)
 
 	application.RegisterEvent[api.StreamEvent]("stream")
+	application.RegisterEvent[api.TSRequest]("ts:request")
 	application.RegisterEvent[update.UpdateInfo]("update-available")
 	application.RegisterEvent[string]("branch-changed")
 	application.RegisterEvent[[]api.NotificationData]("tray-notifications-changed")
@@ -273,6 +279,7 @@ The content below is your PROJECT RULES from AGENTS.md. These rules are NON-NEGO
 	}
 
 	appService = api.NewApp(home, cwd, pr.Config, pr.Providers, pr.Model, registry, loopOpts, taskStoreAccessor, agentRegistry, taskRunner, baseSystemPrompt, mcpRegistry)
+	appService.InitTSBridge(tsBridge)
 	appGetProjectPath = appService.GetProjectPath
 
 	// Wire skill management callbacks to App

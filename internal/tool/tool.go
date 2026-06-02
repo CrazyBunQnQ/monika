@@ -17,6 +17,7 @@ type ExecutionResult struct {
 	Content   string
 	IsError   bool
 	DiffLines []string
+	Conflicts bool
 }
 
 type ToolRegistry struct {

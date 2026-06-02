@@ -56,7 +56,7 @@ func resolveShell() (string, string) {
 
 func (b *bashTool) Name() string        { return "bash" }
 func (b *bashTool) Description() string {
-	return "Execute a shell command. Prefer dedicated tools (grep, glob, file_read, file_write) for file operations. Use bash only when no dedicated tool exists. Commands timeout after 120 seconds."
+	return "Execute a shell command. NEVER use bash for file reading/searching — use dedicated tools instead. Forbidden commands: cat, head, tail, less, more, ls (use file_list), grep/rg (use grep tool), find/fd (use glob), awk, sed. Use bash ONLY when no dedicated tool covers the operation. Commands timeout after 120 seconds. Output exceeding 30000 characters is truncated with a midpoint marker."
 }
 
 func (b *bashTool) Parameters() map[string]any {
@@ -135,5 +135,18 @@ func (b *bashTool) Execute(ctx context.Context, args json.RawMessage) (tool.Exec
 	}
 
 	isError := err != nil
-	return tool.ExecutionResult{Content: strings.TrimSpace(out), IsError: isError}, nil
+	out = strings.TrimSpace(out)
+
+	// Truncate very long output, keeping head and tail with a midpoint marker.
+	const maxOutputChars = 30000
+	if len(out) > maxOutputChars {
+		headLen := maxOutputChars / 2
+		tailLen := maxOutputChars / 2
+		head := out[:headLen]
+		tail := out[len(out)-tailLen:]
+		omitted := len(out) - headLen - tailLen
+		out = head + fmt.Sprintf("\n\n... [%d characters truncated] ...\n\n", omitted) + tail
+	}
+
+	return tool.ExecutionResult{Content: out, IsError: isError}, nil
 }

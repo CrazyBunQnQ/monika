@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,7 +15,7 @@ import (
 
 func TestFileRead(t *testing.T) {
 	dir := t.TempDir()
-	f := NewFileRead(dir)
+	f := NewFileRead(dir, nil)
 
 	if f.Name() != "file_read" {
 		t.Fatalf("name = %q", f.Name())
@@ -35,13 +36,13 @@ func TestFileReadReadsFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f := NewFileRead(dir)
+	f := NewFileRead(dir, nil)
 	args, _ := json.Marshal(map[string]any{"filePath": path, "offset": 1, "limit": 200})
 	result, err := f.Execute(context.Background(), args)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Content != "line1\nline2\nline3" {
+	if !strings.Contains(result.Content, "line1") || !strings.Contains(result.Content, "line2") || !strings.Contains(result.Content, "line3") {
 		t.Fatalf("content = %q", result.Content)
 	}
 }
@@ -57,15 +58,16 @@ func TestFileReadExplicitLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f := NewFileRead(dir)
+	f := NewFileRead(dir, nil)
 	args, _ := json.Marshal(map[string]any{"filePath": path, "offset": 1, "limit": 100})
 	result, err := f.Execute(context.Background(), args)
 	if err != nil {
 		t.Fatal(err)
 	}
 	resultLines := strings.Count(result.Content, "\n") + 1
-	if resultLines != 100 {
-		t.Fatalf("expected 100 lines with explicit limit, got %d", resultLines)
+	// 100 numbered lines + footer hint lines
+	if resultLines < 100 {
+		t.Fatalf("expected at least 100 lines with explicit limit, got %d", resultLines)
 	}
 }
 
@@ -76,20 +78,20 @@ func TestFileReadWithOffsetLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f := NewFileRead(dir)
+	f := NewFileRead(dir, nil)
 	args, _ := json.Marshal(map[string]any{"filePath": path, "offset": 2, "limit": 2})
 	result, err := f.Execute(context.Background(), args)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Content != "line2\nline3" {
+	if !strings.Contains(result.Content, "line2") || !strings.Contains(result.Content, "line3") {
 		t.Fatalf("content = %q", result.Content)
 	}
 }
 
 func TestFileReadOutsideProject(t *testing.T) {
 	dir := t.TempDir()
-	f := NewFileRead(dir)
+	f := NewFileRead(dir, nil)
 	args, _ := json.Marshal(map[string]any{"filePath": "/etc/passwd"})
 	result, err := f.Execute(context.Background(), args)
 	if err != nil {
@@ -185,7 +187,7 @@ func TestGrep(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f := NewGrep(dir)
+	f := NewGrep(dir, nil)
 	args, _ := json.Marshal(map[string]any{"pattern": "func.main"})
 	result, err := f.Execute(context.Background(), args)
 	if err != nil {
@@ -198,7 +200,7 @@ func TestGrep(t *testing.T) {
 
 func TestGrepInvalidRegex(t *testing.T) {
 	dir := t.TempDir()
-	f := NewGrep(dir)
+	f := NewGrep(dir, nil)
 	args, _ := json.Marshal(map[string]any{"pattern": "["})
 	result, err := f.Execute(context.Background(), args)
 	if err != nil {
@@ -237,10 +239,10 @@ func TestBashExecute(t *testing.T) {
 
 func TestRegisterDefaultsAll(t *testing.T) {
 	r := tool.NewRegistry()
-	if err := RegisterDefaults(r, t.TempDir()); err != nil {
+	if err := RegisterDefaults(r, t.TempDir(), nil); err != nil {
 		t.Fatal(err)
 	}
-	expected := []string{"file_read", "file_write", "file_edit", "file_list", "glob", "grep", "bash"}
+	expected := []string{"file_read", "file_write", "file_edit", "file_edit_hunks", "file_list", "glob", "grep", "bash"}
 	for _, name := range expected {
 		if _, ok := r.Get(name); !ok {
 			t.Fatalf("tool %q not registered", name)
@@ -480,5 +482,220 @@ func TestFileEditPreservesPermissions(t *testing.T) {
 	}
 	if origInfo.Mode() != newInfo.Mode() {
 		t.Fatalf("permissions changed: %o -> %o", origInfo.Mode(), newInfo.Mode())
+	}
+}
+
+func TestFileEditConflictMarkers(t *testing.T) {
+	dir := t.TempDir()
+	f := NewFileEdit(dir)
+	path := filepath.Join(dir, "conflict.txt")
+	os.WriteFile(path, []byte("before\n<<<<<<< HEAD\nfoo\n=======\nbar\n>>>>>>> branch\nafter"), 0o644)
+
+	args, _ := json.Marshal(map[string]any{
+		"filePath":   path,
+		"old_string": "foo",
+		"new_string": "baz",
+	})
+	result, err := f.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Fatal("expected error for conflict markers")
+	}
+	if !result.Conflicts {
+		t.Fatal("expected Conflicts=true")
+	}
+}
+
+func TestFileEditFuzzyWhitespace(t *testing.T) {
+	dir := t.TempDir()
+	f := NewFileEdit(dir)
+	path := filepath.Join(dir, "fuzzy.txt")
+	// Content with blank line boundaries so wsFuzzyScanner finds separate segments
+	os.WriteFile(path, []byte("line1\n\n  line2  \t line3\n\nline4"), 0o644)
+
+	// Use different whitespace — should still match via fuzzy
+	args, _ := json.Marshal(map[string]any{
+		"filePath":   path,
+		"old_string": "line2 line3",
+		"new_string": "replaced",
+	})
+	result, err := f.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("expected success but got: %s", result.Content)
+	}
+
+	data, _ := os.ReadFile(path)
+	got := string(data)
+	// Fuzzy match preserves leading whitespace from the original segment
+	want := "line1\n\n  replaced\n\nline4"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestFileEditAnchorVerification(t *testing.T) {
+	dir := t.TempDir()
+	f := NewFileEdit(dir)
+	path := filepath.Join(dir, "anchor.txt")
+	os.WriteFile(path, []byte("alpha\nbeta\ngamma\ndelta"), 0o644)
+
+	// Compute anchor hash for line 2 ("beta")
+	h := fnv.New32a()
+	h.Write([]byte("beta"))
+	hash := fmt.Sprintf("%08x", h.Sum32())
+	anchor := fmt.Sprintf("%s:2", hash)
+
+	args, _ := json.Marshal(map[string]any{
+		"filePath":   path,
+		"old_string": "gamma",
+		"new_string": "GAMMA",
+		"anchor":     anchor,
+	})
+	result, err := f.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("expected success but got: %s", result.Content)
+	}
+
+	data, _ := os.ReadFile(path)
+	got := string(data)
+	if !strings.Contains(got, "GAMMA") {
+		t.Fatalf("expected GAMMA in %q", got)
+	}
+}
+
+func TestPatchEdit(t *testing.T) {
+	dir := t.TempDir()
+	p := NewPatchEdit(dir)
+	path := filepath.Join(dir, "test.txt")
+	os.WriteFile(path, []byte("aaa\nbbb\nccc\nddd\neee"), 0o644)
+
+	hunks := "@@ -2,3 +2,3 @@\n bbb\n-ccc\n+CCC\n ddd\n"
+	args, _ := json.Marshal(map[string]any{
+		"filePath": path,
+		"hunks":    hunks,
+	})
+	result, err := p.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("expected success but got: %s", result.Content)
+	}
+
+	data, _ := os.ReadFile(path)
+	got := string(data)
+	want := "aaa\nbbb\nCCC\nddd\neee"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestPatchEditMultipleHunks(t *testing.T) {
+	dir := t.TempDir()
+	p := NewPatchEdit(dir)
+	path := filepath.Join(dir, "multi.txt")
+	os.WriteFile(path, []byte("line1\nline2\nline3\nline4\nline5\nline6\nline7"), 0o644)
+
+	hunks := "@@ -2,3 +2,3 @@\n line2\n-line3\n+LINE3\n line4\n@@ -5,3 +5,3 @@\n line5\n-line6\n+LINE6\n line7\n"
+	args, _ := json.Marshal(map[string]any{
+		"filePath": path,
+		"hunks":    hunks,
+	})
+	result, err := p.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("expected success but got: %s", result.Content)
+	}
+
+	data, _ := os.ReadFile(path)
+	got := string(data)
+	want := "line1\nline2\nLINE3\nline4\nline5\nLINE6\nline7"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestPatchEditRejectsConflicts(t *testing.T) {
+	dir := t.TempDir()
+	p := NewPatchEdit(dir)
+	path := filepath.Join(dir, "conflict.txt")
+	os.WriteFile(path, []byte("before\n<<<<<<< HEAD\nfoo\n=======\nbar\n>>>>>>> branch\nafter"), 0o644)
+
+	args, _ := json.Marshal(map[string]any{
+		"filePath": path,
+		"hunks":    "@@ -1,3 +1,3 @@\n before\n-foo\n+baz\n bar",
+	})
+	result, err := p.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Fatal("expected error for conflict markers")
+	}
+	if !result.Conflicts {
+		t.Fatal("expected Conflicts=true")
+	}
+}
+
+func TestFileListTree(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "a", "b"), 0o755)
+	os.WriteFile(filepath.Join(dir, "a", "b", "c.txt"), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(dir, "a", "d.go"), []byte("x"), 0o644)
+
+	f := NewFileList(dir)
+	args, _ := json.Marshal(map[string]any{
+		"dirPath": dir,
+		"tree":    true,
+		"depth":   3,
+	})
+	result, err := f.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("expected success but got: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "a/") {
+		t.Fatalf("expected tree to contain 'a/', got: %s", result.Content)
+	}
+}
+
+func TestFileReadRanges(t *testing.T) {
+	dir := t.TempDir()
+	f := NewFileRead(dir, nil)
+	path := filepath.Join(dir, "ranges.txt")
+	var lines []string
+	for i := 1; i <= 20; i++ {
+		lines = append(lines, fmt.Sprintf("line %d", i))
+	}
+	os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o644)
+
+	args, _ := json.Marshal(map[string]any{
+		"filePath": path,
+		"ranges":   "3-5,18-20",
+	})
+	result, err := f.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("expected success but got: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "line 3") || !strings.Contains(result.Content, "line 19") {
+		t.Fatalf("expected ranges in output, got: %s", result.Content)
+	}
+	if strings.Contains(result.Content, "line 10") {
+		t.Fatalf("should not contain middle lines, got: %s", result.Content)
 	}
 }

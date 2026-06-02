@@ -10,19 +10,34 @@ import (
 	"monika/pkg/engine"
 )
 
-func RegisterDefaults(r *tool.ToolRegistry, projectDir string) error {
-	r.Register(NewFileRead(projectDir))
+// TSQueryFunc calls the frontend tree-sitter service.
+// Returns (nil, nil) when tree-sitter is unavailable.
+type TSQueryFunc func(ctx context.Context, method string, params map[string]any) (json.RawMessage, error)
+
+func RegisterDefaults(r *tool.ToolRegistry, projectDir string, tsQuery TSQueryFunc) error {
+	r.Register(NewFileRead(projectDir, tsQuery))
 	r.Register(NewFileWrite(projectDir))
 	r.Register(NewFileEdit(projectDir))
 	r.Register(NewFileList(projectDir))
 	r.Register(NewGlob(projectDir))
-	r.Register(NewGrep(projectDir))
+	r.Register(NewGrep(projectDir, tsQuery))
+	r.Register(NewPatchEdit(projectDir))
 	r.Register(NewGit(projectDir))
 	sh, err := NewBash(projectDir)
 	if err != nil {
 		return err
 	}
 	r.Register(sh)
+	return nil
+}
+
+// RegisterLSP registers the LSP tool for code intelligence.
+func RegisterLSP(r *tool.ToolRegistry, projectDir string) error {
+	t, err := NewLSPTool(projectDir)
+	if err != nil {
+		return err
+	}
+	r.Register(t)
 	return nil
 }
 
