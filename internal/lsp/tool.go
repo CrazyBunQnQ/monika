@@ -13,10 +13,6 @@ import (
 
 type lspTool struct {
 	manager *Manager
-	xyzTest  int // DELIBERATE ERROR
-
-
-
 }
 
 func NewLSPTool(projectDir string) (tool.Tool, error) {
@@ -125,18 +121,27 @@ func (t *lspTool) Execute(ctx context.Context, args json.RawMessage) (tool.Execu
 		filePath = filepath.Join(t.manager.workdir, filePath)
 	}
 
+	lspLog("Execute: action=%s file=%s", params.Action, filePath)
+
 	client, _, err := t.manager.ClientForFile(ctx, filePath)
 	if err != nil {
+		lspLog("ClientForFile error: %v", err)
 		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 	}
 
 	uri := fileToURI(filePath)
+	lspLog("fileToURI: filePath=%s uri=%s", filePath, uri)
 
 	_, _, err = t.manager.EnsureFileOpen(ctx, client, filePath)
 	if err != nil {
+		lspLog("EnsureFileOpen error: %v", err)
 		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 	}
 
+	if syncErr := t.manager.SyncContent(ctx, client, filePath); syncErr != nil {
+		lspLog("SyncContent error: %v", syncErr)
+		return tool.ExecutionResult{Content: syncErr.Error(), IsError: true}, nil
+	}
 	pos := Position{Line: params.Line, Character: params.Character}
 
 	switch params.Action {
@@ -146,7 +151,11 @@ func (t *lspTool) Execute(ctx context.Context, args json.RawMessage) (tool.Execu
 			return tool.ExecutionResult{Content: ctx.Err().Error(), IsError: true}, nil
 		default:
 		}
+		lspLog("diagnostics action: uri=%s", uri)
+		normURI := normalizeURI(uri)
+		lspLog("diagnostics action: normalized_uri=%s", normURI)
 		diags := client.Diagnostics(uri)
+		lspLog("diagnostics result: count=%d", len(diags))
 		return tool.ExecutionResult{Content: FormatDiagnostics(uri, diags)}, nil
 
 	case "definition":

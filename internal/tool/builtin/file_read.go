@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"sort"
@@ -17,15 +18,18 @@ import (
 type fileRead struct {
 	projectDir string
 	tsQuery    TSQueryFunc
+	symFunc    LSPDiagFunc
 }
 
 func NewFileRead(projectDir string, tsQuery TSQueryFunc) tool.Tool {
 	return &fileRead{projectDir: projectDir, tsQuery: tsQuery}
 }
 
+func (f *fileRead) SetSymFunc(fn LSPDiagFunc) { f.symFunc = fn }
+
 func (f *fileRead) Name() string { return "file_read" }
 func (f *fileRead) Description() string {
-	return "Read a section of a file from the local filesystem. Use grep first to find the relevant file and line range, then read only the section you need using offset and limit. Output lines are prefixed with line numbers in '42│ text' format. If the file has more lines beyond the requested range, a footer hints the next offset. Optionally specify 'ranges' (e.g. '5-16,40-80') to read multiple non-contiguous sections. Set summary=true to prepend an AST-based structural summary (requires tree-sitter)."
+	return "Read a section of a file from the local filesystem. Use grep first to find the relevant file and line range, then read only the section you need using offset and limit. Output lines are prefixed with line number and content hash in '42│a1b2c3│ text' format. Copy the 'a1b2c3:42' portion as the anchor parameter for file_edit. If the file has more lines beyond the requested range, a footer hints the next offset. Optionally specify 'ranges' (e.g. '5-16,40-80') to read multiple non-contiguous sections. Set summary=true to prepend an AST-based structural summary (requires tree-sitter)."
 }
 
 func (f *fileRead) Parameters() map[string]any {
@@ -89,6 +93,9 @@ func (f *fileRead) Execute(ctx context.Context, args json.RawMessage) (tool.Exec
 		result, err := readFileRanges(safePath, ranges)
 		if err == nil && params.Summary {
 			result.Content = f.appendSummary(ctx, safePath, result.Content)
+			if f.symFunc != nil {
+				result.Content += f.symFunc(ctx, safePath)
+			}
 		}
 		return result, err
 	}
@@ -96,6 +103,9 @@ func (f *fileRead) Execute(ctx context.Context, args json.RawMessage) (tool.Exec
 	result, err := readFileLines(safePath, params.Offset, params.Limit)
 	if err == nil && params.Summary {
 		result.Content = f.appendSummary(ctx, safePath, result.Content)
+		if f.symFunc != nil {
+			result.Content += f.symFunc(ctx, safePath)
+		}
 	}
 	return result, err
 }
@@ -243,7 +253,7 @@ func readFileLines(path string, offset, limit int) (tool.ExecutionResult, error)
 
 	var buf strings.Builder
 	for i := padStart; i < padEnd; i++ {
-		fmt.Fprintf(&buf, "%4d│ %s\n", i+1, allLines[i])
+		fmt.Fprintf(&buf, "%4d│%s│ %s\n", i+1, lineHash(allLines[i]), allLines[i])
 	}
 
 	// Footer hint
@@ -330,7 +340,7 @@ func readFileRanges(path string, ranges []lineRange) (tool.ExecutionResult, erro
 			if !prevIncluded && len(collected) > 0 {
 				collected = append(collected, "    ⋮")
 			}
-			collected = append(collected, fmt.Sprintf("%4d│ %s", lineNum, scanner.Text()))
+			collected = append(collected, fmt.Sprintf("%4d│%s│ %s", lineNum, lineHash(scanner.Text()), scanner.Text()))
 		}
 		prevIncluded = isIncluded
 	}
@@ -340,4 +350,12 @@ func readFileRanges(path string, ranges []lineRange) (tool.ExecutionResult, erro
 	}
 
 	return tool.ExecutionResult{Content: strings.Join(collected, "\n")}, nil
+}
+
+// lineHash returns a 6-character hex FNV-1a hash of the trimmed line content,
+// used as a fingerprint for anchor verification in file_edit.
+func lineHash(line string) string {
+	h := fnv.New32a()
+	h.Write([]byte(strings.TrimSpace(line)))
+	return fmt.Sprintf("%06x", h.Sum32())
 }

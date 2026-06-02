@@ -1,5 +1,27 @@
-import { Parser, type Language, type Query, type QueryMatch, type Tree } from 'web-tree-sitter'
+import { Parser, Language, Query } from 'web-tree-sitter'
 import { Events, Call } from '@wailsio/runtime'
+
+interface SerializedNode {
+  type: string
+  text: string
+  startIndex: number
+  endIndex: number
+  startPosition: { row: number; column: number }
+  endPosition: { row: number; column: number }
+  childCount: number
+  isNamed: boolean
+}
+
+interface SerializedQueryCapture {
+  patternIndex: number
+  name: string
+  node: SerializedNode
+}
+
+interface SerializedQueryMatch {
+  patternIndex: number
+  captures: SerializedQueryCapture[]
+}
 
 type GrammarLoader = () => Promise<Language>
 
@@ -39,7 +61,7 @@ async function getLanguage(langName: string): Promise<Language | null> {
   return lang
 }
 
-async function doQuery(langName: string, source: string, pattern: string): Promise<QueryMatch[]> {
+async function doQuery(langName: string, source: string, pattern: string): Promise<SerializedQueryMatch[]> {
   const lang = await getLanguage(langName)
   if (!lang) return []
 
@@ -68,7 +90,7 @@ async function doQuery(langName: string, source: string, pattern: string): Promi
             isNamed: c.node.isNamed,
           },
         })),
-      }))
+      })) as SerializedQueryMatch[]
     } finally {
       query.delete()
     }
@@ -156,7 +178,7 @@ async function doSummarize(langName: string, source: string): Promise<SummaryNod
   }
 }
 
-function formatSummary(node: SummaryNode, indent = 0): string {
+export function formatSummary(node: SummaryNode, indent = 0): string {
   const prefix = '  '.repeat(indent)
   const lines: string[] = []
 
@@ -241,7 +263,7 @@ function registerBuiltinGrammars() {
 
   for (const [name, exts] of defs) {
     registerGrammar(name, exts, async () => {
-      const lang = await Parser.Language.load(wasmUrl(name))
+      const lang = await Language.load(wasmUrl(name))
       return lang
     })
   }
@@ -249,7 +271,7 @@ function registerBuiltinGrammars() {
 
 // Grammar registry API — call from setup to add new languages
 export function registerGrammar(name: string, extensions: string[], loader: GrammarLoader) {
-  grammars.push({ name, extensions, loader })
+  grammars.push({ name, extensions, load: loader })
 }
 
 // Get language name for a file path

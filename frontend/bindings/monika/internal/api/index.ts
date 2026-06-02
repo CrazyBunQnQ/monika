@@ -27,6 +27,11 @@ export {
     SessionInfo,
     SkillContentResult,
     StreamEvent,
+    TSRequest,
     TrayManager,
     WorktreeInfo
+} from "./models.js";
+
+export type {
+    TSQueryFunc
 } from "./models.js";

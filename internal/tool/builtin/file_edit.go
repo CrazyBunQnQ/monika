@@ -11,13 +11,21 @@ import (
 	"monika/internal/tool"
 )
 
+// LSPDiagFunc runs LSP diagnostics on a file after modification.
+// Returns additional content to append to the tool result, or empty string.
+type LSPDiagFunc func(ctx context.Context, filePath string) string
+
 type fileEdit struct {
 	projectDir string
+	diagFunc   LSPDiagFunc
 }
 
 func NewFileEdit(projectDir string) tool.Tool {
 	return &fileEdit{projectDir: projectDir}
 }
+
+// SetDiagFunc sets the optional LSP diagnostics hook.
+func (f *fileEdit) SetDiagFunc(fn LSPDiagFunc) { f.diagFunc = fn }
 
 func (f *fileEdit) Name() string { return "file_edit" }
 
@@ -78,7 +86,14 @@ func (f *fileEdit) Execute(ctx context.Context, args json.RawMessage) (tool.Exec
 		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 	}
 
-	return f.editFile(safePath, params.Anchor, params.NewString, lineCount)
+	result, err := f.editFile(safePath, params.Anchor, params.NewString, lineCount)
+	if err != nil {
+		return result, err
+	}
+	if !result.IsError && f.diagFunc != nil {
+		result.Content += f.diagFunc(ctx, safePath)
+	}
+	return result, nil
 }
 
 func (f *fileEdit) resolvePath(ctx context.Context, p string) (string, error) {

@@ -18,6 +18,7 @@ declare module "@wailsio/runtime" {
             "branch-changed": string;
             "stream": api$0.StreamEvent;
             "tray-notifications-changed": api$0.NotificationData[];
+            "ts:request": api$0.TSRequest;
             "update-available": update$0.UpdateInfo;
         }
     }

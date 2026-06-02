@@ -136,6 +136,7 @@ func (a *App) refreshSkillPrompt() {
 	if a.mcpRegistry != nil {
 		fullPrompt += agent2.BuildMCPPrompt(a.mcpRegistry.GetTools())
 	}
+	fullPrompt += builtin.LSPStatusPrompt(a.registry)
 	a.loopOpts = append(a.loopOpts[:a.baseLoopOptsCount], agent2.WithSystemPrompt(fullPrompt))
 }
 
@@ -352,6 +353,7 @@ func (a *App) OpenProject(path string) (*ProjectInfo, error) {
 		}
 	}
 	_ = builtin.RegisterLSP(a.registry, path)
+	builtin.WireLSPHooks(a.registry)
 	a.saveLastProjectPath(path)
 
 	return info, nil

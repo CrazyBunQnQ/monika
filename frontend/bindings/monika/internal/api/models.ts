@@ -809,6 +809,48 @@ export class StreamEvent {
     }
 }
 
+/**
+ * TSQueryFunc is the function signature tools use to call tree-sitter.
+ * Returns (nil, nil) when tree-sitter is unavailable (graceful fallback).
+ */
+export type TSQueryFunc = any;
+
+/**
+ * TSRequest is the payload sent from Go → frontend via Wails event.
+ */
+export class TSRequest {
+    "id": string;
+    "method": string;
+    "params": { [_ in string]?: any };
+
+    /** Creates a new TSRequest instance. */
+    constructor($$source: Partial<TSRequest> = {}) {
+        if (!("id" in $$source)) {
+            this["id"] = "";
+        }
+        if (!("method" in $$source)) {
+            this["method"] = "";
+        }
+        if (!("params" in $$source)) {
+            this["params"] = {};
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new TSRequest instance from a string or object.
+     */
+    static createFrom($$source: any = {}): TSRequest {
+        const $$createField2_0 = $$createType28;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("params" in $$parsedSource) {
+            $$parsedSource["params"] = $$createField2_0($$parsedSource["params"]);
+        }
+        return new TSRequest($$parsedSource as Partial<TSRequest>);
+    }
+}
+
 export class TrayManager {
 
     /** Creates a new TrayManager instance. */
@@ -851,6 +893,23 @@ export class WorktreeInfo {
     }
 }
 
+export class tsBridge {
+
+    /** Creates a new tsBridge instance. */
+    constructor($$source: Partial<tsBridge> = {}) {
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new tsBridge instance from a string or object.
+     */
+    static createFrom($$source: any = {}): tsBridge {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new tsBridge($$parsedSource as Partial<tsBridge>);
+    }
+}
+
 // Private type creation functions
 const $$createType0 = $Create.Array($Create.Any);
 const $$createType1 = AvailableModelInfo.createFrom;
@@ -880,3 +939,4 @@ const $$createType24 = permission$0.PermissionRequiredEvent.createFrom;
 const $$createType25 = $Create.Nullable($$createType24);
 const $$createType26 = AskUserEvent.createFrom;
 const $$createType27 = $Create.Nullable($$createType26);
+const $$createType28 = $Create.Map($Create.Any, $Create.Any);

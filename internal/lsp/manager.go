@@ -302,9 +302,11 @@ func (m *Manager) SyncContent(ctx context.Context, client *Client, filePath stri
 	}
 
 	if content == of.content {
+		lspLog("SyncContent: uri=%s content_unchanged", uri)
 		return nil
 	}
 
+	lspLog("SyncContent: uri=%s content_CHANGED sending didChange", uri)
 	of.version++
 	of.content = content
 

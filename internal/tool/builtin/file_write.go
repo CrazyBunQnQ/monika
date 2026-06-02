@@ -12,11 +12,14 @@ import (
 
 type fileWrite struct {
 	projectDir string
+	diagFunc   LSPDiagFunc
 }
 
 func NewFileWrite(projectDir string) tool.Tool {
 	return &fileWrite{projectDir: projectDir}
 }
+
+func (f *fileWrite) SetDiagFunc(fn LSPDiagFunc) { f.diagFunc = fn }
 
 func (f *fileWrite) Name() string        { return "file_write" }
 func (f *fileWrite) Description() string {
@@ -74,8 +77,12 @@ func (f *fileWrite) Execute(ctx context.Context, args json.RawMessage) (tool.Exe
 
 	diffLines := computeDiff(safePath, oldContent, params.Content)
 
-	return tool.ExecutionResult{
+	result := tool.ExecutionResult{
 		Content:   fmt.Sprintf("Wrote %d bytes to %s", len(params.Content), safePath),
 		DiffLines: diffLines,
-	}, nil
+	}
+	if f.diagFunc != nil {
+		result.Content += f.diagFunc(ctx, safePath)
+	}
+	return result, nil
 }

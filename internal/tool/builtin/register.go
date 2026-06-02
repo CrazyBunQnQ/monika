@@ -72,20 +72,32 @@ func WireLSPHooks(r *tool.ToolRegistry) {
 			}
 		}
 
-		// Give LSP server a moment to publish diagnostics after file change
-		time.Sleep(500 * time.Millisecond)
-
-		// Step 1: Run diagnostics
-		diagArgs, _ := json.Marshal(map[string]string{"action": "diagnostics", "file": filePath})
-		diagResult, err := lspTool.Execute(ctx, diagArgs)
-		if err != nil {
-			return fmt.Sprintf("\n\n--- LSP Diagnostics ---\n(error running diagnostics: %s)", err)
+		// Poll for diagnostics with retry. On first edit after LSP startup,
+		// diagnostics may not be published yet, so we retry a few times.
+		var diagResult tool.ExecutionResult
+		var err error
+		diagDeadline := time.Now().Add(3 * time.Second)
+		for {
+			diagArgs, _ := json.Marshal(map[string]string{"action": "diagnostics", "file": filePath})
+			diagResult, err = lspTool.Execute(ctx, diagArgs)
+			if err != nil {
+				return fmt.Sprintf("\n\n--- LSP Diagnostics ---\n(error running diagnostics: %s)", err)
+			}
+			if diagResult.IsError {
+				return fmt.Sprintf("\n\n--- LSP Diagnostics ---\n(error: %s)", diagResult.Content)
+			}
+			// Got meaningful diagnostics or timed out
+			if diagResult.Content != "" || time.Now().After(diagDeadline) {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return ""
+			case <-time.After(200 * time.Millisecond):
+			}
 		}
-		if diagResult.IsError {
-			return fmt.Sprintf("\n\n--- LSP Diagnostics ---\n(error: %s)", diagResult.Content)
-		}
 
-		if !strings.Contains(diagResult.Content, "Error") && !strings.Contains(diagResult.Content, "Warning") {
+		if diagResult.Content == "" || !strings.Contains(diagResult.Content, "Error") && !strings.Contains(diagResult.Content, "Warning") {
 			return ""
 		}
 

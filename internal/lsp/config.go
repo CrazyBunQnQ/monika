@@ -24,7 +24,8 @@ func ResolveServers(workdir string) map[string]ServerConfig {
 		if !hasRootMarker(workdir, cfg.RootMarkers) {
 			continue
 		}
-		if !binaryAvailable(cfg.Command, workdir) {
+		avail := binaryAvailable(cfg.Command, workdir)
+		if !avail {
 			continue
 		}
 		result[name] = cfg
@@ -255,8 +256,8 @@ func symbolKindName(k SymbolKind) string {
 		SKNull: "Null", SKEnumMember: "EnumMember", SKStruct: "Struct", SKEvent: "Event",
 		SKOperator: "Operator", SKTypeParameter: "TypeParameter",
 	}
-	if name, ok := names[k]; ok {
-		return name
+	if n, ok := names[k]; ok {
+		return n
 	}
 	return fmt.Sprintf("Kind(%d)", k)
 }

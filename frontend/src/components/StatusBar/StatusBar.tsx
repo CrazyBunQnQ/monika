@@ -7,8 +7,6 @@ function StatusBar() {
   const lspServers = useStore((s) => s.lspServers)
   const loadLSPStatus = useStore((s) => s.loadLSPStatus)
 
-  const running = lspServers.filter((s) => s.running)
-  const available = lspServers.filter((s) => !s.running)
   const hasServers = lspServers.length > 0
 
   useEffect(() => {
@@ -38,18 +36,20 @@ function StatusBar() {
       </div>
 
       {hasServers && (
-        <div className="flex items-center gap-1.5 ml-3" style={{ paddingLeft: 8, borderLeft: '1px solid var(--border)' }}>
-          <span
-            className="block rounded-full"
-            style={{
-              width: 6, height: 6,
-              background: running.length > 0 ? 'var(--green)' : 'var(--text-dim)',
-              boxShadow: running.length > 0 ? '0 0 4px rgba(84,192,138,0.4)' : undefined,
-            }}
-          />
-          <span className="text-[var(--text-dim)]">
-            LSP{running.length > 0 ? ` ${running.map((s) => s.name).join(', ')}` : available.length > 0 ? ' idle' : ''}
-          </span>
+        <div className="flex items-center gap-2 ml-3" style={{ paddingLeft: 8, borderLeft: '1px solid var(--border)' }}>
+          {lspServers.map((s) => (
+            <div key={s.name} className="flex items-center gap-1">
+              <span
+                className="block rounded-full"
+                style={{
+                  width: 6, height: 6,
+                  background: s.running ? 'var(--green)' : 'var(--text-dim)',
+                  boxShadow: s.running ? '0 0 4px rgba(84,192,138,0.4)' : undefined,
+                }}
+              />
+              <span className="text-[var(--text-dim)]">{s.name}</span>
+            </div>
+          ))}
         </div>
       )}
 

@@ -10,3 +10,4 @@ frontend/dist/
 winres/build/
 winres/winres/
 rsrc_windows_*.syso
+doc/

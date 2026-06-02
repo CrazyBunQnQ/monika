@@ -79,6 +79,7 @@ func main() {
 	tsQueryFn := tsBridge.QueryFunc()
 	builtin.RegisterDefaults(registry, cwd, builtin.TSQueryFunc(tsQueryFn))
 	builtin.RegisterLSP(registry, cwd)
+	builtin.WireLSPHooks(registry)
 
 	taskStore := builtin.NewTaskStore(nil)
 	builtin.RegisterTasks(registry, taskStore)
@@ -189,7 +190,7 @@ The content below is your PROJECT RULES from AGENTS.md. These rules are NON-NEGO
 	systemPrompt := strings.Join(systemParts, "\n\n")
 	skillsPrompt := agent.BuildSkillsPrompt(skillList)
 	mcpPrompt := agent.BuildMCPPrompt(mcpRegistry.GetTools())
-	systemPrompt = systemPrompt + skillsPrompt + mcpPrompt
+	systemPrompt = systemPrompt + skillsPrompt + mcpPrompt + builtin.LSPStatusPrompt(registry)
 	loopOpts := []agent.LoopOption{
 		agent.WithProjectDir(cwd),
 		agent.WithModel(pr.Model),

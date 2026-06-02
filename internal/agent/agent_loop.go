@@ -1005,7 +1005,7 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 					ID:        tc.ID,
 					Name:      tc.Function.Name,
 					Input:     tc.Function.Arguments,
-					Output:    execResult.Content,
+					Output:    toolContent,
 					Status:    status,
 					DiffLines: execResult.DiffLines,
 				},

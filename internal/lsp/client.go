@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -14,6 +15,35 @@ import (
 	"syscall"
 	"time"
 )
+
+var lspLogFile *os.File
+
+func init() {
+	exe, err := os.Executable()
+	if err == nil {
+		dir := filepath.Dir(exe)
+		f, err := os.OpenFile(filepath.Join(dir, "lsp_debug.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err == nil {
+			lspLogFile = f
+		}
+	}
+	// fallback: try current directory
+	if lspLogFile == nil {
+		f, err := os.OpenFile("lsp_debug.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err == nil {
+			lspLogFile = f
+		}
+	}
+}
+
+func lspLog(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	if lspLogFile != nil {
+		lspLogFile.WriteString(time.Now().Format("15:04:05.000") + " " + msg + "\n")
+		lspLogFile.Sync()
+	}
+	fmt.Print(msg + "\n")
+}
 
 type Client struct {
 	transport    *Transport
@@ -126,6 +156,15 @@ func (c *Client) Shutdown(ctx context.Context) {
 		}
 		close(c.done)
 	})
+}
+
+func (c *Client) IsAlive() bool {
+	select {
+	case <-c.done:
+		return false
+	default:
+		return true
+	}
 }
 
 func (c *Client) DidOpen(ctx context.Context, doc TextDocumentItem) error {
@@ -298,7 +337,7 @@ func (c *Client) WorkspaceSymbols(ctx context.Context, query string) ([]SymbolIn
 func (c *Client) Diagnostics(uri string) []Diagnostic {
 	c.diagMu.RLock()
 	defer c.diagMu.RUnlock()
-	return c.diags[uri]
+	return c.diags[normalizeURI(uri)]
 }
 
 func (c *Client) Ready() bool {
@@ -339,6 +378,9 @@ func (c *Client) readLoop() {
 		if err := json.Unmarshal(msg, &envelope); err != nil {
 			continue
 		}
+		if envelope.Method != "" {
+			lspLog("recv notification: method=%s params_len=%d", envelope.Method, len(envelope.Params))
+		}
 
 		if envelope.ID != 0 && envelope.Method == "" {
 			c.mu.Lock()
@@ -357,11 +399,14 @@ func (c *Client) readLoop() {
 		if envelope.Method == "textDocument/publishDiagnostics" && envelope.Params != nil {
 			var params PublishDiagnosticsParams
 			if json.Unmarshal(envelope.Params, &params) == nil {
+			lspLog("publishDiagnostics: raw_uri=%s diag_count=%d", params.URI, len(params.Diagnostics))
+				uri := normalizeURI(params.URI)
+				lspLog("publishDiagnostics: normalized_uri=%s", uri)
 				c.diagMu.Lock()
 				if len(params.Diagnostics) == 0 {
-					delete(c.diags, params.URI)
+					delete(c.diags, uri)
 				} else {
-					c.diags[params.URI] = params.Diagnostics
+					c.diags[uri] = params.Diagnostics
 				}
 				c.diagMu.Unlock()
 			}
@@ -478,6 +523,28 @@ func fileToURI(path string) string {
 	u := &url.URL{Scheme: "file", Path: abs}
 	return u.String()
 }
+// normalizeURI ensures consistent URI formatting for map lookups.
+// TS server returns URIs with percent-encoded colons (e.g. d%3A),
+// while fileToURI produces unencoded colons (e.g. d:).
+// We decode and build a plain string to avoid url.URL.String() re-encoding.
+func normalizeURI(uri string) string {
+	u, err := url.Parse(uri)
+	if err != nil {
+		return uri
+	}
+	if u.Scheme != "file" {
+		return uri
+	}
+	path := u.Path
+	if decoded, err := url.PathUnescape(path); err == nil {
+		path = decoded
+	}
+	if runtime.GOOS == "windows" && len(path) > 2 && path[0] == '/' && path[2] == ':' {
+		path = "/" + strings.ToLower(path[1:2]) + path[2:]
+	}
+	return "file://" + path
+}
+
 
 func uriToPath(uri string) string {
 	u, err := url.Parse(uri)
