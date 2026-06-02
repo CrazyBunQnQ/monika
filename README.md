@@ -89,6 +89,19 @@ The agent can manipulate your project directly:
 | `glob` | Glob pattern file discovery |
 | `grep` | Regex search across files |
 | `bash` | Execute shell commands (cross-platform) |
+| `lsp` | Language Server Protocol — diagnostics, go-to-definition, references, rename, etc. ([docs](docs/lsp.md)) |
+
+The agent can manipulate your project directly:
+
+| Tool | Description |
+|------|-------------|
+| `file_read` | Read files with precision (offset/limit) |
+| `file_write` | Create or overwrite files |
+| `file_edit` | Exact string replacement |
+| `file_list` | List directory contents |
+| `glob` | Glob pattern file discovery |
+| `grep` | Regex search across files |
+| `bash` | Execute shell commands (cross-platform) |
 
 ### Git Integration
 

@@ -88,6 +88,19 @@ Agent 可以直接操作你的项目：
 | `file_list` | 列出目录内容 |
 | `glob` | Glob 模式文件查找 |
 | `grep` | 正则搜索文件内容 |
+| `lsp` | Language Server Protocol — 诊断、跳转定义、查找引用、重命名等 ([文档](docs/lsp.zh.md)) |
+| `lsp` | Language Server Protocol — 诊断、跳转定义、查找引用、重命名等 ([文档](docs/lsp.md)) |
+
+Agent 可以直接操作你的项目：
+
+| 工具 | 功能 |
+|------|------|
+| `file_read` | 读取文件（带 offset/limit 精确读取） |
+| `file_write` | 创建或覆盖文件 |
+| `file_edit` | 精确字符串替换 |
+| `file_list` | 列出目录内容 |
+| `glob` | Glob 模式文件查找 |
+| `grep` | 正则搜索文件内容 |
 | `bash` | 执行 Shell 命令（跨平台） |
 
 ### Git 集成
