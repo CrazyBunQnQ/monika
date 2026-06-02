@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -24,6 +23,7 @@ import (
 	"monika/internal/lsp"
 	config2 "monika/internal/config"
 	"monika/internal/permission"
+	"monika/internal/tool/builtin"
 	tool2 "monika/internal/tool"
 	"monika/internal/update"
 	engine2 "monika/pkg/engine"
@@ -343,6 +343,15 @@ func (a *App) OpenProject(path string) (*ProjectInfo, error) {
 	a.resetStaleSessions(path)
 	a.getFileService(path)
 	a.writeRecentProject(info.Path, info.Name)
+	a.saveLastProjectPath(path)
+
+	// Re-register the LSP tool with the correct project directory.
+	if t, ok := a.registry.Get("lsp"); ok {
+		if lt, ok := t.(interface{ Manager() *lsp.Manager }); ok {
+			lt.Manager().Stop()
+		}
+	}
+	_ = builtin.RegisterLSP(a.registry, path)
 	a.saveLastProjectPath(path)
 
 	return info, nil
@@ -2955,9 +2964,22 @@ func (a *App) SendTrayNotification(sessionID string, sessionTitle string, messag
 }
 
 // ClearTrayNotifications clears all notifications and stops blink.
+// Skipped when popup is visible to prevent webview focus from closing the popup.
 func (a *App) ClearTrayNotifications() {
 	if a.trayMgr != nil {
-		trayLogf("ClearTrayNotifications called\n%s", string(debug.Stack()))
+		if a.trayMgr.IsPopupVisible() {
+			return
+		}
+		a.trayMgr.StopBlink()
+		a.trayMgr.HidePopup()
+		a.trayMgr.ClearNotifications()
+	}
+}
+
+// DismissAllNotifications force-clears all notifications and closes the popup.
+// Bypasses the popup-visible guard — used by the "Dismiss all" button.
+func (a *App) DismissAllNotifications() {
+	if a.trayMgr != nil {
 		a.trayMgr.StopBlink()
 		a.trayMgr.HidePopup()
 		a.trayMgr.ClearNotifications()

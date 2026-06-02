@@ -26,7 +26,7 @@ export function TrayPopup() {
   }, [])
 
   const handleClearAll = () => {
-    App.ClearTrayNotifications().then(() => {
+    App.DismissAllNotifications().then(() => {
       setNotifications([])
     }).catch(() => {})
   }
