@@ -37,6 +37,7 @@ Actions:
 - hover: Get hover information (type docs) at a position
 - symbols: Get document symbols (outline) for a file
 - code_actions: List available code actions for a range in a file
+- execute_code_action: Execute a specific code action by title
 - rename: Rename a symbol at a position across the workspace
 - status: Show configured and running LSP servers
 
@@ -50,7 +51,7 @@ func (t *lspTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"action": map[string]any{
 				"type":        "string",
-				"enum":        []string{"diagnostics", "definition", "type_definition", "implementation", "references", "hover", "symbols", "code_actions", "rename", "status"},
+				"enum":        []string{"diagnostics", "definition", "type_definition", "implementation", "references", "hover", "symbols", "code_actions", "execute_code_action", "rename", "status"},
 				"description": "The LSP action to perform",
 			},
 			"file": map[string]any{
@@ -77,6 +78,10 @@ func (t *lspTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "New name for the symbol (required for rename action)",
 			},
+			"action_title": map[string]any{
+				"type":        "string",
+				"description": "Title of the code action to execute (required for execute_code_action)",
+			},
 		},
 		"required": []string{"action"},
 	}
@@ -84,13 +89,14 @@ func (t *lspTool) Parameters() map[string]any {
 
 func (t *lspTool) Execute(ctx context.Context, args json.RawMessage) (tool.ExecutionResult, error) {
 	var params struct {
-		Action       string `json:"action"`
-		File         string `json:"file"`
-		Line         int    `json:"line"`
-		Character    int    `json:"character"`
-		EndLine      int    `json:"end_line"`
-		EndCharacter int    `json:"end_character"`
-		NewName      string `json:"new_name"`
+		Action      string `json:"action"`
+		File        string `json:"file"`
+		Line        int    `json:"line"`
+		Character   int    `json:"character"`
+		EndLine     int    `json:"end_line"`
+		EndCharacter int   `json:"end_character"`
+		NewName     string `json:"new_name"`
+		ActionTitle string `json:"action_title"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
@@ -193,6 +199,52 @@ func (t *lspTool) Execute(ctx context.Context, args json.RawMessage) (tool.Execu
 		}
 		return tool.ExecutionResult{Content: formatCodeActions(actions)}, nil
 
+	case "execute_code_action":
+		if params.ActionTitle == "" {
+			return tool.ExecutionResult{Content: "action_title is required for execute_code_action", IsError: true}, nil
+		}
+		r := Range{
+			Start: pos,
+			End:   Position{Line: params.EndLine, Character: params.EndCharacter},
+		}
+		if r.End.Line == 0 && r.End.Character == 0 {
+			r.End = r.Start
+		}
+		diags := client.Diagnostics(uri)
+		actions, err := client.CodeActions(ctx, uri, r, diags)
+		if err != nil {
+			return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
+		}
+		var found *CodeAction
+		for i := range actions {
+			if actions[i].Title == params.ActionTitle {
+				found = &actions[i]
+				break
+			}
+		}
+		if found == nil {
+			return tool.ExecutionResult{Content: fmt.Sprintf("Code action %q not found. Use code_actions to list available actions.", params.ActionTitle), IsError: true}, nil
+		}
+		edit, err := client.ExecuteCodeAction(ctx, *found)
+		if err != nil {
+			return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
+		}
+		if edit != nil {
+			applied, applyErr := ApplyWorkspaceEdit(*edit)
+			if applyErr != nil {
+				return tool.ExecutionResult{Content: fmt.Sprintf("Code action edit apply failed: %v", applyErr), IsError: true}, nil
+			}
+			for fileURI := range FlattenWorkspaceTextEdits(*edit) {
+				changedPath := uriToPath(fileURI)
+				fileClient, _, clientErr := t.manager.ClientForFile(ctx, changedPath)
+				if clientErr == nil {
+					_ = t.manager.SyncContent(ctx, fileClient, changedPath)
+				}
+			}
+			return tool.ExecutionResult{Content: fmt.Sprintf("Code action %q applied: %d file(s) modified.", found.Title, applied)}, nil
+		}
+		return tool.ExecutionResult{Content: fmt.Sprintf("Code action %q executed (command sent to server).", found.Title)}, nil
+
 	case "rename":
 		if params.NewName == "" {
 			return tool.ExecutionResult{Content: "new_name is required for rename action", IsError: true}, nil
@@ -209,17 +261,20 @@ func (t *lspTool) Execute(ctx context.Context, args json.RawMessage) (tool.Execu
 			return tool.ExecutionResult{Content: fmt.Sprintf("Rename planned but apply failed: %v", err), IsError: true}, nil
 		}
 
-		// Sync changed files with LSP servers
+		// Sync changed files with the correct per-file LSP servers
 		for fileURI := range FlattenWorkspaceTextEdits(*edit) {
 			changedPath := uriToPath(fileURI)
-			_ = t.manager.SyncContent(ctx, client, changedPath)
+			fileClient, _, clientErr := t.manager.ClientForFile(ctx, changedPath)
+			if clientErr == nil {
+				_ = t.manager.SyncContent(ctx, fileClient, changedPath)
+			}
 		}
 
 		return tool.ExecutionResult{Content: fmt.Sprintf("Rename applied: %d file(s) modified.", applied)}, nil
 
 	default:
 		return tool.ExecutionResult{
-			Content: fmt.Sprintf("unknown action: %s (supported: diagnostics, definition, type_definition, implementation, references, hover, symbols, code_actions, rename, status)", params.Action),
+			Content: fmt.Sprintf("unknown action: %s (supported: diagnostics, definition, type_definition, implementation, references, hover, symbols, code_actions, execute_code_action, rename, status)", params.Action),
 			IsError: true,
 		}, nil
 	}

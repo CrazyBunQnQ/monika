@@ -441,6 +441,11 @@ type Command struct {
 	Arguments []any    `json:"arguments,omitempty"`
 }
 
+type ExecuteCommandParams struct {
+	Command   string `json:"command"`
+	Arguments []any  `json:"arguments,omitempty"`
+}
+
 // Rename
 
 type RenameParams struct {

@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -14,16 +16,17 @@ import (
 )
 
 type Client struct {
-	transport  *Transport
-	cmd        *exec.Cmd
-	nextID     atomic.Int64
-	mu         sync.Mutex
-	pending    map[int64]chan *jsonRPCResponse
-	diags      map[string][]Diagnostic
-	diagMu     sync.RWMutex
-	serverCaps ServerCapabilities
-	ready      bool
-	done       chan struct{}
+	transport    *Transport
+	cmd          *exec.Cmd
+	nextID       atomic.Int64
+	mu           sync.Mutex
+	pending      map[int64]chan *jsonRPCResponse
+	diags        map[string][]Diagnostic
+	diagMu       sync.RWMutex
+	serverCaps   ServerCapabilities
+	ready        bool
+	shutdownOnce sync.Once
+	done         chan struct{}
 }
 
 func NewClient(ctx context.Context, command string, args []string, workdir string) (*Client, error) {
@@ -104,19 +107,25 @@ func (c *Client) Initialize(ctx context.Context, rootURI string, initOptions any
 }
 
 func (c *Client) Shutdown(ctx context.Context) {
-	select {
-	case <-c.done:
-		return
-	default:
-	}
+	c.shutdownOnce.Do(func() {
+		ctx2, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		_ = c.call(ctx2, "shutdown", nil, nil)
+		_ = c.notify(ctx2, "exit", nil)
+		c.transport.Close()
 
-	ctx2, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	_ = c.call(ctx2, "shutdown", nil, nil)
-	_ = c.notify(ctx2, "exit", nil)
-	c.transport.Close()
-	c.cmd.Wait()
-	close(c.done)
+		done := make(chan struct{})
+		go func() {
+			c.cmd.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			c.cmd.Process.Kill()
+		}
+		close(c.done)
+	})
 }
 
 func (c *Client) DidOpen(ctx context.Context, doc TextDocumentItem) error {
@@ -217,6 +226,23 @@ func (c *Client) References(ctx context.Context, uri string, pos Position) ([]Lo
 	return parseLocations(raw)
 }
 
+func (c *Client) ExecuteCodeAction(ctx context.Context, action CodeAction) (*WorkspaceEdit, error) {
+	if action.Edit != nil {
+		return action.Edit, nil
+	}
+	if action.Command != nil {
+		var result any
+		if err := c.call(ctx, "workspace/executeCommand", ExecuteCommandParams{
+			Command:   action.Command.Command,
+			Arguments: action.Command.Arguments,
+		}, &result); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+	return nil, nil
+}
+
 func (c *Client) Hover(ctx context.Context, uri string, pos Position) (*Hover, error) {
 	var result Hover
 	if err := c.call(ctx, "textDocument/hover", TextDocumentPositionParams{
@@ -230,9 +256,9 @@ func (c *Client) Hover(ctx context.Context, uri string, pos Position) (*Hover, e
 
 func (c *Client) DocumentSymbols(ctx context.Context, uri string) ([]DocumentSymbol, error) {
 	var raw json.RawMessage
-	if err := c.call(ctx, "textDocument/documentSymbol", TextDocumentPositionParams{
-		TextDocument: TextDocumentIdentifier{URI: uri},
-	}, &raw); err != nil {
+	if err := c.call(ctx, "textDocument/documentSymbol", struct {
+		TextDocument TextDocumentIdentifier `json:"textDocument"`
+	}{TextDocument: TextDocumentIdentifier{URI: uri}}, &raw); err != nil {
 		return nil, err
 	}
 
@@ -280,6 +306,15 @@ func (c *Client) Ready() bool {
 // readLoop runs in a background goroutine, reading JSON-RPC messages
 // and dispatching responses to pending callers or caching diagnostics.
 func (c *Client) readLoop() {
+	defer func() {
+		c.mu.Lock()
+		for id, ch := range c.pending {
+			ch <- &jsonRPCResponse{ID: id, Error: &jsonRPCError{Code: -32000, Message: "connection closed"}}
+			delete(c.pending, id)
+		}
+		c.mu.Unlock()
+	}()
+
 	for {
 		msg, err := c.transport.ReadMessage()
 		if err != nil {
@@ -412,10 +447,10 @@ func parseCodeActions(raw json.RawMessage) ([]CodeAction, error) {
 		return nil, err
 	}
 
-	// Filter out Command-only entries (they have no title field in CodeAction context)
+	// Return all actions with a non-empty title
 	result := make([]CodeAction, 0, len(actions))
 	for _, a := range actions {
-		if a.Edit != nil || a.Command != nil || len(a.Diagnostics) > 0 {
+		if a.Title != "" {
 			result = append(result, a)
 		}
 	}
@@ -427,18 +462,24 @@ func fileToURI(path string) string {
 	if err != nil {
 		abs = path
 	}
-	if runtime.GOOS == "windows" {
-		abs = filepath.ToSlash(abs)
+	abs = filepath.ToSlash(abs)
+	// Ensure leading slash for non-Windows or already-slashed paths
+	if !strings.HasPrefix(abs, "/") {
+		abs = "/" + abs
 	}
-	return "file:///" + abs
+	u := &url.URL{Scheme: "file", Path: abs}
+	return u.String()
 }
 
 func uriToPath(uri string) string {
-	if len(uri) > 8 && uri[:8] == "file:///" {
-		return filepath.FromSlash(uri[8:])
+	u, err := url.Parse(uri)
+	if err != nil {
+		return uri
 	}
-	if len(uri) > 7 && uri[:7] == "file://" {
-		return filepath.FromSlash(uri[7:])
+	p := u.Path
+	// On Windows, url.Parse gives "/C:/foo" — strip leading /
+	if runtime.GOOS == "windows" && len(p) > 2 && p[0] == '/' && p[2] == ':' {
+		p = p[1:]
 	}
-	return uri
+	return filepath.FromSlash(p)
 }

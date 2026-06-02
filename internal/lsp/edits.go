@@ -122,7 +122,7 @@ func ApplyWorkspaceEdit(edit WorkspaceEdit) (int, error) {
 				if err != nil {
 					return applied, fmt.Errorf("lsp: apply edits to %s: %w", path, err)
 				}
-				if err := os.WriteFile(path, []byte(newContent), 0); err != nil {
+				if err := os.WriteFile(path, []byte(newContent), 0o644); err != nil {
 					return applied, fmt.Errorf("lsp: write %s: %w", path, err)
 				}
 				applied++
@@ -168,7 +168,7 @@ func ApplyWorkspaceEdit(edit WorkspaceEdit) (int, error) {
 		if err != nil {
 			return applied, fmt.Errorf("lsp: apply edits to %s: %w", path, err)
 		}
-		if err := os.WriteFile(path, []byte(newContent), 0); err != nil {
+		if err := os.WriteFile(path, []byte(newContent), 0o644); err != nil {
 			return applied, fmt.Errorf("lsp: write %s: %w", path, err)
 		}
 		applied++

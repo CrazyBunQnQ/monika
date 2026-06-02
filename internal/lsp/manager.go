@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -166,7 +167,16 @@ func (m *Manager) getOrStart(ctx context.Context, name string) (*Client, string,
 
 	cmd := ResolveCommand(cfg.Command, m.workdir)
 
-	client, err := NewClient(ctx, cmd, cfg.Args, m.workdir)
+	args := make([]string, len(cfg.Args))
+	for i, a := range cfg.Args {
+		if a == "$PID" {
+			args[i] = strconv.Itoa(os.Getpid())
+		} else {
+			args[i] = a
+		}
+	}
+
+	client, err := NewClient(ctx, cmd, args, m.workdir)
 	if err != nil {
 		return nil, "", fmt.Errorf("lsp: start %s: %w", name, err)
 	}
