@@ -2957,10 +2957,6 @@ func (a *App) SendTrayNotification(sessionID string, sessionTitle string, messag
 // ClearTrayNotifications clears all notifications and stops blink.
 func (a *App) ClearTrayNotifications() {
 	if a.trayMgr != nil {
-		if a.trayMgr.IsPopupVisible() {
-			trayLogf("ClearTrayNotifications: skipped because popup is visible")
-			return
-		}
 		trayLogf("ClearTrayNotifications called\n%s", string(debug.Stack()))
 		a.trayMgr.StopBlink()
 		a.trayMgr.HidePopup()

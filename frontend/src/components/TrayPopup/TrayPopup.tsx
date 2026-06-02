@@ -42,7 +42,11 @@ export function TrayPopup() {
 
   if (notifications.length === 0) {
     return (
-      <div className="flex items-center justify-center h-full text-[12px] text-[var(--text-dim)] p-4">
+      <div
+        className="flex items-center justify-center h-full text-[12px] text-[var(--text-dim)] p-4"
+        onMouseEnter={() => App.CancelPopupHide().catch(() => {})}
+        onMouseLeave={() => App.SchedulePopupHide().catch(() => {})}
+      >
         No unread messages
       </div>
     )
