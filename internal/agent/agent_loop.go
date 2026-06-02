@@ -1076,7 +1076,26 @@ func (a *AgentLoop) buildMessages(conv *Conversation) []engine.ChatMessage {
 	}
 
 	messages = append(messages, filteredMsgs...)
-	return sanitizeMessageSequence(sanitizeToolCallPairs(messages))
+	result := sanitizeMessageSequence(sanitizeToolCallPairs(messages))
+
+	// Compaction can split within a turn, producing a tail with no user
+	// message. Most providers require at least one user message, so inject a
+	// synthetic one when the sanitized result only contains the system message.
+	hasUser := false
+	for _, m := range result {
+		if m.Role == "user" {
+			hasUser = true
+			break
+		}
+	}
+	if !hasUser {
+		result = append(result, engine.ChatMessage{
+			Role:    "user",
+			Content: "Continue.",
+		})
+	}
+
+	return result
 }
 
 // sanitizeToolCallPairs ensures every assistant message with tool_calls
