@@ -392,3 +392,54 @@ func TestSanitizeMessageSequence_PostCompaction(t *testing.T) {
 		t.Errorf("third should be latest answer, got %s", result[2].Content)
 	}
 }
+
+func TestCompactionSplit_SingleTurnLargeTail(t *testing.T) {
+	// Single user turn with many assistant/tool messages where the tail budget
+	// can't fit everything — the tail must still start at the user message.
+	long := strings.Repeat("x", 3000) // ~750 tokens per message (chars/4)
+	conv := &Conversation{
+		Messages: []engine.ChatMessage{
+			{Role: "user", Content: "do something"},
+			{Role: "assistant", Content: "", ToolCalls: []engine.ToolCall{{ID: "t1", Function: engine.ToolCallFunc{Name: "grep"}}}},
+			{Role: "tool", Content: long, ToolCallID: "t1"},
+			{Role: "assistant", Content: "", ToolCalls: []engine.ToolCall{{ID: "t2", Function: engine.ToolCallFunc{Name: "file_read"}}}},
+			{Role: "tool", Content: long, ToolCallID: "t2"},
+			{Role: "assistant", Content: "", ToolCalls: []engine.ToolCall{{ID: "t3", Function: engine.ToolCallFunc{Name: "file_write"}}}},
+			{Role: "tool", Content: long, ToolCallID: "t3"},
+		},
+	}
+	tailStart := compactionSplit(conv, 131072)
+	// Tail must start at the user message (index 0), not after it.
+	// If it starts after, the tail would have no user message.
+	if tailStart > 0 {
+		t.Errorf("tail must start at user message (index 0), got tailStart=%d", tailStart)
+	}
+	if conv.Messages[tailStart].Role != "user" {
+		t.Errorf("tail must start at user message, got role=%s", conv.Messages[tailStart].Role)
+	}
+}
+
+func TestCompactionSplit_MultiTurnPartialBudget(t *testing.T) {
+	// Multiple user turns where the last turn is too large to fit entirely.
+	// The tail must still start at the last user message.
+	long := strings.Repeat("x", 4000) // ~1000 tokens per message
+	conv := &Conversation{
+		Messages: []engine.ChatMessage{
+			{Role: "user", Content: "first question"},
+			{Role: "assistant", Content: "first answer"},
+			{Role: "user", Content: "second question"},
+			{Role: "assistant", Content: long}, // large response
+			{Role: "tool", Content: long, ToolCallID: "t1"},
+			{Role: "tool", Content: long, ToolCallID: "t2"},
+		},
+	}
+	tailStart := compactionSplit(conv, 131072)
+	// Tail must start at the last user message (index 2), not after it.
+	if tailStart > 2 {
+		t.Errorf("tail must start at or before last user (index 2), got tailStart=%d", tailStart)
+	}
+	if tailStart < len(conv.Messages) && conv.Messages[tailStart].Role != "user" {
+		t.Errorf("tail must start at user message, got role=%s at index %d",
+			conv.Messages[tailStart].Role, tailStart)
+	}
+}

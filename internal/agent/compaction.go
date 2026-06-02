@@ -105,7 +105,7 @@ func compactionSplit(conv *Conversation, contextLimit int64) int {
 			turn := turns[0]
 			var suffixTokens int64
 			splitAt := len(effective)
-			for j := len(effective) - 1; j > turn.localStart+1; j-- {
+			for j := len(effective) - 1; j >= turn.localStart; j-- {
 				msgTokens := int64(tokenizer.Count(effective[j].Content) + tokenizer.Count(effective[j].ReasoningContent) + tokenizer.Count(effective[j].Role) + 4)
 				if suffixTokens+msgTokens > tailBudget {
 					break
@@ -113,7 +113,7 @@ func compactionSplit(conv *Conversation, contextLimit int64) int {
 				suffixTokens += msgTokens
 				splitAt = j
 			}
-			if splitAt > turn.localStart+1 {
+			if splitAt > turn.localStart {
 				return start + splitAt
 			}
 			return start
@@ -142,7 +142,7 @@ func compactionSplit(conv *Conversation, contextLimit int64) int {
 			// This turn doesn't fit — try splitting: keep assistant+tool responses
 			// from later in the turn if the beginning doesn't fit
 			if turn.localEnd-turn.localStart > 1 {
-				for s := turn.localStart + 1; s < turn.localEnd; s++ {
+				for s := turn.localStart; s < turn.localEnd; s++ {
 					var suffixTokens int64
 					for _, m := range effective[s:turn.localEnd] {
 						suffixTokens += int64(tokenizer.Count(m.Content) + tokenizer.Count(m.ReasoningContent) + tokenizer.Count(m.Role) + 4)
@@ -157,6 +157,16 @@ func compactionSplit(conv *Conversation, contextLimit int64) int {
 		}
 	}
 
+
+	// Ensure tail always starts at or before a user message.
+	// An empty tail or tail starting with assistant/tool causes buildMessages
+	// to inject a synthetic "Continue." user message, which creates a loop.
+	if len(turns) > 0 {
+		lastUser := turns[len(turns)-1].localStart
+		if splitLocalIdx > lastUser {
+			splitLocalIdx = lastUser
+		}
+	}
 	if splitLocalIdx <= 0 {
 		return start
 	}
