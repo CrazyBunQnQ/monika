@@ -22,7 +22,7 @@ func NewFileEdit(projectDir string) tool.Tool {
 func (f *fileEdit) Name() string { return "file_edit" }
 
 func (f *fileEdit) Description() string {
-	return "Replaces lines in a file using line-number positioning with hash verification. The anchor (from file_read output, format 'hash:lineNumber') identifies the starting line and verifies it has not changed. line_count specifies how many lines to replace (default 1). Set line_count to 0 to insert new_string after the anchor line without replacing anything. Refuses to edit files containing merge conflict markers. Prefer file_edit_hunks for multi-region edits."
+	return "Replaces lines in a file using line-number positioning with hash verification. The anchor (from file_read output, format 'hash:lineNumber') identifies the starting line and verifies it has not changed. line_count specifies how many lines to replace (default 1). Set line_count to 0 to insert new_string after the anchor line without replacing anything. Refuses to edit files containing merge conflict markers."
 }
 
 func (f *fileEdit) Parameters() map[string]any {

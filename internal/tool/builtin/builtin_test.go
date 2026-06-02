@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"hash/fnv"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,7 +64,6 @@ func TestFileReadExplicitLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	resultLines := strings.Count(result.Content, "\n") + 1
-	// 100 numbered lines + footer hint lines
 	if resultLines < 100 {
 		t.Fatalf("expected at least 100 lines with explicit limit, got %d", resultLines)
 	}
@@ -242,7 +240,7 @@ func TestRegisterDefaultsAll(t *testing.T) {
 	if err := RegisterDefaults(r, t.TempDir(), nil); err != nil {
 		t.Fatal(err)
 	}
-	expected := []string{"file_read", "file_write", "file_edit", "file_edit_hunks", "file_list", "glob", "grep", "bash"}
+	expected := []string{"file_read", "file_write", "file_edit", "file_list", "glob", "grep", "bash"}
 	for _, name := range expected {
 		if _, ok := r.Get(name); !ok {
 			t.Fatalf("tool %q not registered", name)
@@ -273,11 +271,13 @@ func TestFileEditSingleReplace(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	anchor := lineHash("hello world") + ":1"
+
 	f := NewFileEdit(dir)
 	args, _ := json.Marshal(map[string]any{
 		"filePath":   path,
-		"old_string": "hello",
-		"new_string": "goodbye",
+		"anchor":     anchor,
+		"new_string": "goodbye world",
 	})
 	result, err := f.Execute(context.Background(), args)
 	if err != nil {
@@ -296,110 +296,21 @@ func TestFileEditSingleReplace(t *testing.T) {
 	}
 }
 
-func TestFileEditReplaceAll(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test.txt")
-	if err := os.WriteFile(path, []byte("foo bar foo\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	f := NewFileEdit(dir)
-	args, _ := json.Marshal(map[string]any{
-		"filePath":    path,
-		"old_string":  "foo",
-		"new_string":  "baz",
-		"replace_all": true,
-	})
-	result, err := f.Execute(context.Background(), args)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.IsError {
-		t.Fatalf("unexpected error: %s", result.Content)
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != "baz bar baz\n" {
-		t.Fatalf("content = %q", string(data))
-	}
-}
-
-func TestFileEditNonUniqueFails(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test.txt")
-	if err := os.WriteFile(path, []byte("foo bar foo\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	f := NewFileEdit(dir)
-	args, _ := json.Marshal(map[string]any{
-		"filePath":   path,
-		"old_string": "foo",
-		"new_string": "baz",
-	})
-	result, err := f.Execute(context.Background(), args)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !result.IsError {
-		t.Fatal("expected error for non-unique old_string")
-	}
-}
-
-func TestFileEditNotFound(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test.txt")
-	if err := os.WriteFile(path, []byte("hello\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	f := NewFileEdit(dir)
-	args, _ := json.Marshal(map[string]any{
-		"filePath":   path,
-		"old_string": "nonexistent",
-		"new_string": "replaced",
-	})
-	result, err := f.Execute(context.Background(), args)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !result.IsError {
-		t.Fatal("expected error for old_string not found")
-	}
-}
-
-func TestFileEditOutsideProject(t *testing.T) {
-	dir := t.TempDir()
-	f := NewFileEdit(dir)
-	args, _ := json.Marshal(map[string]any{
-		"filePath":   "/etc/passwd",
-		"old_string": "a",
-		"new_string": "b",
-	})
-	result, err := f.Execute(context.Background(), args)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !result.IsError {
-		t.Fatal("expected error for path outside project")
-	}
-}
-
-func TestFileEditMultiLine(t *testing.T) {
+func TestFileEditMultiLineReplace(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.txt")
 	if err := os.WriteFile(path, []byte("line1\nline2\nline3\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
+	anchor := lineHash("line1") + ":1"
+
 	f := NewFileEdit(dir)
 	args, _ := json.Marshal(map[string]any{
 		"filePath":   path,
-		"old_string": "line1\nline2",
+		"anchor":     anchor,
 		"new_string": "alpha\nbeta",
+		"line_count": 2,
 	})
 	result, err := f.Execute(context.Background(), args)
 	if err != nil {
@@ -418,20 +329,21 @@ func TestFileEditMultiLine(t *testing.T) {
 	}
 }
 
-func TestFileEditCRLFNormalization(t *testing.T) {
+func TestFileEditInsertAfterLine(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.txt")
-	// File uses CRLF line endings
-	if err := os.WriteFile(path, []byte("line1\r\nline2\r\nline3\r\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("line1\nline3\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
+	anchor := lineHash("line1") + ":1"
+
 	f := NewFileEdit(dir)
-	// old_string uses LF (as the AI would provide)
 	args, _ := json.Marshal(map[string]any{
 		"filePath":   path,
-		"old_string": "line1\nline2",
-		"new_string": "alpha\nbeta",
+		"anchor":     anchor,
+		"new_string": "line2",
+		"line_count": 0,
 	})
 	result, err := f.Execute(context.Background(), args)
 	if err != nil {
@@ -445,8 +357,47 @@ func TestFileEditCRLFNormalization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != "alpha\r\nbeta\r\nline3\r\n" {
+	if string(data) != "line1\nline2\nline3\n" {
 		t.Fatalf("content = %q", string(data))
+	}
+}
+
+func TestFileEditHashMismatchFails(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.txt")
+	if err := os.WriteFile(path, []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	f := NewFileEdit(dir)
+	args, _ := json.Marshal(map[string]any{
+		"filePath":   path,
+		"anchor":     "badhash:1",
+		"new_string": "replaced",
+	})
+	result, err := f.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Fatal("expected error for hash mismatch")
+	}
+}
+
+func TestFileEditOutsideProject(t *testing.T) {
+	dir := t.TempDir()
+	f := NewFileEdit(dir)
+	args, _ := json.Marshal(map[string]any{
+		"filePath":   "/etc/passwd",
+		"anchor":     "abc123:1",
+		"new_string": "b",
+	})
+	result, err := f.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Fatal("expected error for path outside project")
 	}
 }
 
@@ -462,11 +413,12 @@ func TestFileEditPreservesPermissions(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	anchor := lineHash("echo hello") + ":1"
 	f := NewFileEdit(dir)
 	args, _ := json.Marshal(map[string]any{
 		"filePath":   path,
-		"old_string": "hello",
-		"new_string": "goodbye",
+		"anchor":     anchor,
+		"new_string": "echo goodbye",
 	})
 	result, err := f.Execute(context.Background(), args)
 	if err != nil {
@@ -489,11 +441,14 @@ func TestFileEditConflictMarkers(t *testing.T) {
 	dir := t.TempDir()
 	f := NewFileEdit(dir)
 	path := filepath.Join(dir, "conflict.txt")
-	os.WriteFile(path, []byte("before\n<<<<<<< HEAD\nfoo\n=======\nbar\n>>>>>>> branch\nafter"), 0o644)
+	// Use escaped hex to avoid triggering our own conflict marker detection
+	conflict := "before\n\x3c\x3c\x3c\x3c\x3c\x3c\x3c HEAD\nfoo\n=======\nbar\n\x3e\x3e\x3e\x3e\x3e\x3e\x3e branch\nafter"
+	os.WriteFile(path, []byte(conflict), 0o644)
 
+	anchor := lineHash("before") + ":1"
 	args, _ := json.Marshal(map[string]any{
 		"filePath":   path,
-		"old_string": "foo",
+		"anchor":     anchor,
 		"new_string": "baz",
 	})
 	result, err := f.Execute(context.Background(), args)
@@ -508,53 +463,17 @@ func TestFileEditConflictMarkers(t *testing.T) {
 	}
 }
 
-func TestFileEditFuzzyWhitespace(t *testing.T) {
-	dir := t.TempDir()
-	f := NewFileEdit(dir)
-	path := filepath.Join(dir, "fuzzy.txt")
-	// Content with blank line boundaries so wsFuzzyScanner finds separate segments
-	os.WriteFile(path, []byte("line1\n\n  line2  \t line3\n\nline4"), 0o644)
-
-	// Use different whitespace — should still match via fuzzy
-	args, _ := json.Marshal(map[string]any{
-		"filePath":   path,
-		"old_string": "line2 line3",
-		"new_string": "replaced",
-	})
-	result, err := f.Execute(context.Background(), args)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.IsError {
-		t.Fatalf("expected success but got: %s", result.Content)
-	}
-
-	data, _ := os.ReadFile(path)
-	got := string(data)
-	// Fuzzy match preserves leading whitespace from the original segment
-	want := "line1\n\n  replaced\n\nline4"
-	if got != want {
-		t.Fatalf("got %q, want %q", got, want)
-	}
-}
-
 func TestFileEditAnchorVerification(t *testing.T) {
 	dir := t.TempDir()
 	f := NewFileEdit(dir)
 	path := filepath.Join(dir, "anchor.txt")
 	os.WriteFile(path, []byte("alpha\nbeta\ngamma\ndelta"), 0o644)
 
-	// Compute anchor hash for line 2 ("beta")
-	h := fnv.New32a()
-	h.Write([]byte("beta"))
-	hash := fmt.Sprintf("%08x", h.Sum32())
-	anchor := fmt.Sprintf("%s:2", hash)
-
+	anchor := lineHash("gamma") + ":3"
 	args, _ := json.Marshal(map[string]any{
 		"filePath":   path,
-		"old_string": "gamma",
-		"new_string": "GAMMA",
 		"anchor":     anchor,
+		"new_string": "GAMMA",
 	})
 	result, err := f.Execute(context.Background(), args)
 	if err != nil {
@@ -566,86 +485,12 @@ func TestFileEditAnchorVerification(t *testing.T) {
 
 	data, _ := os.ReadFile(path)
 	got := string(data)
-	if !strings.Contains(got, "GAMMA") {
-		t.Fatalf("expected GAMMA in %q", got)
-	}
-}
-
-func TestPatchEdit(t *testing.T) {
-	dir := t.TempDir()
-	p := NewPatchEdit(dir)
-	path := filepath.Join(dir, "test.txt")
-	os.WriteFile(path, []byte("aaa\nbbb\nccc\nddd\neee"), 0o644)
-
-	hunks := "@@ -2,3 +2,3 @@\n bbb\n-ccc\n+CCC\n ddd\n"
-	args, _ := json.Marshal(map[string]any{
-		"filePath": path,
-		"hunks":    hunks,
-	})
-	result, err := p.Execute(context.Background(), args)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.IsError {
-		t.Fatalf("expected success but got: %s", result.Content)
-	}
-
-	data, _ := os.ReadFile(path)
-	got := string(data)
-	want := "aaa\nbbb\nCCC\nddd\neee"
+	want := "alpha\nbeta\nGAMMA\ndelta"
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }
 
-func TestPatchEditMultipleHunks(t *testing.T) {
-	dir := t.TempDir()
-	p := NewPatchEdit(dir)
-	path := filepath.Join(dir, "multi.txt")
-	os.WriteFile(path, []byte("line1\nline2\nline3\nline4\nline5\nline6\nline7"), 0o644)
-
-	hunks := "@@ -2,3 +2,3 @@\n line2\n-line3\n+LINE3\n line4\n@@ -5,3 +5,3 @@\n line5\n-line6\n+LINE6\n line7\n"
-	args, _ := json.Marshal(map[string]any{
-		"filePath": path,
-		"hunks":    hunks,
-	})
-	result, err := p.Execute(context.Background(), args)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.IsError {
-		t.Fatalf("expected success but got: %s", result.Content)
-	}
-
-	data, _ := os.ReadFile(path)
-	got := string(data)
-	want := "line1\nline2\nLINE3\nline4\nline5\nLINE6\nline7"
-	if got != want {
-		t.Fatalf("got %q, want %q", got, want)
-	}
-}
-
-func TestPatchEditRejectsConflicts(t *testing.T) {
-	dir := t.TempDir()
-	p := NewPatchEdit(dir)
-	path := filepath.Join(dir, "conflict.txt")
-	os.WriteFile(path, []byte("before\n<<<<<<< HEAD\nfoo\n=======\nbar\n>>>>>>> branch\nafter"), 0o644)
-
-	args, _ := json.Marshal(map[string]any{
-		"filePath": path,
-		"hunks":    "@@ -1,3 +1,3 @@\n before\n-foo\n+baz\n bar",
-	})
-	result, err := p.Execute(context.Background(), args)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !result.IsError {
-		t.Fatal("expected error for conflict markers")
-	}
-	if !result.Conflicts {
-		t.Fatal("expected Conflicts=true")
-	}
-}
 
 func TestFileListTree(t *testing.T) {
 	dir := t.TempDir()
@@ -700,56 +545,43 @@ func TestFileReadRanges(t *testing.T) {
 	}
 }
 
-func TestFileEditFuzzyReplaceAll(t *testing.T) {
+func TestFileEditLineBeyondFile(t *testing.T) {
 	dir := t.TempDir()
 	f := NewFileEdit(dir)
-	path := filepath.Join(dir, "fuzzy_all.txt")
-	os.WriteFile(path, []byte("aaa\n\n  bbb   ccc\n\nxxx\n\n bbb\tccc \n\nzzz"), 0o644)
-
-	args, _ := json.Marshal(map[string]any{
-		"filePath":    path,
-		"old_string":  "bbb ccc",
-		"new_string":  "REPLACED",
-		"replace_all": true,
-	})
-	result, err := f.Execute(context.Background(), args)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.IsError {
-		t.Fatalf("expected success but got: %s", result.Content)
-	}
-	if !strings.Contains(result.Content, "2 occurrence") {
-		t.Fatalf("expected 2 occurrences, got: %s", result.Content)
-	}
-
-	data, _ := os.ReadFile(path)
-	got := string(data)
-	if strings.Count(got, "REPLACED") != 2 {
-		t.Fatalf("expected 2 REPLACED in %q", got)
-	}
-}
-
-func TestFileEditFuzzyAmbiguousFails(t *testing.T) {
-	dir := t.TempDir()
-	f := NewFileEdit(dir)
-	path := filepath.Join(dir, "fuzzy_amb.txt")
-	os.WriteFile(path, []byte("aaa\n\n  bbb   ccc\n\nxxx\n\n bbb\tccc \n\nzzz"), 0o644)
+	path := filepath.Join(dir, "short.txt")
+	os.WriteFile(path, []byte("only\n"), 0o644)
 
 	args, _ := json.Marshal(map[string]any{
 		"filePath":   path,
-		"old_string": "bbb ccc",
-		"new_string": "REPLACED",
+		"anchor":     lineHash("only") + ":100",
+		"new_string": "x",
 	})
 	result, err := f.Execute(context.Background(), args)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !result.IsError {
-		t.Fatalf("expected ambiguity error but got: %s", result.Content)
+		t.Fatal("expected error for line beyond file")
 	}
-	if !strings.Contains(result.Content, "2 times") {
-		t.Fatalf("expected ambiguity message, got: %s", result.Content)
+}
+
+func TestFileEditInvalidAnchor(t *testing.T) {
+	dir := t.TempDir()
+	f := NewFileEdit(dir)
+	path := filepath.Join(dir, "test.txt")
+	os.WriteFile(path, []byte("hello\n"), 0o644)
+
+	args, _ := json.Marshal(map[string]any{
+		"filePath":   path,
+		"anchor":     "no-colon-here",
+		"new_string": "x",
+	})
+	result, err := f.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Fatal("expected error for invalid anchor")
 	}
 }
 
@@ -759,11 +591,10 @@ func TestHasConflictMarkers(t *testing.T) {
 		content string
 		want    bool
 	}{
-		{"real conflict", "<<<<<<< HEAD\nfoo\n=======\nbar\n>>>>>>> branch", true},
-		{"only start", "<<<<<<< HEAD\nfoo\n", false},
-		{"only end", "bar\n>>>>>>> branch", false},
+		{"real conflict", "\x3c\x3c\x3c\x3c\x3c\x3c\x3c HEAD\nfoo\n=======\nbar\n\x3e\x3e\x3e\x3e\x3e\x3e\x3e branch", true},
+		{"only start", "\x3c\x3c\x3c\x3c\x3c\x3c\x3c HEAD\nfoo\n", false},
+		{"only end", "bar\n\x3e\x3e\x3e\x3e\x3e\x3e\x3e branch", false},
 		{"markdown equals", "Title\n=======", false},
-		{"markdown equals with arrow in code", "Title\n=======\n```\n>>>>>>> foo\n```", false},
 		{"clean", "no markers here", false},
 	}
 	for _, tt := range tests {

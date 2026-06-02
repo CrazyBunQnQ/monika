@@ -65,7 +65,6 @@ const PromptToolUsage = `## Tool Usage
 - file_edit uses anchor-based line positioning: copy the 'hash:lineNumber' prefix from file_read output as anchor
 - Set line_count to the number of lines to replace (default 1), or 0 to insert after the anchor line
 - If an edit fails due to hash mismatch, re-read the file to get the current content
-- For multi-region changes, prefer file_edit_hunks over multiple file_edit calls
 - file_edit refuses to edit files with unresolved merge conflict markers
 
 ### MCP tool usage
