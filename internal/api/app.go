@@ -21,6 +21,7 @@ import (
 	"time"
 
 	agent2 "monika/internal/agent"
+	"monika/internal/lsp"
 	config2 "monika/internal/config"
 	"monika/internal/permission"
 	tool2 "monika/internal/tool"
@@ -79,6 +80,7 @@ type App struct {
 	checker  *update.Checker
 
 	trayMgr *TrayManager
+	tsBridge *tsBridge
 
 	eventSeq atomic.Int64
 }
@@ -3006,4 +3008,18 @@ func (a *App) SchedulePopupHide() {
 	if a.trayMgr != nil {
 		a.trayMgr.SchedulePopupHide()
 	}
+}
+
+func (a *App) GetLSPStatus() []lsp.LSPServerStatus {
+	t, ok := a.registry.Get("lsp")
+	if !ok {
+		return nil
+	}
+	type lspTool interface {
+		Manager() *lsp.Manager
+	}
+	if lt, ok := t.(lspTool); ok {
+		return lt.Manager().ServerStatuses()
+	}
+	return nil
 }

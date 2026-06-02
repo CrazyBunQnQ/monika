@@ -43,11 +43,17 @@ const PromptToolUsage = `## Tool Usage
 ### Search before reading
 - ALWAYS grep before reading. Find the file AND the exact line numbers, then read only those lines
 - Use glob to discover file structure before targeting specific files
+- Use the 'tree' parameter on file_list to get a directory tree view (faster than glob for exploring structure)
 - Never call file_read without first narrowing scope via grep/glob — reading without searching is blind and wasteful
+- grep supports 'ast_pattern' for structural code search using tree-sitter queries (e.g., find all function declarations)
 
 ### Read with precision
 - After grep gives you line numbers, read ONLY the lines you need — typically 20-60 lines is plenty
+- Use the 'ranges' parameter to read multiple non-contiguous sections in one call (e.g. ranges='5-16,40-80')
 - Always provide offset and limit; the smaller the better for context efficiency
+- When output ends with "[N more lines below]", the file has more content — use the suggested offset to continue
+- Output includes line-number prefixes (e.g. " 42 | code") — strip these when using old_string in file_edit
+- For large files (100+ lines), use the 'summary' parameter to get a structured AST summary instead of reading everything
 - Never read an entire file or function blindly — grep for the specific symbols you need instead
 - Check if you have already read a file or directory before reading it again. Only re-read when content may have changed or you made edits.
 
@@ -58,11 +64,14 @@ const PromptToolUsage = `## Tool Usage
 
 ### Editing files
 - ALWAYS read the file with file_read before editing with file_edit — never edit blind
-- file_edit uses exact string matching: copy the old_string verbatim from file_read output
+- file_edit uses exact string matching: copy old_string verbatim from file_read output (strip the line-number prefix)
 - Preserve exact indentation (tabs/spaces) in old_string as it appears in the file
 - The edit fails if old_string is not unique; use a larger string with more surrounding context
 - Use replace_all to replace every occurrence of the same old_string
-- Use the smallest possible old_string that uniquely identifies the target — DO NOT pass the entire file as old_string. Each edit should target only the lines that need to change, not the whole file.
+- If an edit fails, re-read the file first — the file may have changed or your old_string may be wrong
+- For multi-region changes in one file, prefer file_edit_hunks over multiple file_edit calls
+- Use the 'anchor' parameter in file_edit to verify context hasn't changed (format: "FNV1a-hex:lineNumber")
+- file_edit will refuse to edit files with unresolved merge conflict markers (<<<<<<< / >>>>>>>)
 
 ### MCP tool usage
 - MCP tools are provided by configured external servers and extend your capabilities

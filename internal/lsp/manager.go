@@ -1,0 +1,334 @@
+package lsp
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+)
+
+const idleTimeout = 5 * time.Minute
+
+type LSPServerStatus struct {
+	Name      string   `json:"name"`
+	Command   string   `json:"command"`
+	FileTypes []string `json:"fileTypes"`
+	Running   bool     `json:"running"`
+}
+
+type openFile struct {
+	version int
+	content string
+}
+
+type managedClient struct {
+	client   *Client
+	lastUsed time.Time
+}
+
+type Manager struct {
+	workdir    string
+	servers    map[string]ServerConfig
+	clients    map[string]*managedClient
+	openFiles  map[string]*openFile // uri -> version + content
+	mu         sync.Mutex
+	clientLocks map[string]*sync.Mutex // per-server lock for getOrStart
+	fileLocks  map[string]*sync.Mutex // per-file lock for open/close/change
+	cancel     context.CancelFunc
+}
+
+func NewManager(workdir string) *Manager {
+	return &Manager{
+		workdir:     workdir,
+		servers:     ResolveServers(workdir),
+		clients:     make(map[string]*managedClient),
+		openFiles:   make(map[string]*openFile),
+		clientLocks: make(map[string]*sync.Mutex),
+		fileLocks:   make(map[string]*sync.Mutex),
+	}
+}
+
+func (m *Manager) Start() {
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancel = cancel
+	go m.idleLoop(ctx)
+}
+
+func (m *Manager) Stop() {
+	if m.cancel != nil {
+		m.cancel()
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for name, mc := range m.clients {
+		mc.client.Shutdown(context.Background())
+		delete(m.clients, name)
+	}
+}
+
+func (m *Manager) ClientForFile(ctx context.Context, filePath string) (*Client, string, error) {
+	ext := strings.ToLower(filepath.Ext(filePath))
+	if ext == "" {
+		return nil, "", fmt.Errorf("lsp: no file extension for %q", filePath)
+	}
+
+	names := FileTypeToServer(ext, m.servers)
+	if len(names) == 0 {
+		return nil, "", fmt.Errorf("lsp: no server configured for %q files", ext)
+	}
+
+	name := names[0]
+	return m.getOrStart(ctx, name)
+}
+
+func (m *Manager) Status() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if len(m.servers) == 0 {
+		return "No LSP servers configured for this project."
+	}
+
+	var sb strings.Builder
+	sb.WriteString("LSP servers:\n")
+	for name, cfg := range m.servers {
+		mc, running := m.clients[name]
+		status := "available"
+		if running {
+			status = fmt.Sprintf("running (last used %s)", time.Since(mc.lastUsed).Round(time.Second))
+		}
+		sb.WriteString(fmt.Sprintf("  %s: %s [%s] (%s)\n", name, cfg.Command, strings.Join(cfg.FileTypes, ","), status))
+	}
+	return sb.String()
+}
+
+func (m *Manager) ServerStatuses() []LSPServerStatus {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	result := make([]LSPServerStatus, 0, len(m.servers))
+	for name, cfg := range m.servers {
+		_, running := m.clients[name]
+		result = append(result, LSPServerStatus{
+			Name:      name,
+			Command:   cfg.Command,
+			FileTypes: cfg.FileTypes,
+			Running:   running,
+		})
+	}
+	return result
+}
+
+func (m *Manager) clientLock(name string) *sync.Mutex {
+	m.mu.Lock()
+	if lk, ok := m.clientLocks[name]; ok {
+		m.mu.Unlock()
+		return lk
+	}
+	lk := &sync.Mutex{}
+	m.clientLocks[name] = lk
+	m.mu.Unlock()
+	return lk
+}
+
+func (m *Manager) fileLock(uri string) *sync.Mutex {
+	m.mu.Lock()
+	if lk, ok := m.fileLocks[uri]; ok {
+		m.mu.Unlock()
+		return lk
+	}
+	lk := &sync.Mutex{}
+	m.fileLocks[uri] = lk
+	m.mu.Unlock()
+	return lk
+}
+
+func (m *Manager) getOrStart(ctx context.Context, name string) (*Client, string, error) {
+	lk := m.clientLock(name)
+	lk.Lock()
+	defer lk.Unlock()
+
+	m.mu.Lock()
+	if mc, ok := m.clients[name]; ok {
+		mc.lastUsed = time.Now()
+		m.mu.Unlock()
+		return mc.client, name, nil
+	}
+	m.mu.Unlock()
+
+	cfg, ok := m.servers[name]
+	if !ok {
+		return nil, "", fmt.Errorf("lsp: unknown server %q", name)
+	}
+
+	cmd := ResolveCommand(cfg.Command, m.workdir)
+
+	client, err := NewClient(ctx, cmd, cfg.Args, m.workdir)
+	if err != nil {
+		return nil, "", fmt.Errorf("lsp: start %s: %w", name, err)
+	}
+
+	rootURI := fileToURI(m.workdir)
+	if err := client.Initialize(ctx, rootURI, cfg.InitOptions, cfg.Settings); err != nil {
+		client.Shutdown(ctx)
+		return nil, "", fmt.Errorf("lsp: initialize %s: %w", name, err)
+	}
+
+	m.mu.Lock()
+	m.clients[name] = &managedClient{client: client, lastUsed: time.Now()}
+	m.mu.Unlock()
+
+	return client, name, nil
+}
+
+func (m *Manager) idleLoop(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			m.shutdownIdle()
+		}
+	}
+}
+
+func (m *Manager) shutdownIdle() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	for name, mc := range m.clients {
+		if now.Sub(mc.lastUsed) > idleTimeout {
+			mc.client.Shutdown(context.Background())
+			delete(m.clients, name)
+		}
+	}
+}
+
+// EnsureFileOpen opens the file in the LSP server if not already open.
+// Returns the current file content and version.
+func (m *Manager) EnsureFileOpen(ctx context.Context, client *Client, filePath string) (string, int, error) {
+	uri := fileToURI(filePath)
+
+	lk := m.fileLock(uri)
+	lk.Lock()
+	defer lk.Unlock()
+
+	m.mu.Lock()
+	of, alreadyOpen := m.openFiles[uri]
+	m.mu.Unlock()
+
+	if alreadyOpen {
+		return of.content, of.version, nil
+	}
+
+	content, err := m.ReadFileContent(filePath)
+	if err != nil {
+		return "", 0, err
+	}
+
+	ext := strings.ToLower(filepath.Ext(filePath))
+	langID := extToLanguageID(ext)
+
+	if err := client.DidOpen(ctx, TextDocumentItem{
+		URI:        uri,
+		LanguageID: langID,
+		Version:    1,
+		Text:       content,
+	}); err != nil {
+		return "", 0, fmt.Errorf("didOpen failed: %w", err)
+	}
+
+	m.mu.Lock()
+	m.openFiles[uri] = &openFile{version: 1, content: content}
+	m.mu.Unlock()
+
+	return content, 1, nil
+}
+
+// SyncContent re-reads the file and sends didChange if content differs.
+func (m *Manager) SyncContent(ctx context.Context, client *Client, filePath string) error {
+	uri := fileToURI(filePath)
+
+	lk := m.fileLock(uri)
+	lk.Lock()
+	defer lk.Unlock()
+
+	m.mu.Lock()
+	of, ok := m.openFiles[uri]
+	m.mu.Unlock()
+
+	if !ok {
+		return nil
+	}
+
+	content, err := m.ReadFileContent(filePath)
+	if err != nil {
+		return err
+	}
+
+	if content == of.content {
+		return nil
+	}
+
+	of.version++
+	of.content = content
+
+	return client.DidChange(ctx, uri, of.version, content)
+}
+
+// NotifySaved sends didSave for a file if it is currently open.
+func (m *Manager) NotifySaved(ctx context.Context, client *Client, filePath string) error {
+	uri := fileToURI(filePath)
+
+	lk := m.fileLock(uri)
+	lk.Lock()
+	defer lk.Unlock()
+
+	m.mu.Lock()
+	of, ok := m.openFiles[uri]
+	m.mu.Unlock()
+
+	if !ok {
+		return nil
+	}
+
+	return client.DidSave(ctx, uri, of.content)
+}
+
+// CloseFile sends didClose and removes the file from the open set.
+func (m *Manager) CloseFile(ctx context.Context, client *Client, filePath string) error {
+	uri := fileToURI(filePath)
+
+	lk := m.fileLock(uri)
+	lk.Lock()
+	defer lk.Unlock()
+
+	m.mu.Lock()
+	_, ok := m.openFiles[uri]
+	if ok {
+		delete(m.openFiles, uri)
+	}
+	m.mu.Unlock()
+
+	if !ok {
+		return nil
+	}
+
+	return client.DidClose(ctx, uri)
+}
+
+func (m *Manager) ReadFileContent(filePath string) (string, error) {
+	if !filepath.IsAbs(filePath) {
+		filePath = filepath.Join(m.workdir, filePath)
+	}
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return "", fmt.Errorf("lsp: read %s: %w", filePath, err)
+	}
+	return string(data), nil
+}
