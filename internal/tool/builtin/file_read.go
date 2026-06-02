@@ -151,7 +151,8 @@ func langFromExt(ext string) string {
 		".scala": "scala",
 		".json": "json", ".yaml": "yaml", ".yml": "yaml", ".toml": "toml",
 		".html": "html", ".htm": "html", ".css": "css",
-		".sh": "bash", ".bash": "bash",
+		".sh": "bash", ".bash": "bash", ".zsh": "bash",
+		".cjs": "javascript",
 	}
 	return m[strings.ToLower(ext)]
 }

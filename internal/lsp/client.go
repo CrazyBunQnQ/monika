@@ -231,12 +231,16 @@ func (c *Client) ExecuteCodeAction(ctx context.Context, action CodeAction) (*Wor
 		return action.Edit, nil
 	}
 	if action.Command != nil {
-		var result any
+		var raw json.RawMessage
 		if err := c.call(ctx, "workspace/executeCommand", ExecuteCommandParams{
 			Command:   action.Command.Command,
 			Arguments: action.Command.Arguments,
-		}, &result); err != nil {
+		}, &raw); err != nil {
 			return nil, err
+		}
+		var edit WorkspaceEdit
+		if json.Unmarshal(raw, &edit) == nil && (len(edit.Changes) > 0 || len(edit.DocumentChanges) > 0) {
+			return &edit, nil
 		}
 		return nil, nil
 	}
@@ -308,11 +312,15 @@ func (c *Client) Ready() bool {
 func (c *Client) readLoop() {
 	defer func() {
 		c.mu.Lock()
+		pending := make(map[int64]chan *jsonRPCResponse, len(c.pending))
 		for id, ch := range c.pending {
-			ch <- &jsonRPCResponse{ID: id, Error: &jsonRPCError{Code: -32000, Message: "connection closed"}}
+			pending[id] = ch
 			delete(c.pending, id)
 		}
 		c.mu.Unlock()
+		for id, ch := range pending {
+			ch <- &jsonRPCResponse{ID: id, Error: &jsonRPCError{Code: -32000, Message: "connection closed"}}
+		}
 	}()
 
 	for {

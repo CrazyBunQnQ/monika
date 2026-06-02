@@ -253,7 +253,7 @@ func (t *lspTool) Execute(ctx context.Context, args json.RawMessage) (tool.Execu
 		if err != nil {
 			return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 		}
-		if edit == nil {
+		if len(edit.Changes) == 0 && len(edit.DocumentChanges) == 0 {
 			return tool.ExecutionResult{Content: "Rename is not available at this position."}, nil
 		}
 		applied, err := ApplyWorkspaceEdit(*edit)

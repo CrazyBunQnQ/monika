@@ -699,3 +699,78 @@ func TestFileReadRanges(t *testing.T) {
 		t.Fatalf("should not contain middle lines, got: %s", result.Content)
 	}
 }
+
+func TestFileEditFuzzyReplaceAll(t *testing.T) {
+	dir := t.TempDir()
+	f := NewFileEdit(dir)
+	path := filepath.Join(dir, "fuzzy_all.txt")
+	os.WriteFile(path, []byte("aaa\n\n  bbb   ccc\n\nxxx\n\n bbb\tccc \n\nzzz"), 0o644)
+
+	args, _ := json.Marshal(map[string]any{
+		"filePath":    path,
+		"old_string":  "bbb ccc",
+		"new_string":  "REPLACED",
+		"replace_all": true,
+	})
+	result, err := f.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("expected success but got: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "2 occurrence") {
+		t.Fatalf("expected 2 occurrences, got: %s", result.Content)
+	}
+
+	data, _ := os.ReadFile(path)
+	got := string(data)
+	if strings.Count(got, "REPLACED") != 2 {
+		t.Fatalf("expected 2 REPLACED in %q", got)
+	}
+}
+
+func TestFileEditFuzzyAmbiguousFails(t *testing.T) {
+	dir := t.TempDir()
+	f := NewFileEdit(dir)
+	path := filepath.Join(dir, "fuzzy_amb.txt")
+	os.WriteFile(path, []byte("aaa\n\n  bbb   ccc\n\nxxx\n\n bbb\tccc \n\nzzz"), 0o644)
+
+	args, _ := json.Marshal(map[string]any{
+		"filePath":   path,
+		"old_string": "bbb ccc",
+		"new_string": "REPLACED",
+	})
+	result, err := f.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Fatalf("expected ambiguity error but got: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "2 times") {
+		t.Fatalf("expected ambiguity message, got: %s", result.Content)
+	}
+}
+
+func TestHasConflictMarkers(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{"real conflict", "<<<<<<< HEAD\nfoo\n=======\nbar\n>>>>>>> branch", true},
+		{"only start", "<<<<<<< HEAD\nfoo\n", false},
+		{"only end", "bar\n>>>>>>> branch", false},
+		{"markdown equals", "Title\n=======", false},
+		{"markdown equals with arrow in code", "Title\n=======\n```\n>>>>>>> foo\n```", false},
+		{"clean", "no markers here", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hasConflictMarkers(tt.content); got != tt.want {
+				t.Errorf("hasConflictMarkers(%q) = %v, want %v", tt.name, got, tt.want)
+			}
+		})
+	}
+}

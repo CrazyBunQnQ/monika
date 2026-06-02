@@ -126,8 +126,11 @@ func (f *fileEdit) editFile(path, oldString, newString, anchor string, replaceAl
 	if count == 0 {
 		// Fuzzy whitespace: try matching after normalizing runs of whitespace
 		fuzzyOld := normalizeWhitespace(oldString)
-		fuzzyCount := 0
-		fuzzyIdx := -1
+		type match struct {
+			idx int
+			seg string
+		}
+		var matches []match
 		scanner := &wsFuzzyScanner{content: content}
 		for {
 			idx, seg := scanner.next()
@@ -135,32 +138,28 @@ func (f *fileEdit) editFile(path, oldString, newString, anchor string, replaceAl
 				break
 			}
 			if normalizeWhitespace(seg) == fuzzyOld {
-				fuzzyCount++
-				if fuzzyIdx < 0 {
-					fuzzyIdx = idx
-				}
-				if fuzzyCount == 1 {
-					// Replace the matched segment
-					content = content[:idx] + newString + content[idx+len(seg):]
-					// After replacement, restart scan (positions shifted)
-					scanner = &wsFuzzyScanner{content: content}
-					if replaceAll {
-						fuzzyCount = 0
-						fuzzyIdx = -1
-						continue
-					}
-					break
-				}
+				matches = append(matches, match{idx, seg})
 			}
 		}
-		if fuzzyCount == 0 {
+		if len(matches) == 0 {
 			snippet := oldString
 			if len(snippet) > 80 {
 				snippet = snippet[:80] + "..."
 			}
 			return tool.ExecutionResult{Content: fmt.Sprintf("old_string not found in file: %q", snippet), IsError: true}, nil
 		}
-		count = fuzzyCount
+		if len(matches) > 1 && !replaceAll {
+			return tool.ExecutionResult{
+				Content: fmt.Sprintf("old_string found %d times (fuzzy whitespace). Use replace_all to replace all occurrences, or provide a larger string with more surrounding context to make it unique.", len(matches)),
+				IsError: true,
+			}, nil
+		}
+		// Replace in reverse order to preserve earlier positions
+		for i := len(matches) - 1; i >= 0; i-- {
+			m := matches[i]
+			content = content[:m.idx] + newString + content[m.idx+len(m.seg):]
+		}
+		count = len(matches)
 		fuzzyMatch = true
 	}
 
@@ -218,8 +217,7 @@ func normalizeWhitespace(s string) string {
 	return result
 }
 
-// wsFuzzyScanner slides a window over content to find segments matching a fuzzy pattern.
-// It uses the length of the original old_string to determine window size.
+// wsFuzzyScanner splits content into paragraph-delimited segments for fuzzy matching.
 type wsFuzzyScanner struct {
 	content string
 	pos     int
@@ -268,12 +266,6 @@ func verifyAnchor(content, oldString, anchor string) error {
 		return fmt.Errorf("anchor line %d exceeds file length %d", lineNum, len(lines))
 	}
 
-	// Find the position of old_string to determine which line it starts at
-	oldString = strings.ReplaceAll(oldString, "\r\n", "\n")
-	idx := strings.Index(content, oldString)
-	if idx < 0 {
-		return nil // Can't verify without finding old_string; let main logic handle
-	}
 	anchorLine := lineNum - 1 // 0-indexed
 	actualLine := strings.TrimSpace(lines[anchorLine])
 	h := fnv.New32a()
@@ -292,5 +284,5 @@ func verifyAnchor(content, oldString, anchor string) error {
 
 // hasConflictMarkers returns true if content contains git merge conflict markers.
 func hasConflictMarkers(content string) bool {
-	return (strings.Contains(content, "<<<<<<<") || strings.Contains(content, "=======")) && strings.Contains(content, ">>>>>>>")
+	return strings.Contains(content, "<<<<<<<") && strings.Contains(content, ">>>>>>>")
 }
