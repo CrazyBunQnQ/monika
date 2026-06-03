@@ -113,7 +113,9 @@ func compactionSplit(conv *Conversation, contextLimit int64) int {
 				suffixTokens += msgTokens
 				splitAt = j
 			}
-			if splitAt > turn.localStart {
+			// Only split if the suffix includes the user message.
+			// A tail without a user message triggers "Continue." injection.
+			if splitAt == turn.localStart {
 				return start + splitAt
 			}
 			return start
@@ -139,20 +141,9 @@ func compactionSplit(conv *Conversation, contextLimit int64) int {
 			totalTokens += turnTokens
 			splitLocalIdx = turn.localStart
 		} else {
-			// This turn doesn't fit — try splitting: keep assistant+tool responses
-			// from later in the turn if the beginning doesn't fit
-			if turn.localEnd-turn.localStart > 1 {
-				for s := turn.localStart; s < turn.localEnd; s++ {
-					var suffixTokens int64
-					for _, m := range effective[s:turn.localEnd] {
-						suffixTokens += int64(tokenizer.Count(m.Content) + tokenizer.Count(m.ReasoningContent) + tokenizer.Count(m.Role) + 4)
-					}
-					if suffixTokens <= tailBudget-totalTokens {
-						splitLocalIdx = s
-						break
-					}
-				}
-			}
+			// This turn doesn't fit — stop. Do not split within a turn
+			// because any non-user split point orphans tool messages and
+			// may produce a tail without a user message.
 			break
 		}
 	}

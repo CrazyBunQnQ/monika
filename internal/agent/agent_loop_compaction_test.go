@@ -443,3 +443,44 @@ func TestCompactionSplit_MultiTurnPartialBudget(t *testing.T) {
 			conv.Messages[tailStart].Role, tailStart)
 	}
 }
+
+func TestCompactionSplit_NonLastTurnSplitsToNonUser(t *testing.T) {
+	// Regression test for Path B vulnerability: when splitting within a
+	// non-last turn, the split point can land on a non-user message
+	// (assistant/tool). The safety clamp only checks against the last
+	// user turn, so it does not fire when splitting within an earlier turn.
+	// This results in a tail that starts with a non-user message, causing
+	// sanitizeMessageSequence to trim it (data loss) and potentially
+	// create orphan tool pairs.
+	//
+	// 3 turns, tailTurns=2 → goes directly to Path B
+	// Turn 3 (last): fits in budget
+	// Turn 2 (middle): too large, but its suffix (just the tool msg) fits
+	// Expected: tail must start at the user message of turn 2, not after it.
+	long := strings.Repeat("x", 20000) // ~5000 tokens per message (chars/4)
+	conv := &Conversation{
+		Messages: []engine.ChatMessage{
+			{Role: "user", Content: "first question"},
+			{Role: "assistant", Content: "first answer"},
+			{Role: "user", Content: "second question"},
+			{Role: "assistant", Content: long, ToolCalls: []engine.ToolCall{{ID: "t1", Function: engine.ToolCallFunc{Name: "bash"}}}},
+			{Role: "tool", Content: long, ToolCallID: "t1"},
+			{Role: "user", Content: "third question"},
+			{Role: "assistant", Content: "third answer"},
+		},
+	}
+	tailStart := compactionSplit(conv, 131072)
+	// tail must start at or before the last user message of the
+	// turns that form the tail. In this case, the second-to-last
+	// The middle turn (second question + long assistant + long tool) is too
+	// large to fit in the tail budget. Since we can't split within a turn
+	// without orphaning tool messages, the entire middle turn goes to head.
+	// Tail should start at the last user turn (index 5, "third question").
+	if tailStart != 5 {
+		t.Errorf("tail must start at last user turn (index 5), got tailStart=%d", tailStart)
+	}
+	if conv.Messages[tailStart].Role != "user" {
+		t.Errorf("tail must start at user message, got role=%s at index %d",
+			conv.Messages[tailStart].Role, tailStart)
+	}
+}
