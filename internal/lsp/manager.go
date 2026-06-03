@@ -57,6 +57,8 @@ func (m *Manager) Start() {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	go m.idleLoop(ctx)
+	// Warm up LSP servers in the background so first use is fast.
+	go m.Warmup(context.Background())
 }
 
 func (m *Manager) Stop() {
@@ -466,7 +468,7 @@ func (m *Manager) Warmup(ctx context.Context) {
 // SyncContentFromMemory sends didChange (or didOpen) with the provided content
 // without reading from disk. Use this when the caller already holds the file
 // content (e.g. after a file edit).
-func (m *Manager) SyncContentFromMemory(ctx context.Context, client *Client, filePath string, content string) error {
+func (m *Manager) SyncContentFromMemory(ctx context.Context, client *Client, filePath string, content string, serverName string) error {
 	uri := fileToURI(filePath)
 
 	lk := m.fileLock(uri)
@@ -478,10 +480,14 @@ func (m *Manager) SyncContentFromMemory(ctx context.Context, client *Client, fil
 	m.mu.Unlock()
 
 	if alreadyOpen {
-		client.ClearDiagnostics(uri)
-		of.version++
-		of.content = content
-		return client.DidChange(ctx, uri, of.version, content)
+		// Only skip if the same server; otherwise treat as new open
+		if of.serverName == serverName {
+			client.ClearDiagnostics(uri)
+			of.version++
+			of.content = content
+			return client.DidChange(ctx, uri, of.version, content)
+		}
+		_ = client.DidClose(ctx, uri)
 	}
 
 	ext := strings.ToLower(filepath.Ext(filePath))
@@ -498,7 +504,7 @@ func (m *Manager) SyncContentFromMemory(ctx context.Context, client *Client, fil
 	}
 
 	m.mu.Lock()
-	m.openFiles[uri] = &openFile{version: 1, content: content, serverName: ""}
+	m.openFiles[uri] = &openFile{version: 1, content: content, serverName: serverName}
 	m.mu.Unlock()
 
 	return nil
@@ -557,7 +563,7 @@ func (m *Manager) WriteThrough(ctx context.Context, client *Client, filePath str
 	beforeDiagSeq := client.DiagSeq(uri)
 
 	// Step 1: Sync content (in-memory, no disk read)
-	if err := m.SyncContentFromMemory(ctx, client, filePath, content); err != nil {
+	if err := m.SyncContentFromMemory(ctx, client, filePath, content, serverName); err != nil {
 		lspLog("WriteThrough: sync failed: %v", err)
 	}
 
@@ -569,7 +575,7 @@ func (m *Manager) WriteThrough(ctx context.Context, client *Client, filePath str
 		if err == nil && formatted != content {
 			// Content changed — re-sync with formatted content
 			finalContent = formatted
-			_ = m.SyncContentFromMemory(ctx, client, filePath, formatted)
+			_ = m.SyncContentFromMemory(ctx, client, filePath, formatted, serverName)
 		}
 	}
 

@@ -62,7 +62,7 @@ Actions:
 - symbols: Get document symbols (outline) for a file. **Call this when first exploring a complex file to quickly understand its structure (types, functions, methods, fields).**
 - code_actions: List available code actions (quick fixes, refactoring) for a position or range. **Call this when diagnostics show errors to find auto-fixes like adding missing imports, creating stub functions, or correcting signatures.**
 - execute_code_action: Execute a specific code action by title. Use after listing available code actions with code_actions.
-- rename: Rename a symbol at a position across the workspace. **Prefer this over manual find-and-replace across files 鈥?it correctly handles all references, including cross-file, and avoids false matches.**
+   - rename: Rename a symbol at a position across the workspace. **Prefer this over manual find-and-replace across files — it correctly handles all references, including cross-file, and avoids false matches.**
 - status: Show configured and running LSP servers.
 
 The file path must be absolute or relative to the project directory.
@@ -444,7 +444,7 @@ func formatCodeActions(actions []CodeAction) string {
 			}
 			if a.Edit != nil {
 				flat := FlattenWorkspaceTextEdits(*a.Edit)
-				sb.WriteString(fmt.Sprintf(" 鈥?%d file(s) affected", len(flat)))
+				sb.WriteString(fmt.Sprintf(" — %d file(s) affected", len(flat)))
 			}
 			sb.WriteByte('\n')
 		}
