@@ -123,7 +123,7 @@ func (t *lspTool) Execute(ctx context.Context, args json.RawMessage) (tool.Execu
 
 	lspLog("Execute: action=%s file=%s", params.Action, filePath)
 
-	client, _, err := t.manager.ClientForFile(ctx, filePath)
+	client, serverName, err := t.manager.ClientForFile(ctx, filePath)
 	if err != nil {
 		lspLog("ClientForFile error: %v", err)
 		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
@@ -132,7 +132,7 @@ func (t *lspTool) Execute(ctx context.Context, args json.RawMessage) (tool.Execu
 	uri := fileToURI(filePath)
 	lspLog("fileToURI: filePath=%s uri=%s", filePath, uri)
 
-	_, _, err = t.manager.EnsureFileOpen(ctx, client, filePath)
+	_, _, err = t.manager.EnsureFileOpen(ctx, client, filePath, serverName)
 	if err != nil {
 		lspLog("EnsureFileOpen error: %v", err)
 		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil

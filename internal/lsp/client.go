@@ -349,7 +349,7 @@ func (c *Client) Ready() bool {
 // readLoop runs in a background goroutine, reading JSON-RPC messages
 // and dispatching responses to pending callers or caching diagnostics.
 func (c *Client) readLoop() {
-	defer func() {
+defer func() {
 		c.mu.Lock()
 		pending := make(map[int64]chan *jsonRPCResponse, len(c.pending))
 		for id, ch := range c.pending {
@@ -360,6 +360,7 @@ func (c *Client) readLoop() {
 		for id, ch := range pending {
 			ch <- &jsonRPCResponse{ID: id, Error: &jsonRPCError{Code: -32000, Message: "connection closed"}}
 		}
+		c.shutdownOnce.Do(func() { close(c.done) })
 	}()
 
 	for {

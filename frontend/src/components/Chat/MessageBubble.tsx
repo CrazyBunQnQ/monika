@@ -637,7 +637,7 @@ const MessageBubble = React.memo(function MessageBubble({ message, isGenerating,
               )}
             </div>
           )}
-          <div style={{ borderLeft: isSelected ? '3px solid var(--accent)' : '3px solid transparent', paddingLeft: '12px', borderRadius: '0 4px 4px 0', transition: 'border-color 0.15s' }}>
+          <div className="flex flex-col gap-1.5" style={{ borderLeft: isSelected ? '3px solid var(--accent)' : '3px solid transparent', paddingLeft: '12px', borderRadius: '0 4px 4px 0', transition: 'border-color 0.15s' }}>
             <RoleLabel role="user" />
             <MsgBlock accent="var(--accent)">
               <div className="text-[14px] text-[var(--text-primary)] whitespace-pre-wrap leading-[1.7]" style={{ wordBreak: 'break-word' }}>
@@ -688,7 +688,7 @@ const MessageBubble = React.memo(function MessageBubble({ message, isGenerating,
               )}
             </div>
           )}
-          <div style={{ borderLeft: isSelected ? '3px solid var(--accent)' : '3px solid transparent', paddingLeft: '12px', borderRadius: '0 4px 4px 0', transition: 'border-color 0.15s' }}>
+          <div className="flex flex-col gap-1.5" style={{ borderLeft: isSelected ? '3px solid var(--accent)' : '3px solid transparent', paddingLeft: '12px', borderRadius: '0 4px 4px 0', transition: 'border-color 0.15s' }}>
             {!hideExtras && <RoleLabel role="assistant" isGenerating={isGenerating} model={model} duration={duration} />}
             {!hideExtras && thinking && <ThinkingBlock content={thinking} isGenerating={isGenerating} />}
 

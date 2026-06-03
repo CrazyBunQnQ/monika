@@ -21,8 +21,9 @@ type LSPServerStatus struct {
 }
 
 type openFile struct {
-	version int
-	content string
+	version    int
+	content    string
+	serverName string
 }
 
 type managedClient struct {
@@ -170,8 +171,9 @@ func (m *Manager) getOrStart(ctx context.Context, name string) (*Client, string,
 			m.mu.Unlock()
 			return mc.client, name, nil
 		}
-		// Client died; clean up and reconnect
+// Client died; clean up and reconnect
 		delete(m.clients, name)
+		m.clearOpenFiles(name)
 		m.mu.Unlock()
 		return m.startClient(ctx, name)
 	}
@@ -235,13 +237,23 @@ func (m *Manager) shutdownIdle() {
 		if now.Sub(mc.lastUsed) > idleTimeout {
 			mc.client.Shutdown(context.Background())
 			delete(m.clients, name)
+			m.clearOpenFiles(name)
+		}
+	}
+}
+
+
+func (m *Manager) clearOpenFiles(serverName string) {
+	for uri, of := range m.openFiles {
+		if of.serverName == serverName {
+			delete(m.openFiles, uri)
 		}
 	}
 }
 
 // EnsureFileOpen opens the file in the LSP server if not already open.
 // Returns the current file content and version.
-func (m *Manager) EnsureFileOpen(ctx context.Context, client *Client, filePath string) (string, int, error) {
+func (m *Manager) EnsureFileOpen(ctx context.Context, client *Client, filePath string, serverName string) (string, int, error) {
 	uri := fileToURI(filePath)
 
 	lk := m.fileLock(uri)
@@ -252,8 +264,13 @@ func (m *Manager) EnsureFileOpen(ctx context.Context, client *Client, filePath s
 	of, alreadyOpen := m.openFiles[uri]
 	m.mu.Unlock()
 
-	if alreadyOpen {
+	if alreadyOpen && of.serverName == serverName {
 		return of.content, of.version, nil
+	}
+
+	if alreadyOpen {
+		// Server changed (reconnect); stale entry, re-open
+		_ = client.DidClose(ctx, uri)
 	}
 
 	content, err := m.ReadFileContent(filePath)
@@ -274,7 +291,7 @@ func (m *Manager) EnsureFileOpen(ctx context.Context, client *Client, filePath s
 	}
 
 	m.mu.Lock()
-	m.openFiles[uri] = &openFile{version: 1, content: content}
+	m.openFiles[uri] = &openFile{version: 1, content: content, serverName: serverName}
 	m.mu.Unlock()
 
 	return content, 1, nil

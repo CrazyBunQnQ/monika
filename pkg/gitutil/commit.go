@@ -5,8 +5,10 @@ import (
 	"time"
 
 	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
+
 
 // Add stages one or more file paths. Use "." to stage all changes.
 func (r *Repository) Add(paths ...string) error {
@@ -34,15 +36,32 @@ type CommitAuthor struct {
 }
 
 // DefaultAuthor returns the configured user from git config.
-// Returns an empty CommitAuthor if the config has no user set.
+// Searches local, global, and system config scopes in order.
+// Returns an empty CommitAuthor if no config has user set.
 func (r *Repository) DefaultAuthor() CommitAuthor {
 	var a CommitAuthor
 	if cfg, err := r.inner.Config(); err == nil {
-		if cfg.User.Name != "" {
-			a.Name = cfg.User.Name
+		a.Name = cfg.User.Name
+		a.Email = cfg.User.Email
+	}
+	if a.Name == "" || a.Email == "" {
+		if cfg, err := config.LoadConfig(config.GlobalScope); err == nil {
+			if a.Name == "" {
+				a.Name = cfg.User.Name
+			}
+			if a.Email == "" {
+				a.Email = cfg.User.Email
+			}
 		}
-		if cfg.User.Email != "" {
-			a.Email = cfg.User.Email
+	}
+	if a.Name == "" || a.Email == "" {
+		if cfg, err := config.LoadConfig(config.SystemScope); err == nil {
+			if a.Name == "" {
+				a.Name = cfg.User.Name
+			}
+			if a.Email == "" {
+				a.Email = cfg.User.Email
+			}
 		}
 	}
 	return a

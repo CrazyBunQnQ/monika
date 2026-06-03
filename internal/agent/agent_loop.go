@@ -263,7 +263,9 @@ type AgentLoop struct {
 	dispatchFn        func(ctx context.Context, task SubTask) <-chan Event
 	mcpRegistry       *engine.MCPRegistry
 	askUserFn         tool.AskUserFunc
+	taskStore         tool.TaskStore
 }
+
 
 // SetDispatchFn sets the child dispatch function for this loop.
 // Used for compaction and other system-initiated subtasks.
@@ -350,6 +352,11 @@ func WithMCPRegistry(reg *engine.MCPRegistry) LoopOption {
 func WithAskUserFunc(fn tool.AskUserFunc) LoopOption {
 	return func(a *AgentLoop) { a.askUserFn = fn }
 }
+
+func WithTaskStore(ts tool.TaskStore) LoopOption {
+	return func(a *AgentLoop) { a.taskStore = ts }
+}
+
 
 func NewLoop(provider engine.ProviderEngine, tools *tool.ToolRegistry, opts ...LoopOption) *AgentLoop {
 	a := &AgentLoop{
@@ -1069,6 +1076,18 @@ func (a *AgentLoop) buildMessages(conv *Conversation) []engine.ChatMessage {
 		if summaryContent != "" {
 			parts = append(parts, "\n\n<context-summary>\n"+summaryContent+"\n</context-summary>")
 		}
+		if summaryContent != "" && a.taskStore != nil && a.sessionID != "" {
+			if tasks := a.taskStore.List(a.sessionID); len(tasks) > 0 {
+				var b strings.Builder
+				b.WriteString("\n\n<task-list>\nCurrent task list (do NOT call task_create to recreate these — use task_update to change status):\n")
+				for _, t := range tasks {
+					fmt.Fprintf(&b, "- [%s] %s: %s\n", t.Status, t.ID, t.Subject)
+				}
+				b.WriteString("</task-list>")
+				parts = append(parts, b.String())
+			}
+		}
+
 		messages = append(messages, engine.ChatMessage{
 			Role:    "system",
 			Content: strings.Join(parts, ""),
