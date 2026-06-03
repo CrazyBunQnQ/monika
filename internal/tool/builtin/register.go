@@ -57,12 +57,11 @@ func WireLSPHooks(r *tool.ToolRegistry) {
 		}
 
 		// Wait for LSP server to be ready before querying diagnostics.
-		// On first edit after startup, gopls may still be initializing.
 		if checker, ok := lspTool.(interface{ ReadyForFile(context.Context, string) bool }); ok {
 			deadline := time.Now().Add(10 * time.Second)
 			for !checker.ReadyForFile(ctx, filePath) {
 				if time.Now().After(deadline) {
-					return "" // LSP server not ready after timeout
+					return ""
 				}
 				select {
 				case <-ctx.Done():
@@ -70,6 +69,11 @@ func WireLSPHooks(r *tool.ToolRegistry) {
 				case <-time.After(300 * time.Millisecond):
 				}
 			}
+		}
+
+		// Optional: format file via LSP before diagnostics
+		if formatter, ok := lspTool.(interface{ FormatContent(context.Context, string) (string, error) }); ok {
+			formatter.FormatContent(ctx, filePath)
 		}
 
 		// Run diagnostics. The action internally waits for the server
@@ -134,8 +138,6 @@ func WireLSPHooks(r *tool.ToolRegistry) {
 		}
 	}
 }
-
-// LSPStatusPrompt returns a system prompt fragment describing available LSP servers.
 func LSPStatusPrompt(r *tool.ToolRegistry) string {
 	t, ok := r.Get("lsp")
 	if !ok {

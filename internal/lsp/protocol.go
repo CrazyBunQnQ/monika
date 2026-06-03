@@ -578,6 +578,18 @@ type WorkspaceSymbolParams struct {
 	Query string `json:"query"`
 }
 
+// Formatting
+
+type FormattingOptions struct {
+	TabSize      int    `json:"tabSize"`
+	InsertSpaces bool   `json:"insertSpaces"`
+}
+
+type DocumentFormattingParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+	Options      FormattingOptions      `json:"options"`
+}
+
 // File rename
 
 type FileRename struct {

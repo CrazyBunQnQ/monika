@@ -503,3 +503,88 @@ func (m *Manager) SyncContentFromMemory(ctx context.Context, client *Client, fil
 
 	return nil
 }
+
+// WriteThroughOptions controls the WriteThrough pipeline behavior.
+type WriteThroughOptions struct {
+	FormatOnWrite    bool
+	DiagnosticsOnEdit bool
+}
+
+// FormatContent sends a textDocument/formatting request, applies the edits,
+// and writes the formatted content back to disk. Returns the formatted content.
+func (m *Manager) FormatContent(ctx context.Context, client *Client, filePath string) (string, error) {
+	uri := fileToURI(filePath)
+
+	edits, err := client.Formatting(ctx, uri, FormattingOptions{TabSize: 4, InsertSpaces: true})
+	if err != nil || len(edits) == 0 {
+		// Read original content if nothing changed
+		content, err := m.ReadFileContent(filePath)
+		if err != nil {
+			return "", err
+		}
+		return content, nil
+	}
+
+	content, err := m.ReadFileContent(filePath)
+	if err != nil {
+		return "", err
+	}
+
+	newContent, err := ApplyTextEditsToString(content, edits)
+	if err != nil {
+		return content, nil // fall back to original
+	}
+
+	if newContent == content {
+		return content, nil
+	}
+
+	if err := os.WriteFile(filePath, []byte(newContent), 0o644); err != nil {
+		return content, nil // fall back to original if write fails
+	}
+
+	return newContent, nil
+}
+
+// WriteThrough runs the full LSP writethrough pipeline:
+// 1. Sync content to LSP (didOpen/didChange)
+// 2. Optionally format via LSP and write back to disk
+// 3. Notify server of save (didSave)
+// 4. Optionally wait for fresh diagnostics
+// Returns the final content and any diagnostics text.
+func (m *Manager) WriteThrough(ctx context.Context, client *Client, filePath string, serverName string, content string, opts WriteThroughOptions) (string, string) {
+	uri := fileToURI(filePath)
+	beforeDiagSeq := client.DiagSeq(uri)
+
+	// Step 1: Sync content (in-memory, no disk read)
+	if err := m.SyncContentFromMemory(ctx, client, filePath, content); err != nil {
+		lspLog("WriteThrough: sync failed: %v", err)
+	}
+
+	finalContent := content
+
+	// Step 2: Optional format
+	if opts.FormatOnWrite {
+		formatted, err := m.FormatContent(ctx, client, filePath)
+		if err == nil && formatted != content {
+			// Content changed — re-sync with formatted content
+			finalContent = formatted
+			_ = m.SyncContentFromMemory(ctx, client, filePath, formatted)
+		}
+	}
+
+	// Step 3: Write to disk
+	if err := os.WriteFile(filePath, []byte(finalContent), 0o644); err != nil {
+		lspLog("WriteThrough: write failed: %v", err)
+	}
+
+	// Step 4: Notify saved
+	_ = m.NotifySaved(ctx, client, filePath)
+
+	// Step 5: Wait for diagnostics
+	if opts.DiagnosticsOnEdit {
+		client.WaitForDiagUpdate(ctx, uri, beforeDiagSeq, 3*time.Second)
+	}
+
+	return finalContent, ""
+}

@@ -248,6 +248,22 @@ func (c *Client) DidSave(ctx context.Context, uri string, text string) error {
 	return c.notify(ctx, "textDocument/didSave", params)
 }
 
+// Formatting sends a textDocument/formatting request and returns the text edits.
+func (c *Client) Formatting(ctx context.Context, uri string, opts FormattingOptions) ([]TextEdit, error) {
+	if !c.Ready() {
+		return nil, nil
+	}
+	var result []TextEdit
+	if err := c.call(ctx, "textDocument/formatting", DocumentFormattingParams{
+		TextDocument: TextDocumentIdentifier{URI: uri},
+		Options:      opts,
+	}, &result); err != nil {
+		// Many servers don't support formatting — treat as non-fatal
+		return nil, nil
+	}
+	return result, nil
+}
+
 // WillRenameFiles sends a workspace/willRenameFiles request to the server
 // and returns the workspace edit response (which may contain refactoring changes).
 func (c *Client) WillRenameFiles(ctx context.Context, files []FileRename) (*WorkspaceEdit, error) {

@@ -1,4 +1,4 @@
-package lsp
+﻿package lsp
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 	"monika/internal/tool"
 )
 
-type lspTool struct {
+type LSPTool struct {
 	manager *Manager
 }
 
@@ -20,18 +20,36 @@ func NewLSPTool(projectDir string) (tool.Tool, error) {
 	m := NewManager(projectDir)
 	m.Start()
 
-	return &lspTool{manager: m}, nil
+	return &LSPTool{manager: m}, nil
 }
 
-func (t *lspTool) Manager() *Manager { return t.manager }
+func (t *LSPTool) Manager() *Manager { return t.manager }
 
-func (t *lspTool) ReadyForFile(ctx context.Context, filePath string) bool {
+func (t *LSPTool) ReadyForFile(ctx context.Context, filePath string) bool {
 	return t.manager.ReadyForFile(ctx, filePath)
 }
 
-func (t *lspTool) Name() string { return "lsp" }
+// WriteThrough runs the full LSP writethrough pipeline: sync + format + save + diagnostics.
+func (t *LSPTool) WriteThrough(ctx context.Context, filePath string, content string, opts WriteThroughOptions) (string, string) {
+	client, serverName, err := t.manager.ClientForFile(ctx, filePath)
+	if err != nil {
+		return content, ""
+	}
+	return t.manager.WriteThrough(ctx, client, filePath, serverName, content, opts)
+}
 
-func (t *lspTool) Description() string {
+// FormatContent formats a file via LSP and writes the formatted result to disk.
+func (t *LSPTool) FormatContent(ctx context.Context, filePath string) (string, error) {
+	client, _, err := t.manager.ClientForFile(ctx, filePath)
+	if err != nil {
+		return "", err
+	}
+	return t.manager.FormatContent(ctx, client, filePath)
+}
+
+func (t *LSPTool) Name() string { return "lsp" }
+
+func (t *LSPTool) Description() string {
 	return `Language Server Protocol client. Provides code intelligence via LSP servers.
 
 Actions:
@@ -44,7 +62,7 @@ Actions:
 - symbols: Get document symbols (outline) for a file. **Call this when first exploring a complex file to quickly understand its structure (types, functions, methods, fields).**
 - code_actions: List available code actions (quick fixes, refactoring) for a position or range. **Call this when diagnostics show errors to find auto-fixes like adding missing imports, creating stub functions, or correcting signatures.**
 - execute_code_action: Execute a specific code action by title. Use after listing available code actions with code_actions.
-- rename: Rename a symbol at a position across the workspace. **Prefer this over manual find-and-replace across files — it correctly handles all references, including cross-file, and avoids false matches.**
+- rename: Rename a symbol at a position across the workspace. **Prefer this over manual find-and-replace across files 鈥?it correctly handles all references, including cross-file, and avoids false matches.**
 - status: Show configured and running LSP servers.
 
 The file path must be absolute or relative to the project directory.
@@ -52,7 +70,7 @@ Line and character are 0-based (same as LSP protocol).`
 }
 
 
-func (t *lspTool) Parameters() map[string]any {
+func (t *LSPTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -102,7 +120,7 @@ func (t *lspTool) Parameters() map[string]any {
 	}
 }
 
-func (t *lspTool) Execute(ctx context.Context, args json.RawMessage) (tool.ExecutionResult, error) {
+func (t *LSPTool) Execute(ctx context.Context, args json.RawMessage) (tool.ExecutionResult, error) {
 	var params struct {
 		Action      string `json:"action"`
 		File        string `json:"file"`
@@ -342,7 +360,7 @@ func (t *lspTool) Execute(ctx context.Context, args json.RawMessage) (tool.Execu
 }
 
 // handleRenameFile performs workspace file rename with LSP coordination.
-func (t *lspTool) handleRenameFile(ctx context.Context, srcPath, dstPath string) (tool.ExecutionResult, error) {
+func (t *LSPTool) handleRenameFile(ctx context.Context, srcPath, dstPath string) (tool.ExecutionResult, error) {
 	files := []FileRename{{
 		OldURI: fileToURI(srcPath),
 		NewURI: fileToURI(dstPath),
@@ -392,7 +410,7 @@ func (t *lspTool) handleRenameFile(ctx context.Context, srcPath, dstPath string)
 	}
 	t.manager.mu.Unlock()
 
-	return tool.ExecutionResult{Content: fmt.Sprintf("Renamed %s → %s", srcPath, dstPath)}, nil
+	return tool.ExecutionResult{Content: fmt.Sprintf("Renamed %s 鈫?%s", srcPath, dstPath)}, nil
 }
 
 func formatCodeActions(actions []CodeAction) string {
@@ -426,7 +444,7 @@ func formatCodeActions(actions []CodeAction) string {
 			}
 			if a.Edit != nil {
 				flat := FlattenWorkspaceTextEdits(*a.Edit)
-				sb.WriteString(fmt.Sprintf(" — %d file(s) affected", len(flat)))
+				sb.WriteString(fmt.Sprintf(" 鈥?%d file(s) affected", len(flat)))
 			}
 			sb.WriteByte('\n')
 		}
@@ -461,3 +479,4 @@ func extToLanguageID(ext string) string {
 	}
 	return strings.TrimPrefix(ext, ".")
 }
+
