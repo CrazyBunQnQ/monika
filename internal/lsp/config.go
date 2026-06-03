@@ -230,6 +230,56 @@ func FormatLocations(locs []Location) string {
 	return sb.String()
 }
 
+// FormatLocationsWithContent formats locations with surrounding code context.
+// When there are more than maxInline results, context is omitted to avoid
+// excessive output size.
+func FormatLocationsWithContent(locs []Location, contextLines int) string {
+	if len(locs) == 0 {
+		return "No results found."
+	}
+
+	const maxInline = 20
+	if len(locs) > maxInline {
+		return FormatLocations(locs)
+	}
+
+	var sb strings.Builder
+	for _, loc := range locs {
+		path := uriToPath(loc.URI)
+		r := loc.Range
+		sb.WriteString(fmt.Sprintf("%s:%d:%d\n", path, r.Start.Line+1, r.Start.Character+1))
+
+		lines := readLinesAt(path, r.Start.Line, contextLines)
+		for _, line := range lines {
+			sb.WriteString(fmt.Sprintf("  %s\n", line))
+		}
+		sb.WriteByte('\n')
+	}
+	return sb.String()
+}
+
+// readLinesAt reads contextLines lines before and after targetLine (0-based).
+func readLinesAt(filePath string, targetLine int, contextLines int) []string {
+	if !filepath.IsAbs(filePath) {
+		// best effort — return empty if we can't resolve
+		return nil
+	}
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil
+	}
+	allLines := strings.Split(string(data), "\n")
+	start := targetLine - contextLines
+	if start < 0 {
+		start = 0
+	}
+	end := targetLine + contextLines + 1
+	if end > len(allLines) {
+		end = len(allLines)
+	}
+	return allLines[start:end]
+}
+
 // FormatSymbols formats document symbols into a tree.
 func FormatSymbols(syms []DocumentSymbol, indent string) string {
 	if len(syms) == 0 {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -57,7 +58,7 @@ func (t *lspTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"action": map[string]any{
 				"type":        "string",
-				"enum":        []string{"diagnostics", "definition", "type_definition", "implementation", "references", "hover", "symbols", "code_actions", "execute_code_action", "rename", "status"},
+				"enum":        []string{"diagnostics", "definition", "type_definition", "implementation", "references", "hover", "symbols", "code_actions", "execute_code_action", "rename", "rename_file", "status"},
 				"description": "The LSP action to perform",
 			},
 			"file": map[string]any{
@@ -88,6 +89,14 @@ func (t *lspTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Title of the code action to execute (required for execute_code_action)",
 			},
+			"source_path": map[string]any{
+				"type":        "string",
+				"description": "Absolute path of the source file (required for rename_file)",
+			},
+			"dest_path": map[string]any{
+				"type":        "string",
+				"description": "Absolute path of the destination file (required for rename_file)",
+			},
 		},
 		"required": []string{"action"},
 	}
@@ -103,6 +112,8 @@ func (t *lspTool) Execute(ctx context.Context, args json.RawMessage) (tool.Execu
 		EndCharacter int   `json:"end_character"`
 		NewName     string `json:"new_name"`
 		ActionTitle string `json:"action_title"`
+		SourcePath  string `json:"source_path"`
+		DestPath    string `json:"dest_path"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
@@ -110,6 +121,21 @@ func (t *lspTool) Execute(ctx context.Context, args json.RawMessage) (tool.Execu
 
 	if params.Action == "status" {
 		return tool.ExecutionResult{Content: t.manager.Status()}, nil
+	}
+
+	if params.Action == "rename_file" {
+		if params.SourcePath == "" || params.DestPath == "" {
+			return tool.ExecutionResult{Content: "source_path and dest_path are required for rename_file", IsError: true}, nil
+		}
+		srcPath := params.SourcePath
+		if !filepath.IsAbs(srcPath) {
+			srcPath = filepath.Join(t.manager.workdir, srcPath)
+		}
+		dstPath := params.DestPath
+		if !filepath.IsAbs(dstPath) {
+			dstPath = filepath.Join(t.manager.workdir, dstPath)
+		}
+		return t.handleRenameFile(ctx, srcPath, dstPath)
 	}
 
 	if params.File == "" {
@@ -162,32 +188,44 @@ func (t *lspTool) Execute(ctx context.Context, args json.RawMessage) (tool.Execu
 		return tool.ExecutionResult{Content: FormatDiagnostics(uri, diags)}, nil
 
 	case "definition":
+		client.WaitForProjectLoaded(ctx, 15*time.Second)
 		locs, err := client.Definition(ctx, uri, pos)
 		if err != nil {
 			return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 		}
-		return tool.ExecutionResult{Content: FormatLocations(locs)}, nil
+		return tool.ExecutionResult{Content: FormatLocationsWithContent(locs, 1)}, nil
 
 	case "type_definition":
+		client.WaitForProjectLoaded(ctx, 15*time.Second)
 		locs, err := client.TypeDefinition(ctx, uri, pos)
 		if err != nil {
 			return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 		}
-		return tool.ExecutionResult{Content: FormatLocations(locs)}, nil
+		return tool.ExecutionResult{Content: FormatLocationsWithContent(locs, 1)}, nil
 
 	case "implementation":
+		client.WaitForProjectLoaded(ctx, 15*time.Second)
 		locs, err := client.Implementation(ctx, uri, pos)
 		if err != nil {
 			return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 		}
-		return tool.ExecutionResult{Content: FormatLocations(locs)}, nil
+		return tool.ExecutionResult{Content: FormatLocationsWithContent(locs, 1)}, nil
 
 	case "references":
+		client.WaitForProjectLoaded(ctx, 15*time.Second)
 		locs, err := client.References(ctx, uri, pos)
 		if err != nil {
 			return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 		}
-		return tool.ExecutionResult{Content: FormatLocations(locs)}, nil
+		if len(locs) == 0 {
+			// Server index may not be complete; wait and retry once
+			client.WaitForProjectLoaded(ctx, 5*time.Second)
+			locs, err = client.References(ctx, uri, pos)
+			if err != nil {
+				return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
+			}
+		}
+		return tool.ExecutionResult{Content: FormatLocationsWithContent(locs, 1)}, nil
 
 	case "hover":
 		hover, err := client.Hover(ctx, uri, pos)
@@ -301,6 +339,60 @@ func (t *lspTool) Execute(ctx context.Context, args json.RawMessage) (tool.Execu
 			IsError: true,
 		}, nil
 	}
+}
+
+// handleRenameFile performs workspace file rename with LSP coordination.
+func (t *lspTool) handleRenameFile(ctx context.Context, srcPath, dstPath string) (tool.ExecutionResult, error) {
+	files := []FileRename{{
+		OldURI: fileToURI(srcPath),
+		NewURI: fileToURI(dstPath),
+	}}
+
+	// Get a client for the source file to send willRenameFiles
+	client, _, err := t.manager.ClientForFile(ctx, srcPath)
+	if err != nil {
+		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
+	}
+
+	edit, err := client.WillRenameFiles(ctx, files)
+	if err != nil {
+		return tool.ExecutionResult{Content: fmt.Sprintf("willRenameFiles failed: %v", err), IsError: true}, nil
+	}
+
+	if edit != nil && (len(edit.Changes) > 0 || len(edit.DocumentChanges) > 0) {
+		applied, applyErr := ApplyWorkspaceEdit(*edit)
+		if applyErr != nil {
+			return tool.ExecutionResult{Content: fmt.Sprintf("rename edit apply failed: %v", applyErr), IsError: true}, nil
+		}
+		for fileURI := range FlattenWorkspaceTextEdits(*edit) {
+			changedPath := uriToPath(fileURI)
+			fileClient, _, clientErr := t.manager.ClientForFile(ctx, changedPath)
+			if clientErr == nil {
+				_ = t.manager.SyncContent(ctx, fileClient, changedPath)
+			}
+		}
+		_ = applied
+	}
+
+	// Actually move the file on disk
+	if err := os.Rename(srcPath, dstPath); err != nil {
+		return tool.ExecutionResult{Content: fmt.Sprintf("file rename failed: %v", err), IsError: true}, nil
+	}
+
+	// Notify servers of the rename
+	_ = client.DidRenameFiles(ctx, files)
+
+	// Update openFiles tracking
+	t.manager.mu.Lock()
+	srcURI := fileToURI(srcPath)
+	dstURI := fileToURI(dstPath)
+	if of, ok := t.manager.openFiles[srcURI]; ok {
+		delete(t.manager.openFiles, srcURI)
+		t.manager.openFiles[dstURI] = of
+	}
+	t.manager.mu.Unlock()
+
+	return tool.ExecutionResult{Content: fmt.Sprintf("Renamed %s → %s", srcPath, dstPath)}, nil
 }
 
 func formatCodeActions(actions []CodeAction) string {
