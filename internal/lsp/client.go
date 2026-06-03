@@ -42,7 +42,13 @@ func lspLog(format string, args ...any) {
 		lspLogFile.WriteString(time.Now().Format("15:04:05.000") + " " + msg + "\n")
 		lspLogFile.Sync()
 	}
-	fmt.Print(msg + "\n")
+}
+
+func CloseLogFile() {
+	if lspLogFile != nil {
+		lspLogFile.Close()
+		lspLogFile = nil
+	}
 }
 
 type Client struct {
@@ -349,7 +355,7 @@ func (c *Client) Ready() bool {
 // readLoop runs in a background goroutine, reading JSON-RPC messages
 // and dispatching responses to pending callers or caching diagnostics.
 func (c *Client) readLoop() {
-defer func() {
+	defer func() {
 		c.mu.Lock()
 		pending := make(map[int64]chan *jsonRPCResponse, len(c.pending))
 		for id, ch := range c.pending {
@@ -360,7 +366,10 @@ defer func() {
 		for id, ch := range pending {
 			ch <- &jsonRPCResponse{ID: id, Error: &jsonRPCError{Code: -32000, Message: "connection closed"}}
 		}
-		c.shutdownOnce.Do(func() { close(c.done) })
+		c.shutdownOnce.Do(func() {
+			close(c.done)
+			c.cmd.Process.Kill()
+		})
 	}()
 
 	for {
@@ -397,10 +406,21 @@ defer func() {
 			continue
 		}
 
+		// Server-initiated request: reply with empty result to avoid server timeout
+		if envelope.ID != 0 && envelope.Method != "" {
+			lspLog("recv server request: method=%s id=%d", envelope.Method, envelope.ID)
+			_ = c.transport.WriteMessage(struct {
+				JSONRPC string `json:"jsonrpc"`
+				ID      int64  `json:"id"`
+				Result  any    `json:"result"`
+			}{JSONRPC: "2.0", ID: envelope.ID, Result: nil})
+			continue
+		}
+
 		if envelope.Method == "textDocument/publishDiagnostics" && envelope.Params != nil {
 			var params PublishDiagnosticsParams
 			if json.Unmarshal(envelope.Params, &params) == nil {
-			lspLog("publishDiagnostics: raw_uri=%s diag_count=%d", params.URI, len(params.Diagnostics))
+				lspLog("publishDiagnostics: raw_uri=%s diag_count=%d", params.URI, len(params.Diagnostics))
 				uri := normalizeURI(params.URI)
 				lspLog("publishDiagnostics: normalized_uri=%s", uri)
 				c.diagMu.Lock()
@@ -517,9 +537,11 @@ func fileToURI(path string) string {
 		abs = path
 	}
 	abs = filepath.ToSlash(abs)
-	// Ensure leading slash for non-Windows or already-slashed paths
 	if !strings.HasPrefix(abs, "/") {
 		abs = "/" + abs
+	}
+	if runtime.GOOS == "windows" && len(abs) > 2 && abs[0] == '/' && abs[2] == ':' {
+		abs = "/" + strings.ToLower(abs[1:2]) + abs[2:]
 	}
 	u := &url.URL{Scheme: "file", Path: abs}
 	return u.String()

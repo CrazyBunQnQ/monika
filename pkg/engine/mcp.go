@@ -180,9 +180,8 @@ func (r *MCPRegistry) RemoveServer(serverID string) {
 	defer r.mu.Unlock()
 	delete(r.servers, serverID)
 	delete(r.connections, serverID)
-	prefix := sanitizePrefix(serverID) + "_"
-	for k := range r.tools {
-		if len(k) >= len(prefix) && k[:len(prefix)] == prefix {
+	for k, t := range r.tools {
+		if t.ServerID == serverID {
 			delete(r.tools, k)
 		}
 	}

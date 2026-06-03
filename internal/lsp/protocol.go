@@ -3,6 +3,7 @@ package lsp
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // JSON-RPC 2.0 types
@@ -143,10 +144,10 @@ type InitializeResult struct {
 }
 
 type ServerCapabilities struct {
-	DefinitionProvider           bool `json:"definitionProvider,omitempty"`
-	ReferencesProvider           bool `json:"referencesProvider,omitempty"`
-	HoverProvider                bool `json:"hoverProvider,omitempty"`
-	DocumentSymbolProvider       bool `json:"documentSymbolProvider,omitempty"`
+	DefinitionProvider           any  `json:"definitionProvider,omitempty"`
+	ReferencesProvider           any  `json:"referencesProvider,omitempty"`
+	HoverProvider                any  `json:"hoverProvider,omitempty"`
+	DocumentSymbolProvider       any  `json:"documentSymbolProvider,omitempty"`
 	WorkspaceSymbolProvider      any  `json:"workspaceSymbolProvider,omitempty"`
 	TextDocumentSync             any  `json:"textDocumentSync,omitempty"`
 }
@@ -204,13 +205,57 @@ const (
 // Hover
 
 type Hover struct {
-	Contents MarkupContent `json:"contents"`
-	Range    *Range        `json:"range,omitempty"`
+	Contents json.RawMessage `json:"contents"`
+	Range    *Range          `json:"range,omitempty"`
 }
 
-type MarkupContent struct {
-	Kind  string `json:"kind"`
-	Value string `json:"value"`
+func (h *Hover) ContentText() string {
+	if len(h.Contents) == 0 {
+		return ""
+	}
+
+	// Try MarkupContent: {"kind":"...","value":"..."}
+	var mc struct {
+		Kind  string `json:"kind"`
+		Value string `json:"value"`
+	}
+	if json.Unmarshal(h.Contents, &mc) == nil && mc.Value != "" {
+		return mc.Value
+	}
+
+	// Try MarkedString: "plain text"
+	var s string
+	if json.Unmarshal(h.Contents, &s) == nil {
+		return s
+	}
+
+	// Try MarkedString: {"language":"...","value":"..."}
+	var ms struct {
+		Value string `json:"value"`
+	}
+	if json.Unmarshal(h.Contents, &ms) == nil && ms.Value != "" {
+		return ms.Value
+	}
+
+	// Try MarkedString[]
+	var mss []json.RawMessage
+	if json.Unmarshal(h.Contents, &mss) == nil {
+		var parts []string
+		for _, raw := range mss {
+			var v string
+			if json.Unmarshal(raw, &v) == nil {
+				parts = append(parts, v)
+			} else {
+				var ms2 struct{ Value string `json:"value"` }
+				if json.Unmarshal(raw, &ms2) == nil {
+					parts = append(parts, ms2.Value)
+				}
+			}
+		}
+		return strings.Join(parts, "\n\n")
+	}
+
+	return string(h.Contents)
 }
 
 // Document symbols

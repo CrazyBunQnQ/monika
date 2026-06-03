@@ -441,43 +441,43 @@ func (a *AgentLoop) RunBlocking(ctx context.Context, conv *Conversation, userMes
 		for _, tc := range result.ToolCalls {
 			t, ok := a.tools.Get(tc.Function.Name)
 			if !ok {
-			// Try MCP tools via O(1) resolve
-			found := false
-			if a.mcpRegistry != nil {
-				serverID, origName, ok := a.mcpRegistry.Resolve(tc.Function.Name)
-				if ok {
-					conn, hasConn := a.mcpRegistry.GetConnection(serverID)
-					if hasConn {
-						result, cerr := conn.CallTool(ctx, origName, json.RawMessage(tc.Function.Arguments))
-						if cerr != nil {
-							conv.Messages = append(conv.Messages, engine.ChatMessage{
-								Role:       "tool",
-								Content:    fmt.Sprintf("MCP tool %s error: %s", tc.Function.Name, cerr),
-								ToolCallID: tc.ID,
-								Name:       tc.Function.Name,
-							})
-						} else {
-							content := string(result)
-							conv.Messages = append(conv.Messages, engine.ChatMessage{
-								Role:       "tool",
-								Content:    content,
-								ToolCallID: tc.ID,
-								Name:       tc.Function.Name,
-							})
+				// Try MCP tools via O(1) resolve
+				found := false
+				if a.mcpRegistry != nil {
+					serverID, origName, ok := a.mcpRegistry.Resolve(tc.Function.Name)
+					if ok {
+						conn, hasConn := a.mcpRegistry.GetConnection(serverID)
+						if hasConn {
+							result, cerr := conn.CallTool(ctx, origName, json.RawMessage(tc.Function.Arguments))
+							if cerr != nil {
+								conv.Messages = append(conv.Messages, engine.ChatMessage{
+									Role:       "tool",
+									Content:    fmt.Sprintf("MCP tool %s error: %s", tc.Function.Name, cerr),
+									ToolCallID: tc.ID,
+									Name:       tc.Function.Name,
+								})
+							} else {
+								content := string(result)
+								conv.Messages = append(conv.Messages, engine.ChatMessage{
+									Role:       "tool",
+									Content:    content,
+									ToolCallID: tc.ID,
+									Name:       tc.Function.Name,
+								})
+							}
+							found = true
 						}
-						found = true
 					}
 				}
+				if !found {
+					conv.Messages = append(conv.Messages, engine.ChatMessage{
+						Role:       "tool",
+						Content:    fmt.Sprintf("tool %s not found", tc.Function.Name),
+						ToolCallID: tc.ID,
+					})
+				}
+				continue
 			}
-			if !found {
-				conv.Messages = append(conv.Messages, engine.ChatMessage{
-					Role:       "tool",
-					Content:    fmt.Sprintf("tool %s not found", tc.Function.Name),
-					ToolCallID: tc.ID,
-				})
-			}
-			continue
-		}
 
 			if a.pipeline != nil {
 				pctx := permission.CheckContext{
@@ -773,62 +773,63 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 
 			t, ok := a.tools.Get(tc.Function.Name)
 			if !ok {
-			// Try MCP tools via O(1) resolve
-			found := false
-			if a.mcpRegistry != nil {
-				serverID, origName, ok := a.mcpRegistry.Resolve(tc.Function.Name)
-				if ok {
-					conn, hasConn := a.mcpRegistry.GetConnection(serverID)
-					if hasConn {
-						result, cerr := conn.CallTool(ctx, origName, json.RawMessage(tc.Function.Arguments))
-						if cerr != nil {
-							errMsg := fmt.Sprintf("MCP tool %s error: %s", tc.Function.Name, cerr)
-							ch <- Event{
-								Type: EventToolOutput,
-								Tool: &ToolEvent{
-									ID: tc.ID, Name: tc.Function.Name,
-									Input: tc.Function.Arguments, Output: errMsg, Status: "error",
-								},
+				// Try MCP tools via O(1) resolve
+				found := false
+				if a.mcpRegistry != nil {
+					serverID, origName, ok := a.mcpRegistry.Resolve(tc.Function.Name)
+					if ok {
+						conn, hasConn := a.mcpRegistry.GetConnection(serverID)
+						if hasConn {
+							result, cerr := conn.CallTool(ctx, origName, json.RawMessage(tc.Function.Arguments))
+							if cerr != nil {
+								errMsg := fmt.Sprintf("MCP tool %s error: %s", tc.Function.Name, cerr)
+								ch <- Event{
+									Type: EventToolOutput,
+									Tool: &ToolEvent{
+										ID: tc.ID, Name: tc.Function.Name,
+										Input: tc.Function.Arguments, Output: errMsg, Status: "error",
+									},
+								}
+								executed[dk] = cachedResult{output: errMsg, status: "error"}
+								conv.Messages = append(conv.Messages, engine.ChatMessage{
+									Role: "tool", Content: errMsg,
+									ToolCallID: tc.ID, Name: tc.Function.Name,
+								})
+							} else {
+								content := string(result)
+								ch <- Event{
+									Type: EventToolOutput,
+									Tool: &ToolEvent{
+										ID: tc.ID, Name: tc.Function.Name,
+										Input: tc.Function.Arguments, Output: content, Status: "done",
+									},
+								}
+								executed[dk] = cachedResult{output: content, status: "done"}
+								conv.Messages = append(conv.Messages, engine.ChatMessage{
+									Role: "tool", Content: content,
+									ToolCallID: tc.ID, Name: tc.Function.Name,
+								})
 							}
-							executed[dk] = cachedResult{output: errMsg, status: "error"}
-							conv.Messages = append(conv.Messages, engine.ChatMessage{
-								Role: "tool", Content: errMsg,
-								ToolCallID: tc.ID, Name: tc.Function.Name,
-							})
-						} else {
-							content := string(result)
-							ch <- Event{
-								Type: EventToolOutput,
-								Tool: &ToolEvent{
-									ID: tc.ID, Name: tc.Function.Name,
-									Input: tc.Function.Arguments, Output: content, Status: "done",
-								},
-							}
-							executed[dk] = cachedResult{output: content, status: "done"}
-							conv.Messages = append(conv.Messages, engine.ChatMessage{
-								Role: "tool", Content: content,
-								ToolCallID: tc.ID, Name: tc.Function.Name,
-							})
+							found = true
 						}
-						found = true
 					}
 				}
-			}
-			if !found {
-				errMsg := fmt.Sprintf("tool %s not found", tc.Function.Name)
-				ch <- Event{
-					Type: EventToolOutput,
-					Tool: &ToolEvent{
-						ID: tc.ID, Name: tc.Function.Name,
-						Input: tc.Function.Arguments, Output: errMsg, Status: "error",
-					},
+				if !found {
+					errMsg := fmt.Sprintf("tool %s not found", tc.Function.Name)
+					ch <- Event{
+						Type: EventToolOutput,
+						Tool: &ToolEvent{
+							ID: tc.ID, Name: tc.Function.Name,
+							Input: tc.Function.Arguments, Output: errMsg, Status: "error",
+						},
+					}
+					executed[dk] = cachedResult{output: errMsg, status: "error"}
+					conv.Messages = append(conv.Messages, engine.ChatMessage{
+						Role: "tool", Content: errMsg,
+						ToolCallID: tc.ID,
+					})
 				}
-				executed[dk] = cachedResult{output: errMsg, status: "error"}
-				conv.Messages = append(conv.Messages, engine.ChatMessage{
-					Role: "tool", Content: errMsg,
-					ToolCallID: tc.ID,
-				})
-			}
+				continue
 			}
 
 			if a.pipeline != nil {

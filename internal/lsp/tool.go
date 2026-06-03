@@ -191,10 +191,11 @@ func (t *lspTool) Execute(ctx context.Context, args json.RawMessage) (tool.Execu
 		if err != nil {
 			return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 		}
-		if hover == nil {
+		text := hover.ContentText()
+		if text == "" {
 			return tool.ExecutionResult{Content: "No hover information available."}, nil
 		}
-		return tool.ExecutionResult{Content: hover.Contents.Value}, nil
+		return tool.ExecutionResult{Content: text}, nil
 
 	case "symbols":
 		syms, err := client.DocumentSymbols(ctx, uri)

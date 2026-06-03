@@ -69,6 +69,7 @@ func (m *Manager) Stop() {
 		mc.client.Shutdown(context.Background())
 		delete(m.clients, name)
 	}
+	CloseLogFile()
 }
 
 func (m *Manager) ClientForFile(ctx context.Context, filePath string) (*Client, string, error) {
@@ -230,15 +231,20 @@ func (m *Manager) idleLoop(ctx context.Context) {
 }
 
 func (m *Manager) shutdownIdle() {
+	var toClose []*Client
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	now := time.Now()
 	for name, mc := range m.clients {
 		if now.Sub(mc.lastUsed) > idleTimeout {
-			mc.client.Shutdown(context.Background())
+			toClose = append(toClose, mc.client)
 			delete(m.clients, name)
 			m.clearOpenFiles(name)
 		}
+	}
+	m.mu.Unlock()
+
+	for _, c := range toClose {
+		c.Shutdown(context.Background())
 	}
 }
 
