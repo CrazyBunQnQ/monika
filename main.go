@@ -109,7 +109,8 @@ func main() {
 							fmt.Fprintf(os.Stderr, "[monika] MCP server %q list tools: %v\n", srv.ID, err)
 							continue
 						}
-						mcpRegistry.AddServer(srv.ID, conn, tools)
+						meta := conn.ServerMeta()
+						mcpRegistry.AddServer(meta, conn, tools)
 						fmt.Fprintf(os.Stderr, "[monika] MCP server %q connected (%d tools)\n", srv.ID, len(tools))
 					}
 				}()
@@ -189,7 +190,7 @@ The content below is your PROJECT RULES from AGENTS.md. These rules are NON-NEGO
 	}
 	systemPrompt := strings.Join(systemParts, "\n\n")
 	skillsPrompt := agent.BuildSkillsPrompt(skillList)
-	mcpPrompt := agent.BuildMCPPrompt(mcpRegistry.GetTools())
+	mcpPrompt := agent.BuildMCPPrompt(mcpRegistry)
 	systemPrompt = systemPrompt + skillsPrompt + mcpPrompt + builtin.LSPStatusPrompt(registry)
 	loopOpts := []agent.LoopOption{
 		agent.WithProjectDir(cwd),

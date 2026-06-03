@@ -134,7 +134,7 @@ func (a *App) refreshSkillPrompt() {
 	}
 	fullPrompt := a.baseSystemPrompt + agent2.BuildSkillsPrompt(skills)
 	if a.mcpRegistry != nil {
-		fullPrompt += agent2.BuildMCPPrompt(a.mcpRegistry.GetTools())
+		fullPrompt += agent2.BuildMCPPrompt(a.mcpRegistry)
 	}
 	fullPrompt += builtin.LSPStatusPrompt(a.registry)
 	a.loopOpts = append(a.loopOpts[:a.baseLoopOptsCount], agent2.WithSystemPrompt(fullPrompt))

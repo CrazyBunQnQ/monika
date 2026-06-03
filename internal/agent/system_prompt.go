@@ -353,29 +353,69 @@ func BuildSkillsPrompt(skills []engine.SkillMeta) string {
 	return b.String()
 }
 
-// BuildMCPPrompt returns a system prompt section listing available MCP tools in XML format.
-// This makes the model aware of MCP capabilities and encourages active use.
-func BuildMCPPrompt(tools []engine.MCPTool) string {
+// BuildMCPPrompt returns a system prompt section listing available MCP tools grouped by server.
+// It injects server-level instructions and tool annotations to help the model use MCP tools correctly.
+func BuildMCPPrompt(registry *engine.MCPRegistry) string {
+	tools := registry.GetTools()
 	if len(tools) == 0 {
 		return ""
 	}
-	var b strings.Builder
-	b.WriteString("\n\n## MCP Tools\n\n")
-	b.WriteString("MCP (Model Context Protocol) tools extend your capabilities beyond built-in tools.\n")
-	b.WriteString("These tools are provided by configured MCP servers and give you access to additional functionality.\n")
-	b.WriteString("When a task matches an MCP tool's capability, use it instead of working around with built-in tools or bash.\n")
-	b.WriteString("Do NOT ignore MCP tools — they are part of your toolkit and should be used when relevant.\n\n")
-	b.WriteString("<available_mcp_tools>\n")
+
+	servers := registry.GetServers()
+	byServer := make(map[string][]engine.MCPTool)
 	for _, t := range tools {
-		desc := t.Description
-		if desc == "" {
-			desc = "(no description)"
-		}
-		fmt.Fprintf(&b, "  <mcp_tool>\n    <name>%s</name>\n    <description>%s</description>\n  </mcp_tool>\n", xmlEscape(t.Name), xmlEscape(desc))
+		byServer[t.ServerID] = append(byServer[t.ServerID], t)
 	}
-	b.WriteString("</available_mcp_tools>\n\n")
+
+	var b strings.Builder
+	b.WriteString("\n\n## MCP Servers\n\n")
+	b.WriteString("MCP (Model Context Protocol) tools extend your capabilities. ")
+	b.WriteString("Each tool is prefixed with its server name (e.g., `context7_resolve-library-id`). ")
+	b.WriteString("Use MCP tools when they match the task.\n\n")
+
+	for _, srv := range servers {
+		srvTools := byServer[srv.ID]
+		if len(srvTools) == 0 {
+			continue
+		}
+		if srv.Name != "" {
+			fmt.Fprintf(&b, "### %s\n", srv.Name)
+		} else {
+			fmt.Fprintf(&b, "### %s\n", srv.ID)
+		}
+		if srv.Instructions != "" {
+			b.WriteString(srv.Instructions)
+			b.WriteString("\n\n")
+		}
+		for _, t := range srvTools {
+			annTags := buildAnnotationTags(t.Annotations)
+			desc := t.Description
+			if desc == "" {
+				desc = "(no description)"
+			}
+			fmt.Fprintf(&b, "- **%s**%s: %s\n", t.Name, annTags, desc)
+		}
+		b.WriteString("\n")
+	}
+
 	b.WriteString("### MCP Server Management\n\n")
-	b.WriteString("When a user asks to add, configure, or install an MCP server, use the **install_mcp_server** tool. When a user asks to remove or uninstall an MCP server, use the **uninstall_mcp_server** tool. When a user asks what MCP servers are configured, use the **list_mcp_servers** tool.\n")
-	b.WriteString("When the user's task involves operations that match an MCP tool's capability, use that MCP tool rather than workarounds with built-in tools.")
+	b.WriteString("Use **install_mcp_server** / **uninstall_mcp_server** / **list_mcp_servers** for MCP server management.\n")
 	return b.String()
+}
+
+func buildAnnotationTags(a engine.MCPAnnotations) string {
+	var tags []string
+	if a.ReadOnly {
+		tags = append(tags, "read-only")
+	}
+	if a.Destructive {
+		tags = append(tags, "⚠ destructive")
+	}
+	if a.Idempotent {
+		tags = append(tags, "idempotent")
+	}
+	if len(tags) == 0 {
+		return ""
+	}
+	return " [" + strings.Join(tags, ", ") + "]"
 }
