@@ -3,6 +3,7 @@ package lsp
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // JSON-RPC 2.0 types
@@ -76,14 +77,23 @@ type TextDocumentPositionParams struct {
 type ClientCapabilities struct {
 	TextDocument *TextDocumentClientCapabilities `json:"textDocument,omitempty"`
 	Workspace    *WorkspaceClientCapabilities    `json:"workspace,omitempty"`
+	Window       *WindowClientCapabilities       `json:"window,omitempty"`
+}
+
+type WindowClientCapabilities struct {
+	WorkDoneProgress bool `json:"workDoneProgress"`
 }
 
 type TextDocumentClientCapabilities struct {
-	Synchronization *SynchronizationCapabilities `json:"synchronization,omitempty"`
-	Hover           *HoverCapabilities           `json:"hover,omitempty"`
-	Definition      *DefinitionCapabilities      `json:"definition,omitempty"`
-	References      *ReferencesCapabilities      `json:"references,omitempty"`
-	DocumentSymbol  *DocumentSymbolCapabilities  `json:"documentSymbol,omitempty"`
+	Synchronization   *SynchronizationCapabilities    `json:"synchronization,omitempty"`
+	Hover             *HoverCapabilities              `json:"hover,omitempty"`
+	Definition        *DefinitionCapabilities         `json:"definition,omitempty"`
+	TypeDefinition    *TypeDefinitionCapabilities     `json:"typeDefinition,omitempty"`
+	Implementation    *ImplementationCapabilities     `json:"implementation,omitempty"`
+	References        *ReferencesCapabilities         `json:"references,omitempty"`
+	DocumentSymbol    *DocumentSymbolCapabilities     `json:"documentSymbol,omitempty"`
+	Rename            *RenameCapabilities             `json:"rename,omitempty"`
+	CodeAction        *CodeActionCapabilities         `json:"codeAction,omitempty"`
 	PublishDiagnostics *PublishDiagnosticsCapabilities `json:"publishDiagnostics,omitempty"`
 }
 
@@ -114,11 +124,72 @@ type DocumentSymbolCapabilities struct {
 }
 
 type PublishDiagnosticsCapabilities struct {
-	RelatedInformation bool `json:"relatedInformation"`
+	RelatedInformation    bool                           `json:"relatedInformation"`
+	VersionSupport        bool                           `json:"versionSupport"`
+	CodeDescriptionSupport bool                          `json:"codeDescriptionSupport"`
+	DataSupport           bool                           `json:"dataSupport"`
+	TagSupport            *PublishDiagnosticsTagSupport  `json:"tagSupport,omitempty"`
+}
+
+type TypeDefinitionCapabilities struct {
+	DynamicRegistration bool `json:"dynamicRegistration"`
+	LinkSupport         bool `json:"linkSupport"`
+}
+
+type ImplementationCapabilities struct {
+	DynamicRegistration bool `json:"dynamicRegistration"`
+	LinkSupport         bool `json:"linkSupport"`
+}
+
+type CodeActionCapabilities struct {
+	DynamicRegistration      bool                              `json:"dynamicRegistration"`
+	CodeActionLiteralSupport *CodeActionLiteralSupport         `json:"codeActionLiteralSupport,omitempty"`
+	ResolveSupport           *CodeActionResolveSupport         `json:"resolveSupport,omitempty"`
+}
+
+type CodeActionLiteralSupport struct {
+	CodeActionKind CodeActionKindSupport `json:"codeActionKind"`
+}
+
+type CodeActionKindSupport struct {
+	ValueSet []string `json:"valueSet"`
+}
+
+type CodeActionResolveSupport struct {
+	Properties []string `json:"properties"`
+}
+
+type RenameCapabilities struct {
+	DynamicRegistration bool `json:"dynamicRegistration"`
+	PrepareSupport      bool `json:"prepareSupport"`
+}
+
+type PublishDiagnosticsTagSupport struct {
+	ValueSet []int `json:"valueSet"`
 }
 
 type WorkspaceClientCapabilities struct {
-	Symbol *SymbolCapabilities `json:"symbol,omitempty"`
+	ApplyEdit      bool                          `json:"applyEdit"`
+	Configuration  bool                          `json:"configuration"`
+	Symbol         *SymbolCapabilities           `json:"symbol,omitempty"`
+	WorkspaceEdit  *WorkspaceEditCapabilities    `json:"workspaceEdit,omitempty"`
+	FileOperations *FileOperationsCapabilities   `json:"fileOperations,omitempty"`
+}
+
+type WorkspaceEditCapabilities struct {
+	DocumentChanges    bool     `json:"documentChanges"`
+	ResourceOperations []string `json:"resourceOperations"`
+	FailureHandling    string   `json:"failureHandling"`
+}
+
+type FileOperationsCapabilities struct {
+	DynamicRegistration bool `json:"dynamicRegistration"`
+	WillRename          bool `json:"willRename"`
+	DidRename           bool `json:"didRename"`
+	WillCreate          bool `json:"willCreate"`
+	DidCreate           bool `json:"didCreate"`
+	WillDelete          bool `json:"willDelete"`
+	DidDelete           bool `json:"didDelete"`
 }
 
 type SymbolCapabilities struct {
@@ -143,10 +214,10 @@ type InitializeResult struct {
 }
 
 type ServerCapabilities struct {
-	DefinitionProvider           bool `json:"definitionProvider,omitempty"`
-	ReferencesProvider           bool `json:"referencesProvider,omitempty"`
-	HoverProvider                bool `json:"hoverProvider,omitempty"`
-	DocumentSymbolProvider       bool `json:"documentSymbolProvider,omitempty"`
+	DefinitionProvider           any  `json:"definitionProvider,omitempty"`
+	ReferencesProvider           any  `json:"referencesProvider,omitempty"`
+	HoverProvider                any  `json:"hoverProvider,omitempty"`
+	DocumentSymbolProvider       any  `json:"documentSymbolProvider,omitempty"`
 	WorkspaceSymbolProvider      any  `json:"workspaceSymbolProvider,omitempty"`
 	TextDocumentSync             any  `json:"textDocumentSync,omitempty"`
 }
@@ -204,13 +275,57 @@ const (
 // Hover
 
 type Hover struct {
-	Contents MarkupContent `json:"contents"`
-	Range    *Range        `json:"range,omitempty"`
+	Contents json.RawMessage `json:"contents"`
+	Range    *Range          `json:"range,omitempty"`
 }
 
-type MarkupContent struct {
-	Kind  string `json:"kind"`
-	Value string `json:"value"`
+func (h *Hover) ContentText() string {
+	if len(h.Contents) == 0 {
+		return ""
+	}
+
+	// Try MarkupContent: {"kind":"...","value":"..."}
+	var mc struct {
+		Kind  string `json:"kind"`
+		Value string `json:"value"`
+	}
+	if json.Unmarshal(h.Contents, &mc) == nil && mc.Value != "" {
+		return mc.Value
+	}
+
+	// Try MarkedString: "plain text"
+	var s string
+	if json.Unmarshal(h.Contents, &s) == nil {
+		return s
+	}
+
+	// Try MarkedString: {"language":"...","value":"..."}
+	var ms struct {
+		Value string `json:"value"`
+	}
+	if json.Unmarshal(h.Contents, &ms) == nil && ms.Value != "" {
+		return ms.Value
+	}
+
+	// Try MarkedString[]
+	var mss []json.RawMessage
+	if json.Unmarshal(h.Contents, &mss) == nil {
+		var parts []string
+		for _, raw := range mss {
+			var v string
+			if json.Unmarshal(raw, &v) == nil {
+				parts = append(parts, v)
+			} else {
+				var ms2 struct{ Value string `json:"value"` }
+				if json.Unmarshal(raw, &ms2) == nil {
+					parts = append(parts, ms2.Value)
+				}
+			}
+		}
+		return strings.Join(parts, "\n\n")
+	}
+
+	return string(h.Contents)
 }
 
 // Document symbols
@@ -461,4 +576,27 @@ type RenameParams struct {
 
 type WorkspaceSymbolParams struct {
 	Query string `json:"query"`
+}
+
+// Formatting
+
+type FormattingOptions struct {
+	TabSize      int    `json:"tabSize"`
+	InsertSpaces bool   `json:"insertSpaces"`
+}
+
+type DocumentFormattingParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+	Options      FormattingOptions      `json:"options"`
+}
+
+// File rename
+
+type FileRename struct {
+	OldURI string `json:"oldUri"`
+	NewURI string `json:"newUri"`
+}
+
+type RenameFilesParams struct {
+	Files []FileRename `json:"files"`
 }

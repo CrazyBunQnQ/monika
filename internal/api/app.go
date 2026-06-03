@@ -134,7 +134,7 @@ func (a *App) refreshSkillPrompt() {
 	}
 	fullPrompt := a.baseSystemPrompt + agent2.BuildSkillsPrompt(skills)
 	if a.mcpRegistry != nil {
-		fullPrompt += agent2.BuildMCPPrompt(a.mcpRegistry.GetTools())
+		fullPrompt += agent2.BuildMCPPrompt(a.mcpRegistry)
 	}
 	fullPrompt += builtin.LSPStatusPrompt(a.registry)
 	a.loopOpts = append(a.loopOpts[:a.baseLoopOptsCount], agent2.WithSystemPrompt(fullPrompt))
@@ -670,7 +670,9 @@ func (a *App) SendMessage(projectPath, sessionID, text, providerID, model string
 		agent2.WithProvider(providerID),
 		agent2.WithModel(model),
 		agent2.WithSessionID(sessionID),
+		agent2.WithTaskStore(a.taskStoreAccessor.GetTaskStore(sessionID)),
 	)
+
 	if ctxLimit, outLimit := a.modelLimits(providerID, model); ctxLimit > 0 {
 		opts = append(opts, agent2.WithContextLimit(ctxLimit), agent2.WithOutputLimit(outLimit))
 	}
@@ -817,7 +819,9 @@ func (a *App) TriggerCompact(projectPath, sessionID, providerID, model string) e
 		agent2.WithProvider(providerID),
 		agent2.WithModel(model),
 		agent2.WithSessionID(sessionID),
+		agent2.WithTaskStore(a.taskStoreAccessor.GetTaskStore(sessionID)),
 	)
+
 	if ctxLimit, outLimit := a.modelLimits(providerID, model); ctxLimit > 0 {
 		opts = append(opts, agent2.WithContextLimit(ctxLimit), agent2.WithOutputLimit(outLimit))
 	}

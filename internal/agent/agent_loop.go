@@ -263,7 +263,9 @@ type AgentLoop struct {
 	dispatchFn        func(ctx context.Context, task SubTask) <-chan Event
 	mcpRegistry       *engine.MCPRegistry
 	askUserFn         tool.AskUserFunc
+	taskStore         tool.TaskStore
 }
+
 
 // SetDispatchFn sets the child dispatch function for this loop.
 // Used for compaction and other system-initiated subtasks.
@@ -351,6 +353,11 @@ func WithAskUserFunc(fn tool.AskUserFunc) LoopOption {
 	return func(a *AgentLoop) { a.askUserFn = fn }
 }
 
+func WithTaskStore(ts tool.TaskStore) LoopOption {
+	return func(a *AgentLoop) { a.taskStore = ts }
+}
+
+
 func NewLoop(provider engine.ProviderEngine, tools *tool.ToolRegistry, opts ...LoopOption) *AgentLoop {
 	a := &AgentLoop{
 		provider: provider,
@@ -434,39 +441,31 @@ func (a *AgentLoop) RunBlocking(ctx context.Context, conv *Conversation, userMes
 		for _, tc := range result.ToolCalls {
 			t, ok := a.tools.Get(tc.Function.Name)
 			if !ok {
-				// Try MCP tools
+				// Try MCP tools via O(1) resolve
 				found := false
 				if a.mcpRegistry != nil {
-					for _, conn := range a.mcpRegistry.GetConnections() {
-						tools, lerr := conn.ListTools(ctx)
-						if lerr != nil {
-							continue
-						}
-						for _, mt := range tools {
-							if mt.Name == tc.Function.Name {
-								result, cerr := conn.CallTool(ctx, tc.Function.Name, json.RawMessage(tc.Function.Arguments))
-								if cerr != nil {
-									conv.Messages = append(conv.Messages, engine.ChatMessage{
-										Role:       "tool",
-										Content:    fmt.Sprintf("MCP tool %s error: %s", tc.Function.Name, cerr),
-										ToolCallID: tc.ID,
-										Name:       tc.Function.Name,
-									})
-								} else {
-									content := string(result)
-									conv.Messages = append(conv.Messages, engine.ChatMessage{
-										Role:       "tool",
-										Content:    content,
-										ToolCallID: tc.ID,
-										Name:       tc.Function.Name,
-									})
-								}
-								found = true
-								break
+					serverID, origName, ok := a.mcpRegistry.Resolve(tc.Function.Name)
+					if ok {
+						conn, hasConn := a.mcpRegistry.GetConnection(serverID)
+						if hasConn {
+							result, cerr := conn.CallTool(ctx, origName, json.RawMessage(tc.Function.Arguments))
+							if cerr != nil {
+								conv.Messages = append(conv.Messages, engine.ChatMessage{
+									Role:       "tool",
+									Content:    fmt.Sprintf("MCP tool %s error: %s", tc.Function.Name, cerr),
+									ToolCallID: tc.ID,
+									Name:       tc.Function.Name,
+								})
+							} else {
+								content := string(result)
+								conv.Messages = append(conv.Messages, engine.ChatMessage{
+									Role:       "tool",
+									Content:    content,
+									ToolCallID: tc.ID,
+									Name:       tc.Function.Name,
+								})
 							}
-						}
-						if found {
-							break
+							found = true
 						}
 					}
 				}
@@ -774,52 +773,44 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 
 			t, ok := a.tools.Get(tc.Function.Name)
 			if !ok {
-				// Try MCP tools
+				// Try MCP tools via O(1) resolve
 				found := false
 				if a.mcpRegistry != nil {
-					for _, conn := range a.mcpRegistry.GetConnections() {
-						tools, lerr := conn.ListTools(ctx)
-						if lerr != nil {
-							continue
-						}
-						for _, mt := range tools {
-							if mt.Name == tc.Function.Name {
-								result, cerr := conn.CallTool(ctx, tc.Function.Name, json.RawMessage(tc.Function.Arguments))
-								if cerr != nil {
-									errMsg := fmt.Sprintf("MCP tool %s error: %s", tc.Function.Name, cerr)
-									ch <- Event{
-										Type: EventToolOutput,
-										Tool: &ToolEvent{
-											ID: tc.ID, Name: tc.Function.Name,
-											Input: tc.Function.Arguments, Output: errMsg, Status: "error",
-										},
-									}
-									executed[dk] = cachedResult{output: errMsg, status: "error"}
-									conv.Messages = append(conv.Messages, engine.ChatMessage{
-										Role: "tool", Content: errMsg,
-										ToolCallID: tc.ID, Name: tc.Function.Name,
-									})
-								} else {
-									content := string(result)
-									ch <- Event{
-										Type: EventToolOutput,
-										Tool: &ToolEvent{
-											ID: tc.ID, Name: tc.Function.Name,
-											Input: tc.Function.Arguments, Output: content, Status: "done",
-										},
-									}
-									executed[dk] = cachedResult{output: content, status: "done"}
-									conv.Messages = append(conv.Messages, engine.ChatMessage{
-										Role: "tool", Content: content,
-										ToolCallID: tc.ID, Name: tc.Function.Name,
-									})
+					serverID, origName, ok := a.mcpRegistry.Resolve(tc.Function.Name)
+					if ok {
+						conn, hasConn := a.mcpRegistry.GetConnection(serverID)
+						if hasConn {
+							result, cerr := conn.CallTool(ctx, origName, json.RawMessage(tc.Function.Arguments))
+							if cerr != nil {
+								errMsg := fmt.Sprintf("MCP tool %s error: %s", tc.Function.Name, cerr)
+								ch <- Event{
+									Type: EventToolOutput,
+									Tool: &ToolEvent{
+										ID: tc.ID, Name: tc.Function.Name,
+										Input: tc.Function.Arguments, Output: errMsg, Status: "error",
+									},
 								}
-								found = true
-								break
+								executed[dk] = cachedResult{output: errMsg, status: "error"}
+								conv.Messages = append(conv.Messages, engine.ChatMessage{
+									Role: "tool", Content: errMsg,
+									ToolCallID: tc.ID, Name: tc.Function.Name,
+								})
+							} else {
+								content := string(result)
+								ch <- Event{
+									Type: EventToolOutput,
+									Tool: &ToolEvent{
+										ID: tc.ID, Name: tc.Function.Name,
+										Input: tc.Function.Arguments, Output: content, Status: "done",
+									},
+								}
+								executed[dk] = cachedResult{output: content, status: "done"}
+								conv.Messages = append(conv.Messages, engine.ChatMessage{
+									Role: "tool", Content: content,
+									ToolCallID: tc.ID, Name: tc.Function.Name,
+								})
 							}
-						}
-						if found {
-							break
+							found = true
 						}
 					}
 				}
@@ -1069,6 +1060,18 @@ func (a *AgentLoop) buildMessages(conv *Conversation) []engine.ChatMessage {
 		if summaryContent != "" {
 			parts = append(parts, "\n\n<context-summary>\n"+summaryContent+"\n</context-summary>")
 		}
+		if summaryContent != "" && a.taskStore != nil && a.sessionID != "" {
+			if tasks := a.taskStore.List(a.sessionID); len(tasks) > 0 {
+				var b strings.Builder
+				b.WriteString("\n\n<task-list>\nCurrent task list (do NOT call task_create to recreate these — use task_update to change status):\n")
+				for _, t := range tasks {
+					fmt.Fprintf(&b, "- [%s] %s: %s\n", t.Status, t.ID, t.Subject)
+				}
+				b.WriteString("</task-list>")
+				parts = append(parts, b.String())
+			}
+		}
+
 		messages = append(messages, engine.ChatMessage{
 			Role:    "system",
 			Content: strings.Join(parts, ""),

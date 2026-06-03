@@ -4,14 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
-
+	"time"
 	"monika/internal/tool"
 )
 
-type lspTool struct {
+type LSPTool struct {
 	manager *Manager
 }
 
@@ -19,18 +20,40 @@ func NewLSPTool(projectDir string) (tool.Tool, error) {
 	m := NewManager(projectDir)
 	m.Start()
 
-	return &lspTool{manager: m}, nil
+	return &LSPTool{manager: m}, nil
 }
 
-func (t *lspTool) Manager() *Manager { return t.manager }
+func (t *LSPTool) Manager() *Manager { return t.manager }
 
-func (t *lspTool) ReadyForFile(ctx context.Context, filePath string) bool {
+func (t *LSPTool) ReadyForFile(ctx context.Context, filePath string) bool {
 	return t.manager.ReadyForFile(ctx, filePath)
 }
 
-func (t *lspTool) Name() string { return "lsp" }
+// WriteThrough runs the full LSP writethrough pipeline: sync + format + save + diagnostics.
+func (t *LSPTool) WriteThrough(ctx context.Context, filePath string, content string, opts WriteThroughOptions) (string, string) {
+	client, serverName, err := t.manager.ClientForFile(ctx, filePath)
+	if err != nil {
+		return content, ""
+	}
+	return t.manager.WriteThrough(ctx, client, filePath, serverName, content, opts)
+}
 
-func (t *lspTool) Description() string {
+// FormatContent formats a file via LSP and writes the formatted result to disk.
+func (t *LSPTool) FormatContent(ctx context.Context, filePath string) (string, error) {
+	client, serverName, err := t.manager.ClientForFile(ctx, filePath)
+	if err != nil {
+		return "", err
+	}
+	if _, err := t.manager.EnsureAndSync(ctx, client, filePath, serverName); err != nil {
+		return "", err
+	}
+	return t.manager.FormatContent(ctx, client, filePath)
+}
+
+
+func (t *LSPTool) Name() string { return "lsp" }
+
+func (t *LSPTool) Description() string {
 	return `Language Server Protocol client. Provides code intelligence via LSP servers.
 
 Actions:
@@ -51,13 +74,13 @@ Line and character are 0-based (same as LSP protocol).`
 }
 
 
-func (t *lspTool) Parameters() map[string]any {
+func (t *LSPTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"action": map[string]any{
 				"type":        "string",
-				"enum":        []string{"diagnostics", "definition", "type_definition", "implementation", "references", "hover", "symbols", "code_actions", "execute_code_action", "rename", "status"},
+				"enum":        []string{"diagnostics", "definition", "type_definition", "implementation", "references", "hover", "symbols", "code_actions", "execute_code_action", "rename", "rename_file", "status"},
 				"description": "The LSP action to perform",
 			},
 			"file": map[string]any{
@@ -88,12 +111,20 @@ func (t *lspTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Title of the code action to execute (required for execute_code_action)",
 			},
+			"source_path": map[string]any{
+				"type":        "string",
+				"description": "Absolute path of the source file (required for rename_file)",
+			},
+			"dest_path": map[string]any{
+				"type":        "string",
+				"description": "Absolute path of the destination file (required for rename_file)",
+			},
 		},
 		"required": []string{"action"},
 	}
 }
 
-func (t *lspTool) Execute(ctx context.Context, args json.RawMessage) (tool.ExecutionResult, error) {
+func (t *LSPTool) Execute(ctx context.Context, args json.RawMessage) (tool.ExecutionResult, error) {
 	var params struct {
 		Action      string `json:"action"`
 		File        string `json:"file"`
@@ -103,6 +134,8 @@ func (t *lspTool) Execute(ctx context.Context, args json.RawMessage) (tool.Execu
 		EndCharacter int   `json:"end_character"`
 		NewName     string `json:"new_name"`
 		ActionTitle string `json:"action_title"`
+		SourcePath  string `json:"source_path"`
+		DestPath    string `json:"dest_path"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
@@ -110,6 +143,21 @@ func (t *lspTool) Execute(ctx context.Context, args json.RawMessage) (tool.Execu
 
 	if params.Action == "status" {
 		return tool.ExecutionResult{Content: t.manager.Status()}, nil
+	}
+
+	if params.Action == "rename_file" {
+		if params.SourcePath == "" || params.DestPath == "" {
+			return tool.ExecutionResult{Content: "source_path and dest_path are required for rename_file", IsError: true}, nil
+		}
+		srcPath := params.SourcePath
+		if !filepath.IsAbs(srcPath) {
+			srcPath = filepath.Join(t.manager.workdir, srcPath)
+		}
+		dstPath := params.DestPath
+		if !filepath.IsAbs(dstPath) {
+			dstPath = filepath.Join(t.manager.workdir, dstPath)
+		}
+		return t.handleRenameFile(ctx, srcPath, dstPath)
 	}
 
 	if params.File == "" {
@@ -123,7 +171,7 @@ func (t *lspTool) Execute(ctx context.Context, args json.RawMessage) (tool.Execu
 
 	lspLog("Execute: action=%s file=%s", params.Action, filePath)
 
-	client, _, err := t.manager.ClientForFile(ctx, filePath)
+	client, serverName, err := t.manager.ClientForFile(ctx, filePath)
 	if err != nil {
 		lspLog("ClientForFile error: %v", err)
 		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
@@ -132,15 +180,15 @@ func (t *lspTool) Execute(ctx context.Context, args json.RawMessage) (tool.Execu
 	uri := fileToURI(filePath)
 	lspLog("fileToURI: filePath=%s uri=%s", filePath, uri)
 
-	_, _, err = t.manager.EnsureFileOpen(ctx, client, filePath)
-	if err != nil {
-		lspLog("EnsureFileOpen error: %v", err)
-		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
+	var beforeDiagSeq int64
+	if params.Action == "diagnostics" {
+		beforeDiagSeq = client.DiagSeq(uri)
 	}
 
-	if syncErr := t.manager.SyncContent(ctx, client, filePath); syncErr != nil {
-		lspLog("SyncContent error: %v", syncErr)
-		return tool.ExecutionResult{Content: syncErr.Error(), IsError: true}, nil
+	changed, err := t.manager.EnsureAndSync(ctx, client, filePath, serverName)
+	if err != nil {
+		lspLog("EnsureAndSync error: %v", err)
+		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 	}
 	pos := Position{Line: params.Line, Character: params.Character}
 
@@ -151,6 +199,9 @@ func (t *lspTool) Execute(ctx context.Context, args json.RawMessage) (tool.Execu
 			return tool.ExecutionResult{Content: ctx.Err().Error(), IsError: true}, nil
 		default:
 		}
+		if changed {
+			client.WaitForDiagUpdate(ctx, uri, beforeDiagSeq, 3*time.Second)
+		}
 		lspLog("diagnostics action: uri=%s", uri)
 		normURI := normalizeURI(uri)
 		lspLog("diagnostics action: normalized_uri=%s", normURI)
@@ -159,42 +210,55 @@ func (t *lspTool) Execute(ctx context.Context, args json.RawMessage) (tool.Execu
 		return tool.ExecutionResult{Content: FormatDiagnostics(uri, diags)}, nil
 
 	case "definition":
+		client.WaitForProjectLoaded(ctx, 15*time.Second)
 		locs, err := client.Definition(ctx, uri, pos)
 		if err != nil {
 			return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 		}
-		return tool.ExecutionResult{Content: FormatLocations(locs)}, nil
+		return tool.ExecutionResult{Content: FormatLocationsWithContent(locs, 1)}, nil
 
 	case "type_definition":
+		client.WaitForProjectLoaded(ctx, 15*time.Second)
 		locs, err := client.TypeDefinition(ctx, uri, pos)
 		if err != nil {
 			return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 		}
-		return tool.ExecutionResult{Content: FormatLocations(locs)}, nil
+		return tool.ExecutionResult{Content: FormatLocationsWithContent(locs, 1)}, nil
 
 	case "implementation":
+		client.WaitForProjectLoaded(ctx, 15*time.Second)
 		locs, err := client.Implementation(ctx, uri, pos)
 		if err != nil {
 			return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 		}
-		return tool.ExecutionResult{Content: FormatLocations(locs)}, nil
+		return tool.ExecutionResult{Content: FormatLocationsWithContent(locs, 1)}, nil
 
 	case "references":
+		client.WaitForProjectLoaded(ctx, 15*time.Second)
 		locs, err := client.References(ctx, uri, pos)
 		if err != nil {
 			return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 		}
-		return tool.ExecutionResult{Content: FormatLocations(locs)}, nil
+		if len(locs) == 0 {
+			// Server index may not be complete; wait and retry once
+			client.WaitForProjectLoaded(ctx, 5*time.Second)
+			locs, err = client.References(ctx, uri, pos)
+			if err != nil {
+				return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
+			}
+		}
+		return tool.ExecutionResult{Content: FormatLocationsWithContent(locs, 1)}, nil
 
 	case "hover":
 		hover, err := client.Hover(ctx, uri, pos)
 		if err != nil {
 			return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 		}
-		if hover == nil {
+		text := hover.ContentText()
+		if text == "" {
 			return tool.ExecutionResult{Content: "No hover information available."}, nil
 		}
-		return tool.ExecutionResult{Content: hover.Contents.Value}, nil
+		return tool.ExecutionResult{Content: text}, nil
 
 	case "symbols":
 		syms, err := client.DocumentSymbols(ctx, uri)
@@ -293,10 +357,64 @@ func (t *lspTool) Execute(ctx context.Context, args json.RawMessage) (tool.Execu
 
 	default:
 		return tool.ExecutionResult{
-			Content: fmt.Sprintf("unknown action: %s (supported: diagnostics, definition, type_definition, implementation, references, hover, symbols, code_actions, execute_code_action, rename, status)", params.Action),
+			Content: fmt.Sprintf("unknown action: %s (supported: diagnostics, definition, type_definition, implementation, references, hover, symbols, code_actions, execute_code_action, rename, rename_file, status)", params.Action),
 			IsError: true,
 		}, nil
 	}
+}
+
+// handleRenameFile performs workspace file rename with LSP coordination.
+func (t *LSPTool) handleRenameFile(ctx context.Context, srcPath, dstPath string) (tool.ExecutionResult, error) {
+	files := []FileRename{{
+		OldURI: fileToURI(srcPath),
+		NewURI: fileToURI(dstPath),
+	}}
+
+	// Get a client for the source file to send willRenameFiles
+	client, _, err := t.manager.ClientForFile(ctx, srcPath)
+	if err != nil {
+		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
+	}
+
+	edit, err := client.WillRenameFiles(ctx, files)
+	if err != nil {
+		return tool.ExecutionResult{Content: fmt.Sprintf("willRenameFiles failed: %v", err), IsError: true}, nil
+	}
+
+	if edit != nil && (len(edit.Changes) > 0 || len(edit.DocumentChanges) > 0) {
+		applied, applyErr := ApplyWorkspaceEdit(*edit)
+		if applyErr != nil {
+			return tool.ExecutionResult{Content: fmt.Sprintf("rename edit apply failed: %v", applyErr), IsError: true}, nil
+		}
+		for fileURI := range FlattenWorkspaceTextEdits(*edit) {
+			changedPath := uriToPath(fileURI)
+			fileClient, _, clientErr := t.manager.ClientForFile(ctx, changedPath)
+			if clientErr == nil {
+				_ = t.manager.SyncContent(ctx, fileClient, changedPath)
+			}
+		}
+		_ = applied
+	}
+
+	// Actually move the file on disk
+	if err := os.Rename(srcPath, dstPath); err != nil {
+		return tool.ExecutionResult{Content: fmt.Sprintf("file rename failed: %v", err), IsError: true}, nil
+	}
+
+	// Notify servers of the rename
+	_ = client.DidRenameFiles(ctx, files)
+
+	// Update openFiles tracking
+	t.manager.mu.Lock()
+	srcURI := fileToURI(srcPath)
+	dstURI := fileToURI(dstPath)
+	if of, ok := t.manager.openFiles[srcURI]; ok {
+		delete(t.manager.openFiles, srcURI)
+		t.manager.openFiles[dstURI] = of
+	}
+	t.manager.mu.Unlock()
+
+	return tool.ExecutionResult{Content: fmt.Sprintf("Renamed %s →%s", srcPath, dstPath)}, nil
 }
 
 func formatCodeActions(actions []CodeAction) string {
@@ -365,3 +483,4 @@ func extToLanguageID(ext string) string {
 	}
 	return strings.TrimPrefix(ext, ".")
 }
+

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -42,24 +43,40 @@ func lspLog(format string, args ...any) {
 		lspLogFile.WriteString(time.Now().Format("15:04:05.000") + " " + msg + "\n")
 		lspLogFile.Sync()
 	}
-	fmt.Print(msg + "\n")
+}
+
+func CloseLogFile() {
+	if lspLogFile != nil {
+		lspLogFile.Close()
+		lspLogFile = nil
+	}
 }
 
 type Client struct {
+	name         string
 	transport    *Transport
 	cmd          *exec.Cmd
 	nextID       atomic.Int64
 	mu           sync.Mutex
 	pending      map[int64]chan *jsonRPCResponse
 	diags        map[string][]Diagnostic
+	diagSeq      map[string]int64
 	diagMu       sync.RWMutex
 	serverCaps   ServerCapabilities
+	settings     map[string]any
 	ready        bool
-	shutdownOnce sync.Once
+	shutdownRequested atomic.Bool
+	shutdownOnce      sync.Once
 	done         chan struct{}
+
+	// $/progress tracking
+	activeProgressTokens map[any]struct{}
+	progressMu           sync.Mutex
+	projectLoadedOnce    sync.Once
+	projectLoadedChan    chan struct{}
 }
 
-func NewClient(ctx context.Context, command string, args []string, workdir string) (*Client, error) {
+func NewClient(ctx context.Context, name string, command string, args []string, workdir string) (*Client, error) {
 	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Dir = workdir
 	if runtime.GOOS == "windows" {
@@ -83,11 +100,15 @@ func NewClient(ctx context.Context, command string, args []string, workdir strin
 	}
 
 	c := &Client{
-		transport: NewTransport(stdin, stdout),
-		cmd:       cmd,
-		pending:   make(map[int64]chan *jsonRPCResponse),
-		diags:     make(map[string][]Diagnostic),
-		done:      make(chan struct{}),
+		name:                 name,
+		transport:            NewTransport(stdin, stdout),
+		cmd:                  cmd,
+		pending:              make(map[int64]chan *jsonRPCResponse),
+		diags:                make(map[string][]Diagnostic),
+		diagSeq:              make(map[string]int64),
+		done:                 make(chan struct{}),
+		activeProgressTokens: make(map[any]struct{}),
+		projectLoadedChan:    make(chan struct{}),
 	}
 
 	go c.readLoop()
@@ -104,13 +125,42 @@ func (c *Client) Initialize(ctx context.Context, rootURI string, initOptions any
 				Synchronization: &SynchronizationCapabilities{DidSave: true},
 				Hover:           &HoverCapabilities{ContentFormat: []string{"markdown", "plaintext"}},
 				Definition:      &DefinitionCapabilities{LinkSupport: true},
+				TypeDefinition:  &TypeDefinitionCapabilities{LinkSupport: true},
+				Implementation:  &ImplementationCapabilities{LinkSupport: true},
 				References:      &ReferencesCapabilities{},
 				DocumentSymbol:  &DocumentSymbolCapabilities{HierarchicalDocumentSymbolSupport: true},
-				PublishDiagnostics: &PublishDiagnosticsCapabilities{RelatedInformation: true},
+				Rename:          &RenameCapabilities{PrepareSupport: true},
+				CodeAction: &CodeActionCapabilities{
+					CodeActionLiteralSupport: &CodeActionLiteralSupport{
+						CodeActionKind: CodeActionKindSupport{
+							ValueSet: []string{"quickfix", "refactor", "refactor.extract", "refactor.inline", "refactor.rewrite", "source", "source.organizeImports"},
+						},
+					},
+					ResolveSupport: &CodeActionResolveSupport{Properties: []string{"edit"}},
+				},
+				PublishDiagnostics: &PublishDiagnosticsCapabilities{
+					RelatedInformation: true,
+					VersionSupport:     true,
+					CodeDescriptionSupport: true,
+					DataSupport:        true,
+					TagSupport:         &PublishDiagnosticsTagSupport{ValueSet: []int{1, 2}},
+				},
 			},
 			Workspace: &WorkspaceClientCapabilities{
-				Symbol: &SymbolCapabilities{},
+				ApplyEdit:     true,
+				Configuration: true,
+				Symbol:        &SymbolCapabilities{},
+				WorkspaceEdit: &WorkspaceEditCapabilities{
+					DocumentChanges:    true,
+					ResourceOperations: []string{"create", "rename", "delete"},
+					FailureHandling:    "textOnlyTransactional",
+				},
+				FileOperations: &FileOperationsCapabilities{
+					WillRename: true,
+					DidRename:  true,
+				},
 			},
+			Window: &WindowClientCapabilities{WorkDoneProgress: true},
 		},
 		ClientInfo:            &ClientInfo{Name: "monika", Version: "0.1.0"},
 		InitializationOptions: initOptions,
@@ -121,6 +171,9 @@ func (c *Client) Initialize(ctx context.Context, rootURI string, initOptions any
 		return fmt.Errorf("lsp initialize: %w", err)
 	}
 	c.serverCaps = result.Capabilities
+	if s, ok := settings.(map[string]any); ok {
+		c.settings = s
+	}
 
 	if settings != nil {
 		_ = c.notify(ctx, "workspace/didChangeConfiguration", map[string]any{
@@ -137,6 +190,7 @@ func (c *Client) Initialize(ctx context.Context, rootURI string, initOptions any
 }
 
 func (c *Client) Shutdown(ctx context.Context) {
+	c.shutdownRequested.Store(true)
 	c.shutdownOnce.Do(func() {
 		ctx2, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
@@ -194,6 +248,37 @@ func (c *Client) DidSave(ctx context.Context, uri string, text string) error {
 		params.Text = &text
 	}
 	return c.notify(ctx, "textDocument/didSave", params)
+}
+
+// Formatting sends a textDocument/formatting request and returns the text edits.
+func (c *Client) Formatting(ctx context.Context, uri string, opts FormattingOptions) ([]TextEdit, error) {
+	if !c.Ready() {
+		return nil, nil
+	}
+	var result []TextEdit
+	if err := c.call(ctx, "textDocument/formatting", DocumentFormattingParams{
+		TextDocument: TextDocumentIdentifier{URI: uri},
+		Options:      opts,
+	}, &result); err != nil {
+		// Many servers don't support formatting — treat as non-fatal
+		return nil, nil
+	}
+	return result, nil
+}
+
+// WillRenameFiles sends a workspace/willRenameFiles request to the server
+// and returns the workspace edit response (which may contain refactoring changes).
+func (c *Client) WillRenameFiles(ctx context.Context, files []FileRename) (*WorkspaceEdit, error) {
+	var result WorkspaceEdit
+	if err := c.call(ctx, "workspace/willRenameFiles", RenameFilesParams{Files: files}, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// DidRenameFiles notifies the server that files were renamed.
+func (c *Client) DidRenameFiles(ctx context.Context, files []FileRename) error {
+	return c.notify(ctx, "workspace/didRenameFiles", RenameFilesParams{Files: files})
 }
 
 func (c *Client) Definition(ctx context.Context, uri string, pos Position) ([]Location, error) {
@@ -337,7 +422,36 @@ func (c *Client) WorkspaceSymbols(ctx context.Context, query string) ([]SymbolIn
 func (c *Client) Diagnostics(uri string) []Diagnostic {
 	c.diagMu.RLock()
 	defer c.diagMu.RUnlock()
-	return c.diags[normalizeURI(uri)]
+	return dedupeAndSortDiagnostics(c.diags[normalizeURI(uri)])
+}
+
+// dedupeAndSortDiagnostics removes duplicates and sorts by severity then position.
+func dedupeAndSortDiagnostics(diags []Diagnostic) []Diagnostic {
+	if len(diags) <= 1 {
+		return diags
+	}
+
+	seen := make(map[string]bool)
+	result := make([]Diagnostic, 0, len(diags))
+	for _, d := range diags {
+		key := fmt.Sprintf("%d:%d-%d:%d:%s", d.Range.Start.Line, d.Range.Start.Character, d.Range.End.Line, d.Range.End.Character, d.Message)
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, d)
+		}
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Severity != result[j].Severity {
+			return result[i].Severity < result[j].Severity
+		}
+		if result[i].Range.Start.Line != result[j].Range.Start.Line {
+			return result[i].Range.Start.Line < result[j].Range.Start.Line
+		}
+		return result[i].Range.Start.Character < result[j].Range.Start.Character
+	})
+
+	return result
 }
 
 func (c *Client) Ready() bool {
@@ -346,10 +460,52 @@ func (c *Client) Ready() bool {
 	return c.ready
 }
 
+func (c *Client) DiagSeq(uri string) int64 {
+	c.diagMu.RLock()
+	defer c.diagMu.RUnlock()
+	return c.diagSeq[normalizeURI(uri)]
+}
+
+// ClearDiagnostics removes cached diagnostics for a URI.
+// Call before DidChange to avoid accepting stale diagnostics.
+func (c *Client) ClearDiagnostics(uri string) {
+	c.diagMu.Lock()
+	delete(c.diags, normalizeURI(uri))
+	c.diagMu.Unlock()
+}
+
+func (c *Client) WaitForDiagUpdate(ctx context.Context, uri string, afterSeq int64, timeout time.Duration) bool {
+	normURI := normalizeURI(uri)
+	deadline := time.Now().Add(timeout)
+	for {
+		c.diagMu.RLock()
+		cur := c.diagSeq[normURI]
+		c.diagMu.RUnlock()
+		if cur > afterSeq {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		default:
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+}
+
 // readLoop runs in a background goroutine, reading JSON-RPC messages
 // and dispatching responses to pending callers or caching diagnostics.
 func (c *Client) readLoop() {
 	defer func() {
+		exitCode := -1
+		if c.cmd.ProcessState != nil {
+			exitCode = c.cmd.ProcessState.ExitCode()
+		}
+		errMsg := fmt.Sprintf("lsp %s: connection closed (exit code %d)", c.name, exitCode)
+
 		c.mu.Lock()
 		pending := make(map[int64]chan *jsonRPCResponse, len(c.pending))
 		for id, ch := range c.pending {
@@ -358,8 +514,14 @@ func (c *Client) readLoop() {
 		}
 		c.mu.Unlock()
 		for id, ch := range pending {
-			ch <- &jsonRPCResponse{ID: id, Error: &jsonRPCError{Code: -32000, Message: "connection closed"}}
+			ch <- &jsonRPCResponse{ID: id, Error: &jsonRPCError{Code: -32000, Message: errMsg}}
 		}
+		c.shutdownOnce.Do(func() {
+			close(c.done)
+			if !c.shutdownRequested.Load() {
+				c.cmd.Process.Kill()
+			}
+		})
 	}()
 
 	for {
@@ -396,24 +558,134 @@ func (c *Client) readLoop() {
 			continue
 		}
 
-		if envelope.Method == "textDocument/publishDiagnostics" && envelope.Params != nil {
-			var params PublishDiagnosticsParams
-			if json.Unmarshal(envelope.Params, &params) == nil {
-			lspLog("publishDiagnostics: raw_uri=%s diag_count=%d", params.URI, len(params.Diagnostics))
-				uri := normalizeURI(params.URI)
-				lspLog("publishDiagnostics: normalized_uri=%s", uri)
-				c.diagMu.Lock()
-				if len(params.Diagnostics) == 0 {
-					delete(c.diags, uri)
-				} else {
-					c.diags[uri] = params.Diagnostics
-				}
-				c.diagMu.Unlock()
-			}
+		// Server-initiated request — route to appropriate handler
+		if envelope.ID != 0 && envelope.Method != "" {
+			c.handleServerRequest(envelope.ID, envelope.Method, envelope.Params)
+			continue
+		}
+
+		// Server notification — route to appropriate handler
+		if envelope.Method != "" && envelope.ID == 0 {
+			c.handleServerNotification(envelope.Method, envelope.Params)
 		}
 	}
 }
 
+// handleServerRequest responds to server-initiated requests.
+func (c *Client) handleServerRequest(id int64, method string, params json.RawMessage) {
+	lspLog("recv server request: method=%s id=%d", method, id)
+
+	switch method {
+	case "workspace/configuration":
+		var cfgReq struct {
+			Items []struct {
+				Section string `json:"section"`
+			} `json:"items"`
+		}
+		result := make([]any, 0)
+		if json.Unmarshal(params, &cfgReq) == nil && c.settings != nil {
+			for _, item := range cfgReq.Items {
+				if item.Section == "" {
+					result = append(result, c.settings)
+				} else {
+					result = append(result, c.settings[item.Section])
+				}
+			}
+		}
+		c.sendResponse(id, result, nil)
+	case "workspace/applyEdit":
+		var editReq struct {
+			Edit WorkspaceEdit `json:"edit"`
+		}
+		if json.Unmarshal(params, &editReq) == nil {
+			_, err := ApplyWorkspaceEdit(editReq.Edit)
+			if err != nil {
+				c.sendResponse(id, map[string]any{"applied": false, "failureReason": err.Error()}, nil)
+				return
+			}
+			c.sendResponse(id, map[string]any{"applied": true}, nil)
+			return
+		}
+		c.sendResponse(id, map[string]any{"applied": false, "failureReason": "invalid params"}, nil)
+	case "window/workDoneProgress/create":
+		c.sendResponse(id, nil, nil)
+	default:
+		c.sendResponse(id, nil, &jsonRPCError{Code: -32601, Message: fmt.Sprintf("Method not found: %s", method)})
+	}
+}
+
+// handleServerNotification processes server notifications.
+func (c *Client) handleServerNotification(method string, params json.RawMessage) {
+	switch method {
+	case "textDocument/publishDiagnostics":
+		var diagParams PublishDiagnosticsParams
+		if json.Unmarshal(params, &diagParams) == nil {
+			lspLog("publishDiagnostics: raw_uri=%s diag_count=%d", diagParams.URI, len(diagParams.Diagnostics))
+			uri := normalizeURI(diagParams.URI)
+			lspLog("publishDiagnostics: normalized_uri=%s", uri)
+			c.diagMu.Lock()
+			if len(diagParams.Diagnostics) == 0 {
+				delete(c.diags, uri)
+			} else {
+				c.diags[uri] = diagParams.Diagnostics
+			}
+			c.diagSeq[uri]++
+			c.diagMu.Unlock()
+		}
+	case "$/progress":
+		var progressParams struct {
+			Token any    `json:"token"`
+			Value struct {
+				Kind string `json:"kind"`
+			} `json:"value"`
+		}
+		if json.Unmarshal(params, &progressParams) == nil {
+			c.progressMu.Lock()
+			switch progressParams.Value.Kind {
+			case "begin":
+				c.activeProgressTokens[progressParams.Token] = struct{}{}
+			case "end":
+				delete(c.activeProgressTokens, progressParams.Token)
+				if len(c.activeProgressTokens) == 0 {
+					c.projectLoadedOnce.Do(func() {
+						close(c.projectLoadedChan)
+					})
+				}
+			}
+			c.progressMu.Unlock()
+		}
+	}
+}
+
+// sendResponse writes a JSON-RPC response to the server.
+func (c *Client) sendResponse(id int64, result any, err *jsonRPCError) {
+	resp := jsonRPCResponse{JSONRPC: "2.0", ID: id, Error: err}
+	if err == nil && result != nil {
+		raw, marshalErr := json.Marshal(result)
+		if marshalErr == nil {
+			resp.Result = raw
+		}
+	}
+	if err == nil && result == nil {
+		resp.Result = json.RawMessage("null")
+	}
+	_ = c.transport.WriteMessage(resp)
+}
+
+// WaitForProjectLoaded blocks until the server reports project loading
+// is complete (via $/progress end), or until the timeout expires.
+func (c *Client) WaitForProjectLoaded(ctx context.Context, timeout time.Duration) {
+	select {
+	case <-c.projectLoadedChan:
+		return
+	case <-ctx.Done():
+		return
+	case <-time.After(timeout):
+		c.projectLoadedOnce.Do(func() {
+			close(c.projectLoadedChan)
+		})
+	}
+}
 func (c *Client) call(ctx context.Context, method string, params any, result any) error {
 	id := c.nextID.Add(1)
 	ch := make(chan *jsonRPCResponse, 1)
@@ -434,6 +706,7 @@ func (c *Client) call(ctx context.Context, method string, params any, result any
 
 	select {
 	case <-ctx.Done():
+		_ = c.notify(context.Background(), "$/cancelRequest", map[string]any{"id": id})
 		return ctx.Err()
 	case resp := <-ch:
 		if resp.Error != nil {
@@ -516,9 +789,11 @@ func fileToURI(path string) string {
 		abs = path
 	}
 	abs = filepath.ToSlash(abs)
-	// Ensure leading slash for non-Windows or already-slashed paths
 	if !strings.HasPrefix(abs, "/") {
 		abs = "/" + abs
+	}
+	if runtime.GOOS == "windows" && len(abs) > 2 && abs[0] == '/' && abs[2] == ':' {
+		abs = "/" + strings.ToLower(abs[1:2]) + abs[2:]
 	}
 	u := &url.URL{Scheme: "file", Path: abs}
 	return u.String()

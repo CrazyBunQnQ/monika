@@ -176,6 +176,21 @@ func (ts *taskStore) Update(sessionID, taskID string, fields tool.TaskUpdateFiel
 		t.BlockedBy = append(t.BlockedBy, fields.AddBlockedBy...)
 	}
 
+	allDone := true
+	for _, t := range list {
+		if t.Status != "completed" && t.Status != "cancelled" {
+			allDone = false
+			break
+		}
+	}
+	if allDone {
+		delete(ts.tasks, sessionID)
+		ts.mu.Unlock()
+		if ts.onChange != nil {
+			ts.onChange(sessionID, nil)
+		}
+		return nil
+	}
 	listCopy := make([]tool.Task, len(list))
 	for i := range list {
 		listCopy[i] = list[i]

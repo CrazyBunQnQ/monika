@@ -57,12 +57,11 @@ func WireLSPHooks(r *tool.ToolRegistry) {
 		}
 
 		// Wait for LSP server to be ready before querying diagnostics.
-		// On first edit after startup, gopls may still be initializing.
 		if checker, ok := lspTool.(interface{ ReadyForFile(context.Context, string) bool }); ok {
 			deadline := time.Now().Add(10 * time.Second)
 			for !checker.ReadyForFile(ctx, filePath) {
 				if time.Now().After(deadline) {
-					return "" // LSP server not ready after timeout
+					return ""
 				}
 				select {
 				case <-ctx.Done():
@@ -72,29 +71,20 @@ func WireLSPHooks(r *tool.ToolRegistry) {
 			}
 		}
 
-		// Poll for diagnostics with retry. On first edit after LSP startup,
-		// diagnostics may not be published yet, so we retry a few times.
-		var diagResult tool.ExecutionResult
-		var err error
-		diagDeadline := time.Now().Add(3 * time.Second)
-		for {
-			diagArgs, _ := json.Marshal(map[string]string{"action": "diagnostics", "file": filePath})
-			diagResult, err = lspTool.Execute(ctx, diagArgs)
-			if err != nil {
-				return fmt.Sprintf("\n\n--- LSP Diagnostics ---\n(error running diagnostics: %s)", err)
-			}
-			if diagResult.IsError {
-				return fmt.Sprintf("\n\n--- LSP Diagnostics ---\n(error: %s)", diagResult.Content)
-			}
-			// Got meaningful diagnostics or timed out
-			if diagResult.Content != "" || time.Now().After(diagDeadline) {
-				break
-			}
-			select {
-			case <-ctx.Done():
-				return ""
-			case <-time.After(200 * time.Millisecond):
-			}
+		// Optional: format file via LSP before diagnostics
+		if formatter, ok := lspTool.(interface{ FormatContent(context.Context, string) (string, error) }); ok {
+			formatter.FormatContent(ctx, filePath)
+		}
+
+		// Run diagnostics. The action internally waits for the server
+		// to publish updated diagnostics before returning.
+		diagArgs, _ := json.Marshal(map[string]string{"action": "diagnostics", "file": filePath})
+		diagResult, err := lspTool.Execute(ctx, diagArgs)
+		if err != nil {
+			return fmt.Sprintf("\n\n--- LSP Diagnostics ---\n(error running diagnostics: %s)", err)
+		}
+		if diagResult.IsError {
+			return fmt.Sprintf("\n\n--- LSP Diagnostics ---\n(error: %s)", diagResult.Content)
 		}
 
 		if diagResult.Content == "" || !strings.Contains(diagResult.Content, "Error") && !strings.Contains(diagResult.Content, "Warning") {
@@ -105,7 +95,6 @@ func WireLSPHooks(r *tool.ToolRegistry) {
 		sb.WriteString("\n\n--- LSP Diagnostics ---\n")
 		sb.WriteString(diagResult.Content)
 
-		// Step 2: If errors exist, fetch code actions for quick fixes
 		if strings.Contains(diagResult.Content, "Error") {
 			caArgs, _ := json.Marshal(map[string]string{"action": "code_actions", "file": filePath})
 			caResult, caErr := lspTool.Execute(ctx, caArgs)
@@ -149,8 +138,6 @@ func WireLSPHooks(r *tool.ToolRegistry) {
 		}
 	}
 }
-
-// LSPStatusPrompt returns a system prompt fragment describing available LSP servers.
 func LSPStatusPrompt(r *tool.ToolRegistry) string {
 	t, ok := r.Get("lsp")
 	if !ok {

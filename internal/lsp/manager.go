@@ -21,8 +21,9 @@ type LSPServerStatus struct {
 }
 
 type openFile struct {
-	version int
-	content string
+	version    int
+	content    string
+	serverName string
 }
 
 type managedClient struct {
@@ -56,6 +57,8 @@ func (m *Manager) Start() {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	go m.idleLoop(ctx)
+	// Warm up LSP servers in the background so first use is fast.
+	go m.Warmup(context.Background())
 }
 
 func (m *Manager) Stop() {
@@ -68,6 +71,7 @@ func (m *Manager) Stop() {
 		mc.client.Shutdown(context.Background())
 		delete(m.clients, name)
 	}
+	CloseLogFile()
 }
 
 func (m *Manager) ClientForFile(ctx context.Context, filePath string) (*Client, string, error) {
@@ -170,8 +174,9 @@ func (m *Manager) getOrStart(ctx context.Context, name string) (*Client, string,
 			m.mu.Unlock()
 			return mc.client, name, nil
 		}
-		// Client died; clean up and reconnect
+// Client died; clean up and reconnect
 		delete(m.clients, name)
+		m.clearOpenFiles(name)
 		m.mu.Unlock()
 		return m.startClient(ctx, name)
 	}
@@ -196,7 +201,7 @@ func (m *Manager) startClient(ctx context.Context, name string) (*Client, string
 		}
 	}
 
-	client, err := NewClient(ctx, cmd, args, m.workdir)
+	client, err := NewClient(ctx, name, cmd, args, m.workdir)
 	if err != nil {
 		return nil, "", fmt.Errorf("lsp: start %s: %w", name, err)
 	}
@@ -228,20 +233,35 @@ func (m *Manager) idleLoop(ctx context.Context) {
 }
 
 func (m *Manager) shutdownIdle() {
+	var toClose []*Client
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	now := time.Now()
 	for name, mc := range m.clients {
 		if now.Sub(mc.lastUsed) > idleTimeout {
-			mc.client.Shutdown(context.Background())
+			toClose = append(toClose, mc.client)
 			delete(m.clients, name)
+			m.clearOpenFiles(name)
+		}
+	}
+	m.mu.Unlock()
+
+	for _, c := range toClose {
+		c.Shutdown(context.Background())
+	}
+}
+
+
+func (m *Manager) clearOpenFiles(serverName string) {
+	for uri, of := range m.openFiles {
+		if of.serverName == serverName {
+			delete(m.openFiles, uri)
 		}
 	}
 }
 
 // EnsureFileOpen opens the file in the LSP server if not already open.
 // Returns the current file content and version.
-func (m *Manager) EnsureFileOpen(ctx context.Context, client *Client, filePath string) (string, int, error) {
+func (m *Manager) EnsureFileOpen(ctx context.Context, client *Client, filePath string, serverName string) (string, int, error) {
 	uri := fileToURI(filePath)
 
 	lk := m.fileLock(uri)
@@ -252,8 +272,13 @@ func (m *Manager) EnsureFileOpen(ctx context.Context, client *Client, filePath s
 	of, alreadyOpen := m.openFiles[uri]
 	m.mu.Unlock()
 
-	if alreadyOpen {
+	if alreadyOpen && of.serverName == serverName {
 		return of.content, of.version, nil
+	}
+
+	if alreadyOpen {
+		// Server changed (reconnect); stale entry, re-open
+		_ = client.DidClose(ctx, uri)
 	}
 
 	content, err := m.ReadFileContent(filePath)
@@ -274,7 +299,7 @@ func (m *Manager) EnsureFileOpen(ctx context.Context, client *Client, filePath s
 	}
 
 	m.mu.Lock()
-	m.openFiles[uri] = &openFile{version: 1, content: content}
+	m.openFiles[uri] = &openFile{version: 1, content: content, serverName: serverName}
 	m.mu.Unlock()
 
 	return content, 1, nil
@@ -307,10 +332,68 @@ func (m *Manager) SyncContent(ctx context.Context, client *Client, filePath stri
 	}
 
 	lspLog("SyncContent: uri=%s content_CHANGED sending didChange", uri)
+	client.ClearDiagnostics(uri)
 	of.version++
 	of.content = content
 
 	return client.DidChange(ctx, uri, of.version, content)
+}
+
+// EnsureAndSync atomically ensures the file is open in the LSP server and
+// synced with the current on-disk content. Returns true if content was
+// actually sent or updated to the server.
+func (m *Manager) EnsureAndSync(ctx context.Context, client *Client, filePath string, serverName string) (bool, error) {
+	uri := fileToURI(filePath)
+
+	lk := m.fileLock(uri)
+	lk.Lock()
+	defer lk.Unlock()
+
+	m.mu.Lock()
+	of, alreadyOpen := m.openFiles[uri]
+	m.mu.Unlock()
+
+	if alreadyOpen && of.serverName == serverName {
+		content, err := m.ReadFileContent(filePath)
+		if err != nil {
+			return false, err
+		}
+		if content == of.content {
+			return false, nil
+		}
+		of.version++
+		of.content = content
+		client.ClearDiagnostics(uri)
+		return true, client.DidChange(ctx, uri, of.version, content)
+	}
+
+	if alreadyOpen {
+		_ = client.DidClose(ctx, uri)
+	}
+
+	content, err := m.ReadFileContent(filePath)
+	if err != nil {
+		return false, err
+	}
+
+	ext := strings.ToLower(filepath.Ext(filePath))
+	langID := extToLanguageID(ext)
+
+	client.ClearDiagnostics(uri)
+	if err := client.DidOpen(ctx, TextDocumentItem{
+		URI:        uri,
+		LanguageID: langID,
+		Version:    1,
+		Text:       content,
+	}); err != nil {
+		return false, fmt.Errorf("didOpen failed: %w", err)
+	}
+
+	m.mu.Lock()
+	m.openFiles[uri] = &openFile{version: 1, content: content, serverName: serverName}
+	m.mu.Unlock()
+
+	return true, nil
 }
 
 // NotifySaved sends didSave for a file if it is currently open.
@@ -363,4 +446,151 @@ func (m *Manager) ReadFileContent(filePath string) (string, error) {
 		return "", fmt.Errorf("lsp: read %s: %w", filePath, err)
 	}
 	return string(data), nil
+}
+
+// Warmup starts all detected LSP servers in parallel.
+// Servers that fail to start will be lazily retried on first use.
+func (m *Manager) Warmup(ctx context.Context) {
+	ctx2, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	for name := range m.servers {
+		wg.Add(1)
+		go func(serverName string) {
+			defer wg.Done()
+			_, _, _ = m.getOrStart(ctx2, serverName)
+		}(name)
+	}
+	wg.Wait()
+}
+
+// SyncContentFromMemory sends didChange (or didOpen) with the provided content
+// without reading from disk. Use this when the caller already holds the file
+// content (e.g. after a file edit).
+func (m *Manager) SyncContentFromMemory(ctx context.Context, client *Client, filePath string, content string, serverName string) error {
+	uri := fileToURI(filePath)
+
+	lk := m.fileLock(uri)
+	lk.Lock()
+	defer lk.Unlock()
+
+	m.mu.Lock()
+	of, alreadyOpen := m.openFiles[uri]
+	m.mu.Unlock()
+
+	if alreadyOpen {
+		// Only skip if the same server; otherwise treat as new open
+		if of.serverName == serverName {
+			client.ClearDiagnostics(uri)
+			of.version++
+			of.content = content
+			return client.DidChange(ctx, uri, of.version, content)
+		}
+		_ = client.DidClose(ctx, uri)
+	}
+
+	ext := strings.ToLower(filepath.Ext(filePath))
+	langID := extToLanguageID(ext)
+
+	client.ClearDiagnostics(uri)
+	if err := client.DidOpen(ctx, TextDocumentItem{
+		URI:        uri,
+		LanguageID: langID,
+		Version:    1,
+		Text:       content,
+	}); err != nil {
+		return fmt.Errorf("didOpen failed: %w", err)
+	}
+
+	m.mu.Lock()
+	m.openFiles[uri] = &openFile{version: 1, content: content, serverName: serverName}
+	m.mu.Unlock()
+
+	return nil
+}
+
+// WriteThroughOptions controls the WriteThrough pipeline behavior.
+type WriteThroughOptions struct {
+	FormatOnWrite    bool
+	DiagnosticsOnEdit bool
+}
+
+// FormatContent sends a textDocument/formatting request, applies the edits,
+// and writes the formatted content back to disk. Returns the formatted content.
+func (m *Manager) FormatContent(ctx context.Context, client *Client, filePath string) (string, error) {
+	uri := fileToURI(filePath)
+
+	edits, err := client.Formatting(ctx, uri, FormattingOptions{TabSize: 4, InsertSpaces: true})
+	if err != nil || len(edits) == 0 {
+		// Read original content if nothing changed
+		content, err := m.ReadFileContent(filePath)
+		if err != nil {
+			return "", err
+		}
+		return content, nil
+	}
+
+	content, err := m.ReadFileContent(filePath)
+	if err != nil {
+		return "", err
+	}
+
+	newContent, err := ApplyTextEditsToString(content, edits)
+	if err != nil {
+		return content, nil // fall back to original
+	}
+
+	if newContent == content {
+		return content, nil
+	}
+
+	if err := os.WriteFile(filePath, []byte(newContent), 0o644); err != nil {
+		return content, nil // fall back to original if write fails
+	}
+
+	return newContent, nil
+}
+
+// WriteThrough runs the full LSP writethrough pipeline:
+// 1. Sync content to LSP (didOpen/didChange)
+// 2. Optionally format via LSP and write back to disk
+// 3. Notify server of save (didSave)
+// 4. Optionally wait for fresh diagnostics
+// Returns the final content and any diagnostics text.
+func (m *Manager) WriteThrough(ctx context.Context, client *Client, filePath string, serverName string, content string, opts WriteThroughOptions) (string, string) {
+	uri := fileToURI(filePath)
+	beforeDiagSeq := client.DiagSeq(uri)
+
+	// Step 1: Sync content (in-memory, no disk read)
+	if err := m.SyncContentFromMemory(ctx, client, filePath, content, serverName); err != nil {
+		lspLog("WriteThrough: sync failed: %v", err)
+	}
+
+	finalContent := content
+
+	// Step 2: Optional format
+	if opts.FormatOnWrite {
+		formatted, err := m.FormatContent(ctx, client, filePath)
+		if err == nil && formatted != content {
+			// Content changed — re-sync with formatted content
+			finalContent = formatted
+			_ = m.SyncContentFromMemory(ctx, client, filePath, formatted, serverName)
+		}
+	}
+
+	// Step 3: Write to disk
+	if err := os.WriteFile(filePath, []byte(finalContent), 0o644); err != nil {
+		lspLog("WriteThrough: write failed: %v", err)
+	}
+
+	// Step 4: Notify saved
+	_ = m.NotifySaved(ctx, client, filePath)
+
+	// Step 5: Wait for diagnostics
+	if opts.DiagnosticsOnEdit {
+		client.WaitForDiagUpdate(ctx, uri, beforeDiagSeq, 3*time.Second)
+	}
+
+	return finalContent, ""
 }

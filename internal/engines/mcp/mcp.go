@@ -147,6 +147,11 @@ type serverConnection struct {
 	enc    *json.Encoder
 	dec    *json.Decoder
 	nextID int
+	meta   engine.MCPServerMeta
+}
+
+func (c *serverConnection) ServerMeta() engine.MCPServerMeta {
+	return c.meta
 }
 
 func (c *serverConnection) ListTools(ctx context.Context) ([]engine.MCPTool, error) {
@@ -168,7 +173,7 @@ func (c *serverConnection) ListTools(ctx context.Context) ([]engine.MCPTool, err
 		return nil, err
 	}
 
-	return resp.Result.Tools, nil
+	return convertRawTools(resp.Result.Tools), nil
 }
 
 func (c *serverConnection) CallTool(ctx context.Context, name string, args json.RawMessage) (json.RawMessage, error) {
@@ -210,6 +215,18 @@ type jsonRPCRequest struct {
 	Params  json.RawMessage `json:"params,omitempty"`
 }
 
+// initializeResponse represents the JSON-RPC response from an MCP initialize call.
+type initializeResponse struct {
+	Result struct {
+		ProtocolVersion string `json:"protocolVersion"`
+		ServerInfo      struct {
+			Name    string `json:"name"`
+			Version string `json:"version"`
+		} `json:"serverInfo"`
+		Instructions string `json:"instructions"`
+	} `json:"result"`
+}
+
 func (c *serverConnection) initialize() error {
 	c.nextID++
 	initParams, _ := json.Marshal(map[string]any{
@@ -229,10 +246,18 @@ func (c *serverConnection) initialize() error {
 	if err := c.enc.Encode(req); err != nil {
 		return fmt.Errorf("send initialize: %w", err)
 	}
-	// Read response (we don't need to parse it, just consume it)
-	var raw json.RawMessage
-	if err := c.dec.Decode(&raw); err != nil {
+
+	var resp initializeResponse
+	if err := c.dec.Decode(&resp); err != nil {
 		return fmt.Errorf("read initialize response: %w", err)
+	}
+
+	// Store server metadata.
+	c.meta = engine.MCPServerMeta{
+		ID:           c.id,
+		Name:         resp.Result.ServerInfo.Name,
+		Version:      resp.Result.ServerInfo.Version,
+		Instructions: resp.Result.Instructions,
 	}
 
 	// Send initialized notification (no ID)
@@ -247,9 +272,45 @@ func (c *serverConnection) initialize() error {
 	return nil
 }
 
+// rawMCPTool captures all fields from the MCP tools/list response.
+type rawMCPTool struct {
+	Name        string          `json:"name"`
+	Title       string          `json:"title"`
+	Description string          `json:"description"`
+	InputSchema json.RawMessage `json:"inputSchema"`
+	Annotations *struct {
+		ReadOnly    bool `json:"readOnlyHint"`
+		Destructive bool `json:"destructiveHint"`
+		Idempotent  bool `json:"idempotentHint"`
+		OpenWorld   bool `json:"openWorldHint"`
+	} `json:"annotations"`
+}
+
+func convertRawTools(raw []rawMCPTool) []engine.MCPTool {
+	out := make([]engine.MCPTool, len(raw))
+	for i, r := range raw {
+		t := engine.MCPTool{
+			Name:        r.Name,
+			Title:       r.Title,
+			Description: r.Description,
+			InputSchema: r.InputSchema,
+		}
+		if r.Annotations != nil {
+			t.Annotations = engine.MCPAnnotations{
+				ReadOnly:    r.Annotations.ReadOnly,
+				Destructive: r.Annotations.Destructive,
+				Idempotent:  r.Annotations.Idempotent,
+				OpenWorld:   r.Annotations.OpenWorld,
+			}
+		}
+		out[i] = t
+	}
+	return out
+}
+
 type toolsListResponse struct {
 	Result struct {
-		Tools []engine.MCPTool `json:"tools"`
+		Tools []rawMCPTool `json:"tools"`
 	} `json:"result"`
 }
 

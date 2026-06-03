@@ -1614,8 +1614,11 @@ export function setupWailsEvents() {
       case 'task_updated':
         if (data.tasks) {
           store.setSessionTasks(sid, data.tasks as TaskItem[])
+        } else {
+          store.setSessionTasks(sid, [])
         }
         break
+
 
       case 'compaction':
         if (data.compaction) {

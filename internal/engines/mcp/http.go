@@ -25,6 +25,7 @@ type httpConnection struct {
 	sseResp   *http.Response
 	sseDone   chan struct{}
 	nextID    int
+	meta      engine.MCPServerMeta
 }
 
 func newHTTPConnection(ctx context.Context, config engine.MCPServerConfig) (*httpConnection, error) {
@@ -43,6 +44,10 @@ func newHTTPConnection(ctx context.Context, config engine.MCPServerConfig) (*htt
 		return nil, err
 	}
 	return conn, nil
+}
+
+func (c *httpConnection) ServerMeta() engine.MCPServerMeta {
+	return c.meta
 }
 
 // initStreamableHTTP uses the MCP Streamable HTTP transport:
@@ -70,8 +75,23 @@ func (c *httpConnection) initialize(ctx context.Context) error {
 		Method:  "initialize",
 		Params:  initParams,
 	}
-	_, err := c.postRPC(ctx, req)
-	return err
+	result, err := c.postRPC(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	// Parse server metadata from initialize response.
+	var initResp initializeResponse
+	if err := json.Unmarshal(result, &initResp.Result); err == nil {
+		c.meta = engine.MCPServerMeta{
+			ID:           c.id,
+			Name:         initResp.Result.ServerInfo.Name,
+			Version:      initResp.Result.ServerInfo.Version,
+			Instructions: initResp.Result.Instructions,
+		}
+	}
+
+	return nil
 }
 
 func (c *httpConnection) sendInitialized(ctx context.Context) error {
@@ -219,7 +239,7 @@ func (c *httpConnection) ListTools(ctx context.Context) ([]engine.MCPTool, error
 	if err := json.Unmarshal(result, &resp.Result); err != nil {
 		return nil, fmt.Errorf("mcp: decode tools list: %w", err)
 	}
-	return resp.Result.Tools, nil
+	return convertRawTools(resp.Result.Tools), nil
 }
 
 func (c *httpConnection) CallTool(ctx context.Context, name string, args json.RawMessage) (json.RawMessage, error) {
