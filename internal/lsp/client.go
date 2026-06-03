@@ -457,7 +457,7 @@ func (c *Client) readLoop() {
 				if len(params.Diagnostics) == 0 {
 					delete(c.diags, uri)
 				} else {
-				c.diags[uri] = params.Diagnostics
+					c.diags[uri] = params.Diagnostics
 				}
 				c.diagSeq[uri]++
 				c.diagMu.Unlock()
