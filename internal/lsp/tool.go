@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-
+	"time"
 	"monika/internal/tool"
 )
 
@@ -132,15 +132,15 @@ func (t *lspTool) Execute(ctx context.Context, args json.RawMessage) (tool.Execu
 	uri := fileToURI(filePath)
 	lspLog("fileToURI: filePath=%s uri=%s", filePath, uri)
 
-	_, _, err = t.manager.EnsureFileOpen(ctx, client, filePath, serverName)
-	if err != nil {
-		lspLog("EnsureFileOpen error: %v", err)
-		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
+	var beforeDiagSeq int64
+	if params.Action == "diagnostics" {
+		beforeDiagSeq = client.DiagSeq(uri)
 	}
 
-	if syncErr := t.manager.SyncContent(ctx, client, filePath); syncErr != nil {
-		lspLog("SyncContent error: %v", syncErr)
-		return tool.ExecutionResult{Content: syncErr.Error(), IsError: true}, nil
+	changed, err := t.manager.EnsureAndSync(ctx, client, filePath, serverName)
+	if err != nil {
+		lspLog("EnsureAndSync error: %v", err)
+		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 	}
 	pos := Position{Line: params.Line, Character: params.Character}
 
@@ -150,6 +150,9 @@ func (t *lspTool) Execute(ctx context.Context, args json.RawMessage) (tool.Execu
 		case <-ctx.Done():
 			return tool.ExecutionResult{Content: ctx.Err().Error(), IsError: true}, nil
 		default:
+		}
+		if changed {
+			client.WaitForDiagUpdate(ctx, uri, beforeDiagSeq, 3*time.Second)
 		}
 		lspLog("diagnostics action: uri=%s", uri)
 		normURI := normalizeURI(uri)

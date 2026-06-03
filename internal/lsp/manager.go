@@ -336,6 +336,61 @@ func (m *Manager) SyncContent(ctx context.Context, client *Client, filePath stri
 	return client.DidChange(ctx, uri, of.version, content)
 }
 
+// EnsureAndSync atomically ensures the file is open in the LSP server and
+// synced with the current on-disk content. Returns true if content was
+// actually sent or updated to the server.
+func (m *Manager) EnsureAndSync(ctx context.Context, client *Client, filePath string, serverName string) (bool, error) {
+	uri := fileToURI(filePath)
+
+	lk := m.fileLock(uri)
+	lk.Lock()
+	defer lk.Unlock()
+
+	m.mu.Lock()
+	of, alreadyOpen := m.openFiles[uri]
+	m.mu.Unlock()
+
+	if alreadyOpen && of.serverName == serverName {
+		content, err := m.ReadFileContent(filePath)
+		if err != nil {
+			return false, err
+		}
+		if content == of.content {
+			return false, nil
+		}
+		of.version++
+		of.content = content
+		return true, client.DidChange(ctx, uri, of.version, content)
+	}
+
+	if alreadyOpen {
+		_ = client.DidClose(ctx, uri)
+	}
+
+	content, err := m.ReadFileContent(filePath)
+	if err != nil {
+		return false, err
+	}
+
+	ext := strings.ToLower(filepath.Ext(filePath))
+	langID := extToLanguageID(ext)
+
+	if err := client.DidOpen(ctx, TextDocumentItem{
+		URI:        uri,
+		LanguageID: langID,
+		Version:    1,
+		Text:       content,
+	}); err != nil {
+		return false, fmt.Errorf("didOpen failed: %w", err)
+	}
+
+	m.mu.Lock()
+	m.openFiles[uri] = &openFile{version: 1, content: content, serverName: serverName}
+	m.mu.Unlock()
+
+	return true, nil
+}
+
 // NotifySaved sends didSave for a file if it is currently open.
 func (m *Manager) NotifySaved(ctx context.Context, client *Client, filePath string) error {
 	uri := fileToURI(filePath)

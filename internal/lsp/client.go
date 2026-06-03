@@ -58,6 +58,7 @@ type Client struct {
 	mu           sync.Mutex
 	pending      map[int64]chan *jsonRPCResponse
 	diags        map[string][]Diagnostic
+	diagSeq      map[string]int64
 	diagMu       sync.RWMutex
 	serverCaps   ServerCapabilities
 	ready        bool
@@ -93,6 +94,7 @@ func NewClient(ctx context.Context, command string, args []string, workdir strin
 		cmd:       cmd,
 		pending:   make(map[int64]chan *jsonRPCResponse),
 		diags:     make(map[string][]Diagnostic),
+		diagSeq:   make(map[string]int64),
 		done:      make(chan struct{}),
 	}
 
@@ -352,6 +354,34 @@ func (c *Client) Ready() bool {
 	return c.ready
 }
 
+func (c *Client) DiagSeq(uri string) int64 {
+	c.diagMu.RLock()
+	defer c.diagMu.RUnlock()
+	return c.diagSeq[normalizeURI(uri)]
+}
+
+func (c *Client) WaitForDiagUpdate(ctx context.Context, uri string, afterSeq int64, timeout time.Duration) bool {
+	normURI := normalizeURI(uri)
+	deadline := time.Now().Add(timeout)
+	for {
+		c.diagMu.RLock()
+		cur := c.diagSeq[normURI]
+		c.diagMu.RUnlock()
+		if cur > afterSeq {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		default:
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+}
+
 // readLoop runs in a background goroutine, reading JSON-RPC messages
 // and dispatching responses to pending callers or caching diagnostics.
 func (c *Client) readLoop() {
@@ -427,8 +457,9 @@ func (c *Client) readLoop() {
 				if len(params.Diagnostics) == 0 {
 					delete(c.diags, uri)
 				} else {
-					c.diags[uri] = params.Diagnostics
+				c.diags[uri] = params.Diagnostics
 				}
+				c.diagSeq[uri]++
 				c.diagMu.Unlock()
 			}
 		}
