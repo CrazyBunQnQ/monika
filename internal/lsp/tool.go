@@ -1,4 +1,4 @@
-﻿package lsp
+package lsp
 
 import (
 	"context"
@@ -40,12 +40,16 @@ func (t *LSPTool) WriteThrough(ctx context.Context, filePath string, content str
 
 // FormatContent formats a file via LSP and writes the formatted result to disk.
 func (t *LSPTool) FormatContent(ctx context.Context, filePath string) (string, error) {
-	client, _, err := t.manager.ClientForFile(ctx, filePath)
+	client, serverName, err := t.manager.ClientForFile(ctx, filePath)
 	if err != nil {
+		return "", err
+	}
+	if _, err := t.manager.EnsureAndSync(ctx, client, filePath, serverName); err != nil {
 		return "", err
 	}
 	return t.manager.FormatContent(ctx, client, filePath)
 }
+
 
 func (t *LSPTool) Name() string { return "lsp" }
 
@@ -62,7 +66,7 @@ Actions:
 - symbols: Get document symbols (outline) for a file. **Call this when first exploring a complex file to quickly understand its structure (types, functions, methods, fields).**
 - code_actions: List available code actions (quick fixes, refactoring) for a position or range. **Call this when diagnostics show errors to find auto-fixes like adding missing imports, creating stub functions, or correcting signatures.**
 - execute_code_action: Execute a specific code action by title. Use after listing available code actions with code_actions.
-   - rename: Rename a symbol at a position across the workspace. **Prefer this over manual find-and-replace across files — it correctly handles all references, including cross-file, and avoids false matches.**
+- rename: Rename a symbol at a position across the workspace. **Prefer this over manual find-and-replace across files — it correctly handles all references, including cross-file, and avoids false matches.**
 - status: Show configured and running LSP servers.
 
 The file path must be absolute or relative to the project directory.
@@ -353,7 +357,7 @@ func (t *LSPTool) Execute(ctx context.Context, args json.RawMessage) (tool.Execu
 
 	default:
 		return tool.ExecutionResult{
-			Content: fmt.Sprintf("unknown action: %s (supported: diagnostics, definition, type_definition, implementation, references, hover, symbols, code_actions, execute_code_action, rename, status)", params.Action),
+			Content: fmt.Sprintf("unknown action: %s (supported: diagnostics, definition, type_definition, implementation, references, hover, symbols, code_actions, execute_code_action, rename, rename_file, status)", params.Action),
 			IsError: true,
 		}, nil
 	}
@@ -410,7 +414,7 @@ func (t *LSPTool) handleRenameFile(ctx context.Context, srcPath, dstPath string)
 	}
 	t.manager.mu.Unlock()
 
-	return tool.ExecutionResult{Content: fmt.Sprintf("Renamed %s 鈫?%s", srcPath, dstPath)}, nil
+	return tool.ExecutionResult{Content: fmt.Sprintf("Renamed %s →%s", srcPath, dstPath)}, nil
 }
 
 func formatCodeActions(actions []CodeAction) string {

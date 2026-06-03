@@ -65,7 +65,8 @@ type Client struct {
 	serverCaps   ServerCapabilities
 	settings     map[string]any
 	ready        bool
-	shutdownOnce sync.Once
+	shutdownRequested atomic.Bool
+	shutdownOnce      sync.Once
 	done         chan struct{}
 
 	// $/progress tracking
@@ -189,6 +190,7 @@ func (c *Client) Initialize(ctx context.Context, rootURI string, initOptions any
 }
 
 func (c *Client) Shutdown(ctx context.Context) {
+	c.shutdownRequested.Store(true)
 	c.shutdownOnce.Do(func() {
 		ctx2, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
@@ -516,7 +518,9 @@ func (c *Client) readLoop() {
 		}
 		c.shutdownOnce.Do(func() {
 			close(c.done)
-			c.cmd.Process.Kill()
+			if !c.shutdownRequested.Load() {
+				c.cmd.Process.Kill()
+			}
 		})
 	}()
 
