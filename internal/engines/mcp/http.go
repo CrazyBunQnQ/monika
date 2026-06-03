@@ -81,13 +81,21 @@ func (c *httpConnection) initialize(ctx context.Context) error {
 	}
 
 	// Parse server metadata from initialize response.
-	var initResp initializeResponse
-	if err := json.Unmarshal(result, &initResp.Result); err == nil {
+	// postRPC already extracts the JSON-RPC result envelope.
+	var initResp struct {
+		ProtocolVersion string `json:"protocolVersion"`
+		ServerInfo      struct {
+			Name    string `json:"name"`
+			Version string `json:"version"`
+		} `json:"serverInfo"`
+		Instructions string `json:"instructions"`
+	}
+	if err := json.Unmarshal(result, &initResp); err == nil {
 		c.meta = engine.MCPServerMeta{
 			ID:           c.id,
-			Name:         initResp.Result.ServerInfo.Name,
-			Version:      initResp.Result.ServerInfo.Version,
-			Instructions: initResp.Result.Instructions,
+			Name:         initResp.ServerInfo.Name,
+			Version:      initResp.ServerInfo.Version,
+			Instructions: initResp.Instructions,
 		}
 	}
 
@@ -170,6 +178,9 @@ func (c *httpConnection) postRPC(ctx context.Context, req jsonRPCRequest) (json.
 	if rpcResp.Error != nil {
 		return nil, fmt.Errorf("mcp: RPC error %d: %s", rpcResp.Error.Code, rpcResp.Error.Message)
 	}
+	if len(rpcResp.Result) == 0 {
+		return nil, fmt.Errorf("mcp: empty result in response (body: %s)", string(respBody))
+	}
 	return rpcResp.Result, nil
 }
 
@@ -211,6 +222,9 @@ func parseSSEResponse(data []byte, requestID int) (json.RawMessage, error) {
 				if rpcResp.Error != nil {
 					return nil, fmt.Errorf("mcp: RPC error %d: %s", rpcResp.Error.Code, rpcResp.Error.Message)
 				}
+				if len(rpcResp.Result) == 0 {
+					return nil, fmt.Errorf("mcp: empty result in SSE response for request %d (data: %s)", requestID, currentData)
+				}
 				return rpcResp.Result, nil
 			}
 			currentData = ""
@@ -235,11 +249,17 @@ func (c *httpConnection) ListTools(ctx context.Context) ([]engine.MCPTool, error
 		return nil, err
 	}
 
-	var resp toolsListResponse
-	if err := json.Unmarshal(result, &resp.Result); err != nil {
+	if len(result) == 0 {
+		return nil, fmt.Errorf("mcp: empty tools list result")
+	}
+
+	var resp struct {
+		Tools []rawMCPTool `json:"tools"`
+	}
+	if err := json.Unmarshal(result, &resp); err != nil {
 		return nil, fmt.Errorf("mcp: decode tools list: %w", err)
 	}
-	return convertRawTools(resp.Result.Tools), nil
+	return convertRawTools(resp.Tools), nil
 }
 
 func (c *httpConnection) CallTool(ctx context.Context, name string, args json.RawMessage) (json.RawMessage, error) {
@@ -263,11 +283,14 @@ func (c *httpConnection) CallTool(ctx context.Context, name string, args json.Ra
 		return nil, err
 	}
 
-	var toolResp callToolResponse
-	if err := json.Unmarshal(result, &toolResp.Result); err != nil {
+	// postRPC already extracts the JSON-RPC result envelope.
+	var toolResp struct {
+		Content json.RawMessage `json:"content"`
+	}
+	if err := json.Unmarshal(result, &toolResp); err != nil {
 		return nil, fmt.Errorf("mcp: decode tool call result: %w", err)
 	}
-	return toolResp.Result.Content, nil
+	return toolResp.Content, nil
 }
 
 func (c *httpConnection) close() error {

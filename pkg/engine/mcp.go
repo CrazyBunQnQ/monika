@@ -35,11 +35,11 @@ type MCPAnnotations struct {
 
 type MCPTool struct {
 	Name        string
-	Title       string          // human-readable name
+	Title       string // human-readable name
 	Description string
 	InputSchema json.RawMessage
-	ServerID    string          // owning server ID
-	Annotations MCPAnnotations  // behavioral hints
+	ServerID    string         // owning server ID
+	Annotations MCPAnnotations // behavioral hints
 }
 
 type MCPServerConnection interface {
@@ -99,7 +99,8 @@ func (r *MCPRegistry) GetTools() []MCPTool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	out := make([]MCPTool, 0, len(r.tools))
-	for _, t := range r.tools {
+	for k, t := range r.tools {
+		t.Name = k // expose prefixed name so LLM calls match Resolve()
 		out = append(out, t)
 	}
 	return out

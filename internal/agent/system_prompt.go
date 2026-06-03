@@ -48,7 +48,7 @@ const PromptToolUsage = `## Tool Usage
 - Never call file_read without first narrowing scope via grep/glob
 
 ### Read with precision
-- After grep gives you line numbers, read ONLY the lines you need — typically 20-60 lines is plenty
+- After grep gives you line numbers, read ONLY the lines you need — typically 2
 - Use the 'ranges' parameter to read multiple non-contiguous sections in one call (e.g. ranges='5-16,40-80')
 - Always provide offset and limit; the smaller the better for context efficiency
 - When output ends with "[N more lines below]", use the suggested offset to continue
@@ -69,10 +69,13 @@ const PromptToolUsage = `## Tool Usage
 - file_edit refuses to edit files with unresolved merge conflict markers
 
 ### MCP tool usage
-- MCP tools are provided by configured external servers and extend your capabilities
-- When a task matches an MCP tool's capability, use it instead of workarounds with bash or built-in tools
-- Examples: use web search MCP tools for research, database MCP tools for queries, browser MCP tools for web interaction
-- Do not ignore MCP tools — check if any are relevant before defaulting to built-in tools only
+**MCP tools provide external capabilities (web search, documentation lookup, database access, browser automation). Always check MCP before using bash workarounds.**
+
+- **list_mcp_servers** — check what MCP servers and tools are currently available at any time
+- When a task involves web search, web reading, documentation lookup, database queries, or external APIs — use MCP tools FIRST, not bash (curl/wget)
+- MCP tools are prefixed by server ID (e.g., a server 'foo' with tool 'bar' becomes 'foo_bar'). Match by capability description, not by name.
+- Do NOT use bash for HTTP requests, web scraping, or search when an MCP tool can do the job
+- If unsure whether an MCP server provides a tool, call **list_mcp_servers** to check
 
 ### Bash usage
 - Prefer dedicated tools (grep, glob, file_read, file_write, file_edit) and MCP tools over bash commands
@@ -317,7 +320,7 @@ const PromptRemember = `## Remember
 - ALWAYS read with file_read before editing with file_edit — never edit blind
 - ALWAYS prefer editing existing files over creating new ones
 - ALWAYS check if you already read a file before reading it again
-- ALWAYS use MCP tools when they match the task — don't default to ignoring them
+- ALWAYS check MCP tools before using bash for external operations (web, search, docs, APIs) — MCP tools are listed in the Available MCP Servers section
 - Prioritize technical accuracy over validating beliefs
 - Before modifying shared code, grep for ALL references and verify no callers break
 - STRICTLY follow all rules in <project_rules> (AGENTS.md) — they are project-specific hard constraints, not suggestions
@@ -368,10 +371,16 @@ func BuildMCPPrompt(registry *engine.MCPRegistry) string {
 	}
 
 	var b strings.Builder
-	b.WriteString("\n\n## MCP Servers\n\n")
-	b.WriteString("MCP (Model Context Protocol) tools extend your capabilities. ")
-	b.WriteString("Each tool is prefixed with its server name (e.g., `context7_resolve-library-id`). ")
-	b.WriteString("Use MCP tools when they match the task.\n\n")
+	b.WriteString("\n\n## Available MCP Servers\n\n")
+	b.WriteString("These MCP tools are available **right now** — every tool listed below is already connected and callable. ")
+	b.WriteString("Each tool name is prefixed with its server ID (e.g., server 'foo' with tool 'bar' becomes 'foo_bar'). ")
+	b.WriteString("**Before using bash for any external operation** (HTTP requests, web scraping, search, documentation lookup), ")
+	b.WriteString("scan this list for a matching tool.\n\n")
+	b.WriteString("### How to use MCP tools\n\n")
+	b.WriteString("- Scan the server list below. Each entry shows what capabilities the server provides.\n")
+	b.WriteString("- When a task involves external operations (web search, HTTP requests, documentation lookup, database access, browser automation), check the list for a matching tool.\n")
+	b.WriteString("- Prefer MCP tools over bash (curl/wget) for these operations.\n")
+	b.WriteString("- If nothing matches, or you're unsure what's available, call `list_mcp_servers` to get the full tool listing with descriptions.\n\n")
 
 	for _, srv := range servers {
 		srvTools := byServer[srv.ID]
