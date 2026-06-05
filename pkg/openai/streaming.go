@@ -5,21 +5,23 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"monika/pkg/engine"
 )
 
 type chatRequest struct {
-	Model    string               `json:"model"`
-	Messages []engine.ChatMessage `json:"messages"`
-	Stream   bool                 `json:"stream"`
-	Tools    []engine.ToolDef     `json:"tools,omitempty"`
-	StreamOptions *streamOptions  `json:"stream_options,omitempty"`
+	Model         string               `json:"model"`
+	Messages      []engine.ChatMessage `json:"messages"`
+	Stream        bool                 `json:"stream"`
+	Tools         []engine.ToolDef     `json:"tools,omitempty"`
+	StreamOptions *streamOptions       `json:"stream_options,omitempty"`
 }
 
 type streamOptions struct {
@@ -82,6 +84,30 @@ func httpClientFor(baseURL string) *http.Client {
 	return c
 }
 
+// retryableHTTPError checks if an HTTP request error might be transient.
+func retryableHTTPError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Context cancellation/expiry — not retryable
+	if err == context.Canceled || err == context.DeadlineExceeded {
+		return false
+	}
+	// Network-level errors (timeout, connection refused, DNS, TLS handshake, etc.)
+	// Go's http.Client returns url.Error wrapping *net.OpError or *http.httpError.
+	for e := err; e != nil; e = errors.Unwrap(e) {
+		if n, ok := e.(interface{ Timeout() bool }); ok {
+			_ = n.Timeout() // just check that the interface is satisfied
+			return true
+		}
+		// Check for temporary errors (connection refused, no route, etc.)
+		if t, ok := e.(interface{ Temporary() bool }); ok && t.Temporary() {
+			return true
+		}
+	}
+	return false
+}
+
 func StreamChat(ctx context.Context, baseURL, apiKey, model string, messages []engine.ChatMessage, tools []engine.ToolDef) (<-chan engine.ChatEvent, error) {
 	body := chatRequest{
 		Model:    model,
@@ -96,12 +122,14 @@ func StreamChat(ctx context.Context, baseURL, apiKey, model string, messages []e
 		body.StreamOptions = &streamOptions{IncludeUsage: true}
 	}
 
-	data, err := json.Marshal(body)
+	bodyJSON, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", baseURL+"/chat/completions", bytes.NewReader(data))
+	// First HTTP attempt is synchronous so that non-retryable errors
+	// (auth failures, bad requests) are returned immediately.
+	req, err := http.NewRequestWithContext(ctx, "POST", baseURL+"/chat/completions", bytes.NewReader(bodyJSON))
 	if err != nil {
 		return nil, err
 	}
@@ -112,42 +140,152 @@ func StreamChat(ctx context.Context, baseURL, apiKey, model string, messages []e
 
 	resp, err := httpClientFor(baseURL).Do(req)
 	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode != http.StatusOK {
+		// Non-retryable error (e.g. DNS failure resolved to no route) — fail fast.
+		if !retryableHTTPError(err) {
+			return nil, err
+		}
+		// Retryable error — fall through to the goroutine-based retry loop.
+	} else if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("provider returned %d: %s", resp.StatusCode, string(respBody))
+		if resp.StatusCode < 500 {
+			return nil, fmt.Errorf("provider returned %d: %s", resp.StatusCode, string(respBody))
+		}
+		// 5xx — retryable; fall through
+	} else {
+		// Fast path: first HTTP attempt succeeded. SSE parsing runs in a goroutine.
+		ch := make(chan engine.ChatEvent, 128)
+		go func() {
+			defer close(ch)
+			if err := parseSSEStreamInGoroutine(ctx, resp, ch); err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				sendError(ch, err)
+			}
+		}()
+		return ch, nil
 	}
 
+	// Slow path: first attempt failed with a retryable error (timeout, 5xx).
+	// Retry in a goroutine with exponential backoff. Send retry events to the
+	// channel so the frontend can display retry progress.
 	ch := make(chan engine.ChatEvent, 128)
 	go func() {
 		defer close(ch)
-		defer resp.Body.Close()
 
-		// Ensure resp.Body is closed when ctx is cancelled so that
-		// scanner.Scan() in parseSSEStream unblocks immediately.
-		bodyDone := make(chan struct{})
-		go func() {
+		const maxAttempts = 10
+		sendRetryEvent := func(attempt int, reason string) {
 			select {
-			case <-ctx.Done():
-				resp.Body.Close()
-			case <-bodyDone:
-			}
-		}()
-
-		if err := parseSSEStream(ctx, resp.Body, ch); err != nil {
-			close(bodyDone)
-			select {
-			case ch <- engine.ChatEvent{Kind: engine.EventError, Error: engine.ProviderError{Code: "stream_error", Message: err.Error()}}:
+			case ch <- engine.ChatEvent{
+				Kind:         engine.EventRetrying,
+				RetryAttempt: attempt,
+				RetryMax:     maxAttempts,
+				RetryReason:  reason,
+			}:
 			default:
 			}
-		} else {
-			close(bodyDone)
 		}
+
+		for attempt := 1; attempt <= maxAttempts; attempt++ {
+			// Send retry event before backoff so the frontend shows status immediately.
+			if attempt == 1 {
+				sendRetryEvent(attempt, "连接超时，正在重试...")
+			} else {
+				sendRetryEvent(attempt, fmt.Sprintf("第 %d 次重试失败，继续重试...", attempt-1))
+			}
+
+			// Exponential backoff: 500ms, 1s, 2s, 4s, ... capped at 30s
+			delay := time.Duration(500*(1<<(attempt-1))) * time.Millisecond
+			if delay > 30*time.Second {
+				delay = 30 * time.Second
+			}
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return
+			}
+
+			req, err := http.NewRequestWithContext(ctx, "POST", baseURL+"/chat/completions", bytes.NewReader(bodyJSON))
+			if err != nil {
+				if attempt < maxAttempts {
+					continue
+				}
+				sendError(ch, err)
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+			if apiKey != "" {
+				req.Header.Set("Authorization", "Bearer "+apiKey)
+			}
+
+			resp, err := httpClientFor(baseURL).Do(req)
+			if err != nil {
+				if retryableHTTPError(err) && attempt < maxAttempts {
+					continue
+				}
+				sendError(ch, err)
+				return
+			}
+
+			if resp.StatusCode != http.StatusOK {
+				respBody, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if resp.StatusCode >= 500 && attempt < maxAttempts {
+					continue
+				}
+				sendError(ch, fmt.Errorf("provider returned %d: %s", resp.StatusCode, string(respBody)))
+				return
+			}
+
+			if err := parseSSEStreamInGoroutine(ctx, resp, ch); err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				sendError(ch, err)
+				return
+			}
+			return
+		}
+
+		sendError(ch, fmt.Errorf("stream request failed after %d attempts", maxAttempts))
 	}()
 	return ch, nil
+}
+
+// parseSSEStreamInGoroutine runs SSE parsing on a successful HTTP response
+// inside a goroutine, handling body cleanup and context cancellation.
+// Returns nil on success, or the parsing error. The caller is responsible
+// for deciding whether the error is retryable.
+func parseSSEStreamInGoroutine(ctx context.Context, resp *http.Response, ch chan<- engine.ChatEvent) error {
+	defer resp.Body.Close()
+
+	// Ensure resp.Body is closed when ctx is cancelled so that
+	// scanner.Scan() in parseSSEStream unblocks immediately.
+	bodyDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			resp.Body.Close()
+		case <-bodyDone:
+		}
+	}()
+	defer close(bodyDone)
+
+	err := parseSSEStream(ctx, resp.Body, ch)
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return err
+}
+
+// sendError sends a provider error event to the channel, or drops it if the
+// channel is full or closed.
+func sendError(ch chan<- engine.ChatEvent, err error) {
+	select {
+	case ch <- engine.ChatEvent{Kind: engine.EventError, Error: engine.ProviderError{Code: "stream_error", Message: err.Error()}}:
+	default:
+	}
 }
 
 func parseSSEStream(ctx context.Context, r io.Reader, ch chan<- engine.ChatEvent) error {
@@ -161,11 +299,13 @@ func parseSSEStream(ctx context.Context, r io.Reader, ch chan<- engine.ChatEvent
 	}
 
 	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
 	toolCallBuf := make(map[int]*engine.ToolCall)
 	toolCallStarted := make(map[int]bool)
 	receivedData := false
 	cleanEnd := false
+	// Collect raw error data from non-chat-chunk lines (e.g. GLM coding plan
+	// sends {"error":{"code":"...","message":"..."}} after last content chunk)
+	var rawError strings.Builder
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -184,6 +324,10 @@ func parseSSEStream(ctx context.Context, r io.Reader, ch chan<- engine.ChatEvent
 
 		var chunk chatChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			// Non-chat-chunk line: capture as potential error (e.g. GLM error JSON)
+			if rawError.Len() == 0 {
+				rawError.WriteString(data)
+			}
 			continue
 		}
 
@@ -309,7 +453,14 @@ func parseSSEStream(ctx context.Context, r io.Reader, ch chan<- engine.ChatEvent
 	}
 
 	if receivedData && !cleanEnd {
-		return fmt.Errorf("stream ended unexpectedly: connection closed without [DONE] or finish_reason")
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		errMsg := "stream ended unexpectedly: connection closed without [DONE] or finish_reason"
+		if rawError.Len() > 0 {
+			errMsg = fmt.Sprintf("%s. Provider raw error: %s", errMsg, rawError.String())
+		}
+		return fmt.Errorf(errMsg)
 	}
 
 	return scanner.Err()

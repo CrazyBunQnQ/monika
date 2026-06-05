@@ -20,11 +20,11 @@ import (
 	"time"
 
 	agent2 "monika/internal/agent"
-	"monika/internal/lsp"
 	config2 "monika/internal/config"
+	"monika/internal/lsp"
 	"monika/internal/permission"
-	"monika/internal/tool/builtin"
 	tool2 "monika/internal/tool"
+	"monika/internal/tool/builtin"
 	"monika/internal/update"
 	engine2 "monika/pkg/engine"
 	"monika/pkg/modelsdev"
@@ -79,7 +79,7 @@ type App struct {
 	pipeline *permission.Pipeline
 	checker  *update.Checker
 
-	trayMgr *TrayManager
+	trayMgr  *TrayManager
 	tsBridge *tsBridge
 
 	eventSeq atomic.Int64
@@ -1191,6 +1191,11 @@ func (a *App) handleAgentEvent(sessionID, model string, ev agent2.Event) {
 	case agent2.EventCompaction:
 		se.Type = "compaction"
 		se.Compaction = ev.Compaction
+	case agent2.EventRetrying:
+		se.Type = "retrying"
+		se.Content = ev.Content
+		se.RetryAttempt = ev.RetryAttempt
+		se.RetryMax = ev.RetryMax
 	}
 
 	a.eventBus.Emit(se)

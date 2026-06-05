@@ -28,10 +28,10 @@ type tsResult struct {
 type TSQueryFunc func(ctx context.Context, method string, params map[string]any) (json.RawMessage, error)
 
 type tsBridge struct {
-	mu       sync.Mutex
-	pending  map[string]chan tsResult
-	timeout  time.Duration
-	app      *App
+	mu      sync.Mutex
+	pending map[string]chan tsResult
+	timeout time.Duration
+	app     *App
 }
 
 // NewTSBridge creates a standalone tsBridge (no App dependency needed for QueryFunc).
@@ -98,10 +98,10 @@ func (a *App) GetTSQueryFunc() TSQueryFunc {
 // TSResponse is called by the frontend via Call.ByName after processing a ts:request.
 func (a *App) TSResponse(args json.RawMessage) error {
 	var resp struct {
-		ID  string          `json:"id"`
-		OK  bool            `json:"ok"`
-		Data json.RawMessage `json:"data,omitempty"`
-		Error string        `json:"error,omitempty"`
+		ID    string          `json:"id"`
+		OK    bool            `json:"ok"`
+		Data  json.RawMessage `json:"data,omitempty"`
+		Error string          `json:"error,omitempty"`
 	}
 	if err := json.Unmarshal(args, &resp); err != nil {
 		return err

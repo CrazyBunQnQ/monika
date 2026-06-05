@@ -32,14 +32,14 @@ type managedClient struct {
 }
 
 type Manager struct {
-	workdir    string
-	servers    map[string]ServerConfig
-	clients    map[string]*managedClient
-	openFiles  map[string]*openFile // uri -> version + content
-	mu         sync.Mutex
+	workdir     string
+	servers     map[string]ServerConfig
+	clients     map[string]*managedClient
+	openFiles   map[string]*openFile // uri -> version + content
+	mu          sync.Mutex
 	clientLocks map[string]*sync.Mutex // per-server lock for getOrStart
-	fileLocks  map[string]*sync.Mutex // per-file lock for open/close/change
-	cancel     context.CancelFunc
+	fileLocks   map[string]*sync.Mutex // per-file lock for open/close/change
+	cancel      context.CancelFunc
 }
 
 func NewManager(workdir string) *Manager {
@@ -174,7 +174,7 @@ func (m *Manager) getOrStart(ctx context.Context, name string) (*Client, string,
 			m.mu.Unlock()
 			return mc.client, name, nil
 		}
-// Client died; clean up and reconnect
+		// Client died; clean up and reconnect
 		delete(m.clients, name)
 		m.clearOpenFiles(name)
 		m.mu.Unlock()
@@ -249,7 +249,6 @@ func (m *Manager) shutdownIdle() {
 		c.Shutdown(context.Background())
 	}
 }
-
 
 func (m *Manager) clearOpenFiles(serverName string) {
 	for uri, of := range m.openFiles {
@@ -415,6 +414,23 @@ func (m *Manager) NotifySaved(ctx context.Context, client *Client, filePath stri
 	return client.DidSave(ctx, uri, of.content)
 }
 
+// NotifySavedForFile sends didSave for a file, resolving the LSP client automatically.
+func (m *Manager) NotifySavedForFile(ctx context.Context, filePath string) error {
+	client, serverName, err := m.ClientForFile(ctx, filePath)
+	if err != nil {
+		return err
+	}
+
+	// Ensure the file is open so didSave reaches the server.
+	// If the file hasn't been opened yet (e.g. first edit without
+	// a prior LSP format operation), NotifySaved would be a silent no-op.
+	if _, err := m.EnsureAndSync(ctx, client, filePath, serverName); err != nil {
+		return err
+	}
+
+	return m.NotifySaved(ctx, client, filePath)
+}
+
 // CloseFile sends didClose and removes the file from the open set.
 func (m *Manager) CloseFile(ctx context.Context, client *Client, filePath string) error {
 	uri := fileToURI(filePath)
@@ -512,7 +528,7 @@ func (m *Manager) SyncContentFromMemory(ctx context.Context, client *Client, fil
 
 // WriteThroughOptions controls the WriteThrough pipeline behavior.
 type WriteThroughOptions struct {
-	FormatOnWrite    bool
+	FormatOnWrite     bool
 	DiagnosticsOnEdit bool
 }
 

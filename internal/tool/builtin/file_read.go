@@ -8,6 +8,7 @@ import (
 	"hash/fnv"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,19 +18,20 @@ import (
 
 type fileRead struct {
 	projectDir string
+	homeDir    string
 	tsQuery    TSQueryFunc
 	symFunc    LSPDiagFunc
 }
 
-func NewFileRead(projectDir string, tsQuery TSQueryFunc) tool.Tool {
-	return &fileRead{projectDir: projectDir, tsQuery: tsQuery}
+func NewFileRead(projectDir, homeDir string, tsQuery TSQueryFunc) tool.Tool {
+	return &fileRead{projectDir: projectDir, homeDir: homeDir, tsQuery: tsQuery}
 }
 
 func (f *fileRead) SetSymFunc(fn LSPDiagFunc) { f.symFunc = fn }
 
 func (f *fileRead) Name() string { return "file_read" }
 func (f *fileRead) Description() string {
-	return "Read a section of a file from the local filesystem. Use grep first to find the relevant file and line range, then read only the section you need using offset and limit. Output lines are prefixed with line number and content hash in '42│a1b2c3│ text' format. Copy the 'a1b2c3:42' portion as the anchor parameter for file_edit. If the file has more lines beyond the requested range, a footer hints the next offset. Optionally specify 'ranges' (e.g. '5-16,40-80') to read multiple non-contiguous sections. Set summary=true to prepend an AST-based structural summary (requires tree-sitter)."
+	return "Read a section of a file from the local filesystem, or read a skill file by name. Use grep first to find the relevant file and line range, then read only the section you need using offset and limit. Output lines are prefixed with line number and content hash in '42│a1b2c3│ text' format. Copy the 'a1b2c3:42' portion as the anchor parameter for file_edit. If the file has more lines beyond the requested range, a footer hints the next offset. Optionally specify 'ranges' (e.g. '5-16,40-80') to read multiple non-contiguous sections. Set summary=true to prepend an AST-based structural summary (requires tree-sitter). When skillName is set (instead of filePath), the tool automatically resolves the path to the skill's SKILL.md from the project or global skills directory."
 }
 
 func (f *fileRead) Parameters() map[string]any {
@@ -38,7 +40,11 @@ func (f *fileRead) Parameters() map[string]any {
 		"properties": map[string]any{
 			"filePath": map[string]any{
 				"type":        "string",
-				"description": "The absolute path to the file to read",
+				"description": "The absolute path to the file to read. Mutually exclusive with skillName.",
+			},
+			"skillName": map[string]any{
+				"type":        "string",
+				"description": "Name of a skill to read (resolves to SKILL.md automatically). Mutually exclusive with filePath.",
 			},
 			"offset": map[string]any{
 				"type":        "integer",
@@ -57,17 +63,17 @@ func (f *fileRead) Parameters() map[string]any {
 				"description": "If true, prepend a structured AST summary of the file (requires tree-sitter).",
 			},
 		},
-		"required": []string{"filePath"},
 	}
 }
 
 func (f *fileRead) Execute(ctx context.Context, args json.RawMessage) (tool.ExecutionResult, error) {
 	var params struct {
-		FilePath string `json:"filePath"`
-		Offset   int    `json:"offset"`
-		Limit    int    `json:"limit"`
-		Ranges   string `json:"ranges"`
-		Summary  bool   `json:"summary"`
+		FilePath  string `json:"filePath"`
+		SkillName string `json:"skillName"`
+		Offset    int    `json:"offset"`
+		Limit     int    `json:"limit"`
+		Ranges    string `json:"ranges"`
+		Summary   bool   `json:"summary"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
@@ -80,9 +86,34 @@ func (f *fileRead) Execute(ctx context.Context, args json.RawMessage) (tool.Exec
 		params.Limit = 200
 	}
 
-	safePath, err := f.resolvePath(ctx, params.FilePath)
-	if err != nil {
-		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
+	// Validate mutual exclusivity of filePath and skillName.
+	if params.FilePath != "" && params.SkillName != "" {
+		return tool.ExecutionResult{
+			Content: "filePath and skillName are mutually exclusive; provide only one",
+			IsError: true,
+		}, nil
+	}
+	if params.FilePath == "" && params.SkillName == "" {
+		return tool.ExecutionResult{
+			Content: "either filePath or skillName is required",
+			IsError: true,
+		}, nil
+	}
+
+	// Determine the file path: resolve skillName if set, otherwise use filePath.
+	var safePath string
+	if params.SkillName != "" {
+		var err error
+		safePath, err = f.resolveSkillPath(params.SkillName)
+		if err != nil {
+			return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
+		}
+	} else {
+		var err error
+		safePath, err = f.resolvePath(ctx, params.FilePath)
+		if err != nil {
+			return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
+		}
 	}
 
 	if params.Ranges != "" {
@@ -112,6 +143,37 @@ func (f *fileRead) Execute(ctx context.Context, args json.RawMessage) (tool.Exec
 
 func (f *fileRead) resolvePath(ctx context.Context, p string) (string, error) {
 	return resolveToolPath(p, tool.ProjectDirOrDefault(ctx, f.projectDir))
+}
+
+var skillNameRE = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+
+func isValidSkillName(name string) bool {
+	return len(name) > 0 && len(name) <= 64 && skillNameRE.MatchString(name)
+}
+
+// resolveSkillPath resolves a skill name to the SKILL.md file path.
+// It checks the project skills directory first, then the global skills directory.
+func (f *fileRead) resolveSkillPath(skillName string) (string, error) {
+	if !isValidSkillName(skillName) {
+		return "", fmt.Errorf("invalid skill name %q", skillName)
+	}
+	candidates := []struct {
+		root string
+		kind string
+	}{
+		{f.projectDir, "project"},
+		{f.homeDir, "global"},
+	}
+	for _, c := range candidates {
+		if c.root == "" {
+			continue
+		}
+		p := filepath.Join(c.root, ".monika", "skills", skillName, "SKILL.md")
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("skill %q not found in project or global skills", skillName)
 }
 
 func (f *fileRead) appendSummary(ctx context.Context, path, content string) string {
@@ -159,7 +221,7 @@ func langFromExt(ext string) string {
 		".cs": "c_sharp", ".rb": "ruby", ".php": "php",
 		".swift": "swift", ".kt": "kotlin", ".kts": "kotlin",
 		".scala": "scala",
-		".json": "json", ".yaml": "yaml", ".yml": "yaml", ".toml": "toml",
+		".json":  "json", ".yaml": "yaml", ".yml": "yaml", ".toml": "toml",
 		".html": "html", ".htm": "html", ".css": "css",
 		".sh": "bash", ".bash": "bash", ".zsh": "bash",
 		".cjs": "javascript",

@@ -11,17 +11,19 @@ type providerKeyType struct{}
 type askUserFuncKeyType struct{}
 type contextLimitKeyType struct{}
 type outputLimitKeyType struct{}
+type messageContentKeyType struct{}
 
 var (
-	projectDirKey    projectDirKeyType
-	sessionIDKey     sessionIDKeyType
-	taskStoreKey     taskStoreKeyType
-	toolCallIDKey    toolCallIDKeyType
-	modelKey         modelKeyType
-	providerKey      providerKeyType
-	askUserFuncKey   askUserFuncKeyType
-	contextLimitKey  contextLimitKeyType
-	outputLimitKey   outputLimitKeyType
+	projectDirKey     projectDirKeyType
+	sessionIDKey      sessionIDKeyType
+	taskStoreKey      taskStoreKeyType
+	toolCallIDKey     toolCallIDKeyType
+	modelKey          modelKeyType
+	providerKey       providerKeyType
+	askUserFuncKey    askUserFuncKeyType
+	contextLimitKey   contextLimitKeyType
+	outputLimitKey    outputLimitKeyType
+	messageContentKey messageContentKeyType
 )
 
 // AskUserFunc is the signature for a function that asks the user a question
@@ -167,4 +169,15 @@ func WithOutputLimit(ctx context.Context, n int64) context.Context {
 func OutputLimitFromContext(ctx context.Context) int64 {
 	n, _ := ctx.Value(outputLimitKey).(int64)
 	return n
+}
+
+// WithMessageContent returns a child context carrying the message content.
+func WithMessageContent(ctx context.Context, content string) context.Context {
+	return context.WithValue(ctx, messageContentKey, content)
+}
+
+// MessageContentFromContext extracts the message content from context, or empty string.
+func MessageContentFromContext(ctx context.Context) string {
+	s, _ := ctx.Value(messageContentKey).(string)
+	return s
 }

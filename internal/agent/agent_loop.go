@@ -202,9 +202,9 @@ func (a *AgentLoop) RunCompaction(ctx context.Context, conv *Conversation, ch ch
 		switch ev.Kind {
 		case engine.EventContentDelta:
 			summary.WriteString(ev.Text)
+		case engine.EventRetrying:
+			// compaction doesn't need to forward retry events
 		case engine.EventError:
-			fmt.Fprintf(os.Stderr, "[monika] compaction: provider error: %s\n", ev.Error.Message)
-			return fmt.Errorf("compaction provider error: %s", ev.Error.Message)
 		}
 	}
 	// Check if context was cancelled after the stream ended.
@@ -257,15 +257,14 @@ type AgentLoop struct {
 	pipeline          *permission.Pipeline
 	projectDir        string
 	model             string
-	modelContextLimit  int64
-	modelOutputLimit   int64
+	modelContextLimit int64
+	modelOutputLimit  int64
 	providerID        string
 	dispatchFn        func(ctx context.Context, task SubTask) <-chan Event
 	mcpRegistry       *engine.MCPRegistry
 	askUserFn         tool.AskUserFunc
 	taskStore         tool.TaskStore
 }
-
 
 // SetDispatchFn sets the child dispatch function for this loop.
 // Used for compaction and other system-initiated subtasks.
@@ -357,7 +356,6 @@ func WithTaskStore(ts tool.TaskStore) LoopOption {
 	return func(a *AgentLoop) { a.taskStore = ts }
 }
 
-
 func NewLoop(provider engine.ProviderEngine, tools *tool.ToolRegistry, opts ...LoopOption) *AgentLoop {
 	a := &AgentLoop{
 		provider: provider,
@@ -405,7 +403,9 @@ func (a *AgentLoop) RunBlocking(ctx context.Context, conv *Conversation, userMes
 
 		result := parseResult(collected)
 		if result.Error != nil {
-			return nil, result.Error
+			if result.Content == "" && len(result.ToolCalls) == 0 {
+				return nil, result.Error
+			}
 		}
 
 		totalUsage.InputTokens += result.Usage.InputTokens
@@ -497,6 +497,9 @@ func (a *AgentLoop) RunBlocking(ctx context.Context, conv *Conversation, userMes
 			}
 
 			toolCtx := tool.WithProjectDir(ctx, a.projectDir)
+			if tc.Function.Name == "file_edit" && result.Content != "" {
+				toolCtx = tool.WithMessageContent(toolCtx, result.Content)
+			}
 			if a.sessionID != "" {
 				toolCtx = tool.WithSessionID(toolCtx, a.sessionID)
 			}
@@ -656,7 +659,7 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 						flushThinking()
 					}
 				case engine.EventToolCallStart:
-						flushAll()
+					flushAll()
 				case engine.EventToolCallEnd:
 					flushAll()
 					if ev.ToolCall != nil {
@@ -695,7 +698,13 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 				case engine.EventError:
 					flushAll()
 					ch <- Event{Type: EventError, Content: ev.Error.Message}
-				case engine.EventMessageEnd:
+				case engine.EventRetrying:
+					ch <- Event{
+						Type:         EventRetrying,
+						RetryAttempt: ev.RetryAttempt,
+						RetryMax:     ev.RetryMax,
+						Content:      ev.RetryReason,
+					}
 					flushAll()
 				}
 			}
@@ -704,7 +713,16 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 
 		result := parseResult(collected)
 		if result.Error != nil {
-			return
+			if result.Content == "" && len(result.ToolCalls) == 0 {
+				return
+			}
+		}
+		if result.AbnormalEnd {
+			errMsg := "响应流异常结束，内容可能不完整"
+			if result.RawError != "" {
+				errMsg += fmt.Sprintf("（提供商原始错误：%s）", result.RawError)
+			}
+			ch <- Event{Type: EventError, Content: errMsg}
 		}
 
 		if len(result.ToolCalls) == 0 {
@@ -861,6 +879,9 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 			}
 
 			toolCtx := tool.WithProjectDir(ctx, a.projectDir)
+			if tc.Function.Name == "file_edit" && result.Content != "" {
+				toolCtx = tool.WithMessageContent(toolCtx, result.Content)
+			}
 			if a.sessionID != "" {
 				toolCtx = tool.WithSessionID(toolCtx, a.sessionID)
 			}

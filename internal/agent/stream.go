@@ -13,6 +13,8 @@ type streamResult struct {
 	ToolCalls        []engine.ToolCall
 	Usage            engine.Usage
 	Error            error
+	AbnormalEnd      bool
+	RawError         string // Original error content from provider (e.g. GLM coding plan)
 }
 
 func parseResult(events []engine.ChatEvent) streamResult {
@@ -36,6 +38,13 @@ func parseResult(events []engine.ChatEvent) streamResult {
 			result.Usage = ev.Usage
 		case engine.EventError:
 			result.Error = fmt.Errorf("provider error (%s): %s", ev.Error.Code, ev.Error.Message)
+		case engine.EventMessageEnd:
+			if strings.HasPrefix(ev.Text, "abnormal_end") {
+				result.AbnormalEnd = true
+				if parts := strings.SplitN(ev.Text, "|", 2); len(parts) == 2 {
+					result.RawError = parts[1]
+				}
+			}
 		}
 	}
 

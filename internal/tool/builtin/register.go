@@ -17,8 +17,8 @@ import (
 // Returns (nil, nil) when tree-sitter is unavailable.
 type TSQueryFunc func(ctx context.Context, method string, params map[string]any) (json.RawMessage, error)
 
-func RegisterDefaults(r *tool.ToolRegistry, projectDir string, tsQuery TSQueryFunc) error {
-	r.Register(NewFileRead(projectDir, tsQuery))
+func RegisterDefaults(r *tool.ToolRegistry, projectDir, homeDir string, tsQuery TSQueryFunc) error {
+	r.Register(NewFileRead(projectDir, homeDir, tsQuery))
 	r.Register(NewFileWrite(projectDir))
 	r.Register(NewFileEdit(projectDir))
 	r.Register(NewFileList(projectDir))
@@ -53,27 +53,43 @@ func WireLSPHooks(r *tool.ToolRegistry) {
 
 	diagFunc := func(ctx context.Context, filePath string) string {
 		if filePath == "" {
-			return ""
+			return "\n\n--- LSP Diagnostics ---\n(empty file path)"
 		}
 
 		// Wait for LSP server to be ready before querying diagnostics.
-		if checker, ok := lspTool.(interface{ ReadyForFile(context.Context, string) bool }); ok {
-			deadline := time.Now().Add(10 * time.Second)
+		ready := false
+		if checker, ok := lspTool.(interface {
+			ReadyForFile(context.Context, string) bool
+		}); ok {
+			deadline := time.Now().Add(5 * time.Second)
 			for !checker.ReadyForFile(ctx, filePath) {
 				if time.Now().After(deadline) {
-					return ""
+					return "\n\n--- LSP Diagnostics ---\nLSP server not ready (timeout)"
 				}
 				select {
 				case <-ctx.Done():
-					return ""
+					return "\n\n--- LSP Diagnostics ---\nLSP: context cancelled"
 				case <-time.After(300 * time.Millisecond):
 				}
 			}
+			ready = true
+		}
+		if !ready {
+			return "\n\n--- LSP Diagnostics ---\nLSP server not available"
 		}
 
 		// Optional: format file via LSP before diagnostics
-		if formatter, ok := lspTool.(interface{ FormatContent(context.Context, string) (string, error) }); ok {
+		if formatter, ok := lspTool.(interface {
+			FormatContent(context.Context, string) (string, error)
+		}); ok {
 			formatter.FormatContent(ctx, filePath)
+		}
+
+		// Send didSave to trigger LSP re-analysis (like OMP's notifyFileSaved)
+		if saver, ok := lspTool.(interface {
+			NotifySavedForFile(context.Context, string) error
+		}); ok {
+			saver.NotifySavedForFile(ctx, filePath)
 		}
 
 		// Run diagnostics. The action internally waits for the server
@@ -87,21 +103,27 @@ func WireLSPHooks(r *tool.ToolRegistry) {
 			return fmt.Sprintf("\n\n--- LSP Diagnostics ---\n(error: %s)", diagResult.Content)
 		}
 
-		if diagResult.Content == "" || !strings.Contains(diagResult.Content, "Error") && !strings.Contains(diagResult.Content, "Warning") {
-			return ""
+		if diagResult.Content == "" {
+			return "\n\n--- LSP Diagnostics ---\nLSP: no diagnostics returned"
 		}
+
+		// Always respond — never silently return empty (OMP principle).
+		hasError := strings.Contains(diagResult.Content, "Error")
+		hasWarning := strings.Contains(diagResult.Content, "Warning")
 
 		var sb strings.Builder
 		sb.WriteString("\n\n--- LSP Diagnostics ---\n")
 		sb.WriteString(diagResult.Content)
 
-		if strings.Contains(diagResult.Content, "Error") {
+		if hasError {
 			caArgs, _ := json.Marshal(map[string]string{"action": "code_actions", "file": filePath})
 			caResult, caErr := lspTool.Execute(ctx, caArgs)
 			if caErr == nil && caResult.Content != "" && !strings.Contains(caResult.Content, "No code") {
 				sb.WriteString("\n--- Available Code Actions ---\n")
 				sb.WriteString(caResult.Content)
 			}
+		} else if !hasWarning {
+			sb.WriteString("\n(no issues)")
 		}
 
 		return sb.String()

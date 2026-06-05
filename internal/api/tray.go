@@ -23,17 +23,17 @@ type NotificationData struct {
 }
 
 type TrayManager struct {
-	app          *application.App
-	systemTray   *application.SystemTray
-	mainWindow   application.Window
-	popupWindow  *application.WebviewWindow
+	app         *application.App
+	systemTray  *application.SystemTray
+	mainWindow  application.Window
+	popupWindow *application.WebviewWindow
 
-	iconData      []byte
+	iconData        []byte
 	transparentIcon []byte
 
-	mu          sync.Mutex
-	blinkStop   chan struct{}
-	blinking    bool
+	mu        sync.Mutex
+	blinkStop chan struct{}
+	blinking  bool
 
 	popupDebounce *time.Timer
 	popupVisible  bool // Flag to prevent clearing notifications while popup is shown
@@ -417,18 +417,18 @@ func (tm *TrayManager) IsPopupVisible() bool {
 
 func (tm *TrayManager) createPopupWindow() {
 	pw := tm.app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Name:       "tray-popup",
-		Title:      "",
-		Width:      280,
-		Height:     200,
-		MinWidth:   280,
-		MinHeight:  150,
-		MaxWidth:   280,
-		MaxHeight:  400,
-		Frameless:  true,
+		Name:          "tray-popup",
+		Title:         "",
+		Width:         280,
+		Height:        200,
+		MinWidth:      280,
+		MinHeight:     150,
+		MaxWidth:      280,
+		MaxHeight:     400,
+		Frameless:     true,
 		DisableResize: true,
-		Hidden:     true,
-		AlwaysOnTop: true,
+		Hidden:        true,
+		AlwaysOnTop:   true,
 		Windows: application.WindowsWindow{
 			HiddenOnTaskbar: true,
 		},

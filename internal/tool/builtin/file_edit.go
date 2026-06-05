@@ -30,7 +30,7 @@ func (f *fileEdit) SetDiagFunc(fn LSPDiagFunc) { f.diagFunc = fn }
 func (f *fileEdit) Name() string { return "file_edit" }
 
 func (f *fileEdit) Description() string {
-	return "Replaces lines in a file using line-number positioning with hash verification. The anchor (from file_read output, format 'hash:lineNumber') identifies the starting line and verifies it has not changed. line_count specifies how many lines to replace (default 1). Set line_count to 0 to insert new_string after the anchor line without replacing anything. Refuses to edit files containing merge conflict markers."
+	return "Replaces lines in a file using line-number positioning with hash verification. The anchor (from file_read output, format 'hash:lineNumber') identifies the starting line and verifies it has not changed. line_count specifies how many lines to replace (default 1). Set line_count to 0 to insert new_string after the anchor line without replacing anything. The new code is passed as natural text in your message content (not in JSON args). Refuses to edit files containing merge conflict markers."
 }
 
 func (f *fileEdit) Parameters() map[string]any {
@@ -47,14 +47,14 @@ func (f *fileEdit) Parameters() map[string]any {
 			},
 			"new_string": map[string]any{
 				"type":        "string",
-				"description": "The replacement text. For line_count=0 this is inserted after the anchor line.",
+				"description": "The replacement text. Optional — if not provided in JSON args, the natural code from the assistant's message content is used instead.",
 			},
 			"line_count": map[string]any{
 				"type":        "integer",
 				"description": "Number of lines to replace starting from the anchor line. Default is 1. Set to 0 to insert new_string after the anchor line without deleting any lines.",
 			},
 		},
-		"required": []string{"filePath", "anchor", "new_string"},
+		"required": []string{"filePath", "anchor"},
 	}
 }
 
@@ -67,6 +67,11 @@ func (f *fileEdit) Execute(ctx context.Context, args json.RawMessage) (tool.Exec
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
+	}
+
+	// new_string from message content (natural code) takes priority over JSON args
+	if content := tool.MessageContentFromContext(ctx); content != "" {
+		params.NewString = content
 	}
 
 	if params.Anchor == "" {
@@ -206,10 +211,58 @@ func (f *fileEdit) editFile(path, anchor, newString string, lineCount int) (tool
 		action = "Inserted after"
 		detail = fmt.Sprintf("line %d", lineNum)
 	}
+	balanceWarn := checkBracketBalance(newString)
+	resultText := fmt.Sprintf("%s %s in %s", action, detail, path)
+	if balanceWarn != "" {
+		resultText += "\n⚠ " + balanceWarn
+	}
 	return tool.ExecutionResult{
-		Content:   fmt.Sprintf("%s %s in %s", action, detail, path),
+		Content:   resultText,
 		DiffLines: diffLines,
 	}, nil
+}
+
+// checkBracketBalance counts braces/parens/brackets and warns about mismatches.
+func checkBracketBalance(s string) string {
+	var openParens, closeParens int
+	var openBraces, closeBraces int
+	var openBrackets, closeBrackets int
+	for _, ch := range s {
+		switch ch {
+		case '(':
+			openParens++
+		case ')':
+			closeParens++
+		case '{':
+			openBraces++
+		case '}':
+			closeBraces++
+		case '[':
+			openBrackets++
+		case ']':
+			closeBrackets++
+		}
+	}
+	var warns []string
+	if diff := openParens - closeParens; diff > 0 {
+		warns = append(warns, fmt.Sprintf("%d more ( than )", diff))
+	} else if diff := closeParens - openParens; diff > 0 {
+		warns = append(warns, fmt.Sprintf("%d more ) than (", diff))
+	}
+	if diff := openBraces - closeBraces; diff > 0 {
+		warns = append(warns, fmt.Sprintf("%d more { than }", diff))
+	} else if diff := closeBraces - openBraces; diff > 0 {
+		warns = append(warns, fmt.Sprintf("%d more } than {", diff))
+	}
+	if diff := openBrackets - closeBrackets; diff > 0 {
+		warns = append(warns, fmt.Sprintf("%d more [ than ]", diff))
+	} else if diff := closeBrackets - openBrackets; diff > 0 {
+		warns = append(warns, fmt.Sprintf("%d more ] than [", diff))
+	}
+	if len(warns) == 0 {
+		return ""
+	}
+	return "bracket mismatch: " + strings.Join(warns, ", ")
 }
 
 // splitLines splits s by newline, removing the trailing empty element

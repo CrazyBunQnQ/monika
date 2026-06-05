@@ -14,15 +14,18 @@ const (
 	EventSessionUpdated
 	EventTurnStart
 	EventCompaction
+	EventRetrying
 )
 
 type Event struct {
-	Type       EventType
-	Content    string
-	SessionID  string // non-empty = event belongs to a specific session (e.g. child agent)
-	Tool       *ToolEvent
-	Usage      UsageEvent
-	Compaction *CompactionEvent
+	Type         EventType
+	Content      string
+	SessionID    string // non-empty = event belongs to a specific session (e.g. child agent)
+	Tool         *ToolEvent
+	Usage        UsageEvent
+	Compaction   *CompactionEvent
+	RetryAttempt int // current retry attempt (for EventRetrying)
+	RetryMax     int // total retry attempts (for EventRetrying)
 }
 
 type ToolEvent struct {

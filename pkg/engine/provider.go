@@ -34,6 +34,9 @@ type ChatEvent struct {
 	ToolCall         *ToolCall
 	Usage            Usage
 	Error            ProviderError
+	RetryAttempt     int    // current retry attempt (1-based, for EventRetrying)
+	RetryMax         int    // total retry attempts (for EventRetrying)
+	RetryReason      string // reason for retrying (for EventRetrying)
 }
 
 type EventKind int
@@ -46,6 +49,7 @@ const (
 	EventUsage
 	EventError
 	EventMessageEnd
+	EventRetrying
 )
 
 type ToolCall struct {

@@ -351,7 +351,10 @@ func computeUnifiedDiff(filePath string, old, new string) []string {
 	}
 
 	// Generate hunks (simplified: single hunk covering all changes)
-	type edit struct{ op byte; text string } // '-' delete, '+' add, ' ' context
+	type edit struct {
+		op   byte
+		text string
+	} // '-' delete, '+' add, ' ' context
 	var edits []edit
 	i, j := m, n
 	var stack []edit

@@ -7,18 +7,20 @@ import (
 )
 
 type StreamEvent struct {
-	Type       string                              `json:"type"`
-	Content    string                              `json:"content,omitempty"`
-	SessionID  string                              `json:"session_id,omitempty"`
-	Model      string                              `json:"model,omitempty"`
-	Seq        int64                               `json:"seq,omitempty"`
-	Tool       *agent.ToolEvent                    `json:"tool,omitempty"`
-	AgentUsage *agent.UsageEvent                   `json:"usage,omitempty"`
-	FileChange *FileChangeEvent                    `json:"file_change,omitempty"`
-	Compaction *agent.CompactionEvent              `json:"compaction,omitempty"`
-	Tasks      []agent.TaskItem                    `json:"tasks,omitempty"`
-	Permission *permission.PermissionRequiredEvent `json:"permission,omitempty"`
-	AskUser    *AskUserEvent                       `json:"ask_user,omitempty"`
+	Type         string                              `json:"type"`
+	Content      string                              `json:"content,omitempty"`
+	SessionID    string                              `json:"session_id,omitempty"`
+	Model        string                              `json:"model,omitempty"`
+	Seq          int64                               `json:"seq,omitempty"`
+	Tool         *agent.ToolEvent                    `json:"tool,omitempty"`
+	AgentUsage   *agent.UsageEvent                   `json:"usage,omitempty"`
+	FileChange   *FileChangeEvent                    `json:"file_change,omitempty"`
+	Compaction   *agent.CompactionEvent              `json:"compaction,omitempty"`
+	Tasks        []agent.TaskItem                    `json:"tasks,omitempty"`
+	Permission   *permission.PermissionRequiredEvent `json:"permission,omitempty"`
+	AskUser      *AskUserEvent                       `json:"ask_user,omitempty"`
+	RetryAttempt int                                 `json:"retry_attempt,omitempty"`
+	RetryMax     int                                 `json:"retry_max,omitempty"`
 }
 
 type AskUserEvent struct {

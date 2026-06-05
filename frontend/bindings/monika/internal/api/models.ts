@@ -762,6 +762,8 @@ export class StreamEvent {
     "tasks"?: agent$0.TaskItem[];
     "permission"?: permission$0.PermissionRequiredEvent | null;
     "ask_user"?: AskUserEvent | null;
+    "retry_attempt"?: number;
+    "retry_max"?: number;
 
     /** Creates a new StreamEvent instance. */
     constructor($$source: Partial<StreamEvent> = {}) {

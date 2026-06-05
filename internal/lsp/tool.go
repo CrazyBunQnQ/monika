@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"monika/internal/tool"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
-	"monika/internal/tool"
 )
 
 type LSPTool struct {
@@ -24,6 +24,11 @@ func NewLSPTool(projectDir string) (tool.Tool, error) {
 }
 
 func (t *LSPTool) Manager() *Manager { return t.manager }
+
+// NotifySavedForFile sends didSave to the LSP server for a file.
+func (t *LSPTool) NotifySavedForFile(ctx context.Context, filePath string) error {
+	return t.manager.NotifySavedForFile(ctx, filePath)
+}
 
 func (t *LSPTool) ReadyForFile(ctx context.Context, filePath string) bool {
 	return t.manager.ReadyForFile(ctx, filePath)
@@ -50,7 +55,6 @@ func (t *LSPTool) FormatContent(ctx context.Context, filePath string) (string, e
 	return t.manager.FormatContent(ctx, client, filePath)
 }
 
-
 func (t *LSPTool) Name() string { return "lsp" }
 
 func (t *LSPTool) Description() string {
@@ -72,7 +76,6 @@ Actions:
 The file path must be absolute or relative to the project directory.
 Line and character are 0-based (same as LSP protocol).`
 }
-
 
 func (t *LSPTool) Parameters() map[string]any {
 	return map[string]any{
@@ -126,16 +129,16 @@ func (t *LSPTool) Parameters() map[string]any {
 
 func (t *LSPTool) Execute(ctx context.Context, args json.RawMessage) (tool.ExecutionResult, error) {
 	var params struct {
-		Action      string `json:"action"`
-		File        string `json:"file"`
-		Line        int    `json:"line"`
-		Character   int    `json:"character"`
-		EndLine     int    `json:"end_line"`
-		EndCharacter int   `json:"end_character"`
-		NewName     string `json:"new_name"`
-		ActionTitle string `json:"action_title"`
-		SourcePath  string `json:"source_path"`
-		DestPath    string `json:"dest_path"`
+		Action       string `json:"action"`
+		File         string `json:"file"`
+		Line         int    `json:"line"`
+		Character    int    `json:"character"`
+		EndLine      int    `json:"end_line"`
+		EndCharacter int    `json:"end_character"`
+		NewName      string `json:"new_name"`
+		ActionTitle  string `json:"action_title"`
+		SourcePath   string `json:"source_path"`
+		DestPath     string `json:"dest_path"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
@@ -299,8 +302,11 @@ func (t *LSPTool) Execute(ctx context.Context, args json.RawMessage) (tool.Execu
 			return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 		}
 		var found *CodeAction
+		// Clean up the action title by removing suffixes added by formatCodeActions
+		cleanActionTitle := stripActionSuffix(params.ActionTitle)
 		for i := range actions {
-			if actions[i].Title == params.ActionTitle {
+			// Try exact match first, then match with stripped title
+			if actions[i].Title == params.ActionTitle || actions[i].Title == cleanActionTitle {
 				found = &actions[i]
 				break
 			}
@@ -456,6 +462,27 @@ func formatCodeActions(actions []CodeAction) string {
 	return sb.String()
 }
 
+// stripActionSuffix removes the suffix added by formatCodeActions from an action title.
+// It removes patterns like " — X file(s) affected" and " (disabled: reason)".
+func stripActionSuffix(title string) string {
+	// Remove " — X file(s) affected" suffix
+	if idx := strings.Index(title, " — "); idx > 0 {
+		suffix := title[idx+3:]
+		if strings.HasSuffix(suffix, " affected") {
+			// Check if the part before "affected" looks like a number pattern
+			numPart := strings.TrimSuffix(suffix, " affected")
+			if strings.HasSuffix(numPart, " file(s)") {
+				title = title[:idx]
+			}
+		}
+	}
+	// Remove " (disabled: ...)" suffix
+	if idx := strings.Index(title, " (disabled: "); idx > 0 {
+		title = title[:idx]
+	}
+	return title
+}
+
 func extToLanguageID(ext string) string {
 	m := map[string]string{
 		".go": "go", ".ts": "typescript", ".tsx": "typescriptreact",
@@ -483,4 +510,3 @@ func extToLanguageID(ext string) string {
 	}
 	return strings.TrimPrefix(ext, ".")
 }
-

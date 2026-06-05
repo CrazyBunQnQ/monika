@@ -48,7 +48,7 @@ const PromptToolUsage = `## Tool Usage
 - Never call file_read without first narrowing scope via grep/glob
 
 ### Read with precision
-- After grep gives you line numbers, read ONLY the lines you need — typically 2
+- After grep gives you line numbers, read ONLY the lines you need — typical
 - Use the 'ranges' parameter to read multiple non-contiguous sections in one call (e.g. ranges='5-16,40-80')
 - Always provide offset and limit; the smaller the better for context efficiency
 - When output ends with "[N more lines below]", use the suggested offset to continue
@@ -67,6 +67,7 @@ const PromptToolUsage = `## Tool Usage
 - Set line_count to the number of lines to replace (default 1), or 0 to insert after the anchor line
 - If an edit fails due to hash mismatch, re-read the file to get the current content
 - file_edit refuses to edit files with unresolved merge conflict markers
+- Before editing, read from the edit point to past the end of the enclosing code block to see all closing braces and the full surrounding structure. This ensures you know the correct nesting and indentation level — never replace code without knowing what comes after
 
 ### MCP tool usage
 **MCP tools provide external capabilities (web search, documentation lookup, database access, browser automation). Always check MCP before using bash workarounds.**

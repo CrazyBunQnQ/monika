@@ -20,8 +20,8 @@ import (
 	"monika/internal/tool"
 	"monika/internal/tool/builtin"
 	"monika/internal/update"
-	"monika/pkg/modelsdev"
 	engine2 "monika/pkg/engine"
+	"monika/pkg/modelsdev"
 
 	_ "monika/internal/engines/mcp"
 	_ "monika/internal/engines/provider/openai"
@@ -77,7 +77,7 @@ func main() {
 	// Create a standalone tsBridge for tree-sitter IPC (uses application.Get(), no app ref needed).
 	tsBridge := api.NewTSBridge()
 	tsQueryFn := tsBridge.QueryFunc()
-	builtin.RegisterDefaults(registry, cwd, builtin.TSQueryFunc(tsQueryFn))
+	builtin.RegisterDefaults(registry, cwd, home, builtin.TSQueryFunc(tsQueryFn))
 	builtin.RegisterLSP(registry, cwd)
 	builtin.WireLSPHooks(registry)
 
@@ -355,12 +355,12 @@ The content below is your PROJECT RULES from AGENTS.md. These rules are NON-NEGO
 	})
 
 	mainWindow := app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Title:     "Monika",
-		Width:     1400,
-		Height:    900,
-		MinWidth:  900,
-		MinHeight: 600,
-		Frameless: true,
+		Title:      "Monika",
+		Width:      1400,
+		Height:     900,
+		MinWidth:   900,
+		MinHeight:  600,
+		Frameless:  true,
 		StartState: application.WindowStateMaximised,
 	})
 

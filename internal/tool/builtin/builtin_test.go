@@ -14,7 +14,7 @@ import (
 
 func TestFileRead(t *testing.T) {
 	dir := t.TempDir()
-	f := NewFileRead(dir, nil)
+	f := NewFileRead(dir, "", nil)
 
 	if f.Name() != "file_read" {
 		t.Fatalf("name = %q", f.Name())
@@ -35,7 +35,7 @@ func TestFileReadReadsFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f := NewFileRead(dir, nil)
+	f := NewFileRead(dir, "", nil)
 	args, _ := json.Marshal(map[string]any{"filePath": path, "offset": 1, "limit": 200})
 	result, err := f.Execute(context.Background(), args)
 	if err != nil {
@@ -57,7 +57,7 @@ func TestFileReadExplicitLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f := NewFileRead(dir, nil)
+	f := NewFileRead(dir, "", nil)
 	args, _ := json.Marshal(map[string]any{"filePath": path, "offset": 1, "limit": 100})
 	result, err := f.Execute(context.Background(), args)
 	if err != nil {
@@ -76,7 +76,7 @@ func TestFileReadWithOffsetLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f := NewFileRead(dir, nil)
+	f := NewFileRead(dir, "", nil)
 	args, _ := json.Marshal(map[string]any{"filePath": path, "offset": 2, "limit": 2})
 	result, err := f.Execute(context.Background(), args)
 	if err != nil {
@@ -89,7 +89,7 @@ func TestFileReadWithOffsetLimit(t *testing.T) {
 
 func TestFileReadOutsideProject(t *testing.T) {
 	dir := t.TempDir()
-	f := NewFileRead(dir, nil)
+	f := NewFileRead(dir, "", nil)
 	args, _ := json.Marshal(map[string]any{"filePath": "/etc/passwd"})
 	result, err := f.Execute(context.Background(), args)
 	if err != nil {
@@ -237,7 +237,7 @@ func TestBashExecute(t *testing.T) {
 
 func TestRegisterDefaultsAll(t *testing.T) {
 	r := tool.NewRegistry()
-	if err := RegisterDefaults(r, t.TempDir(), nil); err != nil {
+	if err := RegisterDefaults(r, t.TempDir(), "", nil); err != nil {
 		t.Fatal(err)
 	}
 	expected := []string{"file_read", "file_write", "file_edit", "file_list", "glob", "grep", "bash"}
@@ -491,7 +491,6 @@ func TestFileEditAnchorVerification(t *testing.T) {
 	}
 }
 
-
 func TestFileListTree(t *testing.T) {
 	dir := t.TempDir()
 	os.MkdirAll(filepath.Join(dir, "a", "b"), 0o755)
@@ -518,7 +517,7 @@ func TestFileListTree(t *testing.T) {
 
 func TestFileReadRanges(t *testing.T) {
 	dir := t.TempDir()
-	f := NewFileRead(dir, nil)
+	f := NewFileRead(dir, "", nil)
 	path := filepath.Join(dir, "ranges.txt")
 	var lines []string
 	for i := 1; i <= 20; i++ {
@@ -542,6 +541,108 @@ func TestFileReadRanges(t *testing.T) {
 	}
 	if strings.Contains(result.Content, "line 10") {
 		t.Fatalf("should not contain middle lines, got: %s", result.Content)
+	}
+}
+
+func TestFileReadSkillName(t *testing.T) {
+	dir := t.TempDir()
+	homeDir := t.TempDir()
+
+	// Create a global skill in homeDir/.monika/skills/test-skill/SKILL.md
+	skillDir := filepath.Join(homeDir, ".monika", "skills", "test-skill")
+	os.MkdirAll(skillDir, 0o755)
+	skillContent := "# Test Skill\nThis is a test."
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(skillContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	f := NewFileRead(dir, homeDir, nil)
+	args, _ := json.Marshal(map[string]any{"skillName": "test-skill"})
+	result, err := f.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "# Test Skill") {
+		t.Fatalf("expected skill content, got: %s", result.Content)
+	}
+}
+
+func TestFileReadSkillNameNotFound(t *testing.T) {
+	dir := t.TempDir()
+	f := NewFileRead(dir, "", nil)
+	args, _ := json.Marshal(map[string]any{"skillName": "nonexistent-skill"})
+	result, err := f.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Fatal("expected error for nonexistent skill")
+	}
+}
+
+func TestFileReadSkillNamePreferProject(t *testing.T) {
+	dir := t.TempDir()
+	homeDir := t.TempDir()
+
+	// Create global skill
+	globalSkillDir := filepath.Join(homeDir, ".monika", "skills", "my-skill")
+	os.MkdirAll(globalSkillDir, 0o755)
+	if err := os.WriteFile(filepath.Join(globalSkillDir, "SKILL.md"), []byte("global"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create project skill (should be preferred)
+	projSkillDir := filepath.Join(dir, ".monika", "skills", "my-skill")
+	os.MkdirAll(projSkillDir, 0o755)
+	if err := os.WriteFile(filepath.Join(projSkillDir, "SKILL.md"), []byte("project"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	f := NewFileRead(dir, homeDir, nil)
+	args, _ := json.Marshal(map[string]any{"skillName": "my-skill"})
+	result, err := f.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "project") {
+		t.Fatalf("expected project skill content, got: %s", result.Content)
+	}
+}
+
+func TestFileReadMutuallyExclusiveOrBothEmpty(t *testing.T) {
+	dir := t.TempDir()
+	f := NewFileRead(dir, "", nil)
+
+	// Both empty
+	args, _ := json.Marshal(map[string]any{})
+	result, err := f.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Fatal("expected error for both empty")
+	}
+	if !strings.Contains(result.Content, "filePath") || !strings.Contains(result.Content, "skillName") {
+		t.Fatalf("expected error mentioning both params, got: %s", result.Content)
+	}
+
+	// Both provided
+	args2, _ := json.Marshal(map[string]any{"filePath": "/some/path", "skillName": "some-skill"})
+	result2, err2 := f.Execute(context.Background(), args2)
+	if err2 != nil {
+		t.Fatal(err2)
+	}
+	if !result2.IsError {
+		t.Fatal("expected error for both provided")
+	}
+	if !strings.Contains(result2.Content, "mutually exclusive") {
+		t.Fatalf("expected error mentioning mutual exclusivity, got: %s", result2.Content)
 	}
 }
 
