@@ -329,11 +329,21 @@ func (a *App) OpenProject(path string) (*ProjectInfo, error) {
 			}
 		}
 	}
+	// Get initial commit hash for change detection
+	lastCommitHash := ""
+	cmd3 := command("git", "rev-parse", "HEAD")
+	cmd3.Dir = path
+	out3, err3 := cmd3.Output()
+	if err3 == nil {
+		lastCommitHash = strings.TrimSpace(string(out3))
+	}
+
 	info := &ProjectInfo{
-		Path:      path,
-		Name:      filepath.Base(path),
-		Branch:    branch,
-		Worktrees: worktrees,
+		Path:           path,
+		Name:           filepath.Base(path),
+		Branch:         branch,
+		Worktrees:      worktrees,
+		LastCommitHash: lastCommitHash,
 	}
 	a.mu.Lock()
 	a.projects[path] = info
@@ -1174,6 +1184,7 @@ func (a *App) handleAgentEvent(sessionID, model string, ev agent2.Event) {
 		// After bash execution, check if the git branch changed and notify the frontend.
 		if ev.Tool != nil && ev.Tool.Name == "bash" {
 			a.emitBranchChangeIfChanged()
+			a.emitCommitHistoryChangedIfChanged()
 		}
 	case agent2.EventUsage:
 		se.Type = "usage"
@@ -1248,6 +1259,52 @@ func (a *App) emitBranchChangeIfChanged() {
 	a.setProjectBranch(projectPath, currentBranch)
 
 	application.Get().Event.Emit("branch-changed", currentBranch)
+}
+
+// setProjectLastCommitHash updates the in-memory last commit hash for a project.
+func (a *App) setProjectLastCommitHash(projectPath, hash string) {
+	a.mu.Lock()
+	if info, ok := a.projects[projectPath]; ok {
+		info.LastCommitHash = hash
+	}
+	a.mu.Unlock()
+}
+
+// emitCommitHistoryChangedIfChanged reads the current git HEAD hash from disk and compares
+// it with the cached value. If different, it emits a Wails event so the frontend
+// can refresh the commit history.
+func (a *App) emitCommitHistoryChangedIfChanged() {
+	projectPath := ""
+	a.mu.RLock()
+	// Find the project path that owns this session.
+	for _, info := range a.projects {
+		projectPath = info.Path
+		break
+	}
+	storedHash := ""
+	if info, ok := a.projects[projectPath]; ok {
+		storedHash = info.LastCommitHash
+	}
+	a.mu.RUnlock()
+
+	if projectPath == "" {
+		return
+	}
+
+	cmd := command("git", "rev-parse", "HEAD")
+	cmd.Dir = projectPath
+	out, err := cmd.Output()
+	if err != nil {
+		return
+	}
+	currentHash := strings.TrimSpace(string(out))
+	if currentHash == "" || currentHash == storedHash {
+		return
+	}
+
+	a.setProjectLastCommitHash(projectPath, currentHash)
+
+	application.Get().Event.Emit("commit-history-changed", currentHash)
 }
 
 // syncTasksToSession reads the current tasks for a session from the TaskStore
@@ -1559,6 +1616,56 @@ func (a *App) ListBranches(projectPath string) ([]BranchInfo, error) {
 		}
 	}
 	return branches, nil
+}
+
+// GitLog returns recent git commits with graph topology for the given project.
+// It executes git log --graph --all with structured output, parsing each line
+// into graph prefix, hash, author, date, message, and ref decorations.
+func (a *App) GitLog(projectPath string) ([]CommitInfo, error) {
+	cmd := command("git", "log", "--graph", "--all", "--no-color",
+		"--pretty=format:%x00%H%x00%h%x00%an%x00%ar%x00%s%x00%D",
+		"-200")
+	cmd.Dir = projectPath
+	out, err := cmd.Output()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[monika] GitLog git log failed: %v\n", err)
+		return nil, err
+	}
+
+	var commits []CommitInfo
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		// Split graph prefix from structured data at the NUL byte.
+		nulIdx := strings.IndexByte(line, 0x00)
+		if nulIdx < 0 {
+			continue
+		}
+		graphPrefix := line[:nulIdx]
+		rest := line[nulIdx+1:]
+
+		parts := strings.SplitN(rest, "\x00", 6)
+		if len(parts) < 5 {
+			continue
+		}
+
+		refs := ""
+		if len(parts) >= 6 {
+			refs = parts[5]
+		}
+
+		commits = append(commits, CommitInfo{
+			GraphLine: graphPrefix,
+			Hash:      parts[1], // short hash
+			Author:    parts[2],
+			Date:      parts[3],
+			Message:   parts[4],
+			Refs:      refs,
+		})
+	}
+	return commits, nil
 }
 
 // validateBranchName checks that a branch name is safe for git command execution.

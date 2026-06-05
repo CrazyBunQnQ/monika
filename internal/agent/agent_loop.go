@@ -49,6 +49,8 @@ type Conversation struct {
 
 const compactionBuffer = 20_000
 
+const DefaultMaxSteps = 80
+
 func IsChildSession(sessionID string) bool {
 	return strings.HasPrefix(sessionID, "call_") || strings.HasPrefix(sessionID, "sub_") || strings.HasPrefix(sessionID, "compact_")
 }
@@ -264,6 +266,7 @@ type AgentLoop struct {
 	mcpRegistry       *engine.MCPRegistry
 	askUserFn         tool.AskUserFunc
 	taskStore         tool.TaskStore
+	maxSteps          int
 }
 
 // SetDispatchFn sets the child dispatch function for this loop.
@@ -356,6 +359,10 @@ func WithTaskStore(ts tool.TaskStore) LoopOption {
 	return func(a *AgentLoop) { a.taskStore = ts }
 }
 
+func WithMaxSteps(n int) LoopOption {
+	return func(a *AgentLoop) { a.maxSteps = n }
+}
+
 func NewLoop(provider engine.ProviderEngine, tools *tool.ToolRegistry, opts ...LoopOption) *AgentLoop {
 	a := &AgentLoop{
 		provider: provider,
@@ -381,7 +388,33 @@ func (a *AgentLoop) RunBlocking(ctx context.Context, conv *Conversation, userMes
 	var totalUsage engine.Usage
 
 	for turn := 0; ; turn++ {
-		_ = turn // reserved for future logging
+		maxSteps := a.maxSteps
+		if maxSteps <= 0 {
+			maxSteps = DefaultMaxSteps
+		}
+		if turn >= maxSteps {
+			maxStepsPrompt := a.buildMaxStepsPrompt(conv)
+			req := engine.ChatRequest{
+				Provider: a.providerID,
+				Model:    a.model,
+				Messages: maxStepsPrompt,
+				Tools:    nil,
+			}
+			events, err := a.provider.StreamChat(ctx, req)
+			if err != nil {
+				return nil, fmt.Errorf("max steps reached, summary failed: %w", err)
+			}
+			var collected []engine.ChatEvent
+			for ev := range events {
+				collected = append(collected, ev)
+			}
+			result := parseResult(collected)
+			return &LoopResult{
+				Conversation: conv,
+				Content:      result.Content,
+				Usage:        totalUsage,
+			}, nil
+		}
 		messages := a.buildMessages(conv)
 
 		req := engine.ChatRequest{
@@ -497,7 +530,7 @@ func (a *AgentLoop) RunBlocking(ctx context.Context, conv *Conversation, userMes
 			}
 
 			toolCtx := tool.WithProjectDir(ctx, a.projectDir)
-			if tc.Function.Name == "file_edit" && result.Content != "" {
+			if (tc.Function.Name == "file_edit" || tc.Function.Name == "patch") && result.Content != "" {
 				toolCtx = tool.WithMessageContent(toolCtx, result.Content)
 			}
 			if a.sessionID != "" {
@@ -571,7 +604,33 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 	tools := a.buildToolDefs()
 
 	for turn := 0; ; turn++ {
-		_ = turn // reserved for future logging
+		maxSteps := a.maxSteps
+		if maxSteps <= 0 {
+			maxSteps = DefaultMaxSteps
+		}
+		if turn >= maxSteps {
+			ch <- Event{Type: EventMaxSteps, Content: "Maximum steps reached"}
+			maxStepsPrompt := a.buildMaxStepsPrompt(conv)
+			req := engine.ChatRequest{
+				Provider: a.providerID,
+				Model:    a.model,
+				Messages: maxStepsPrompt,
+				Tools:    nil,
+			}
+			events, err := a.provider.StreamChat(ctx, req)
+			if err != nil {
+				ch <- Event{Type: EventTextDelta, Content: "Maximum steps reached. Unable to generate summary."}
+				ch <- Event{Type: EventDone}
+				return
+			}
+			for ev := range events {
+				if ev.Kind == engine.EventContentDelta && ev.Text != "" {
+					ch <- Event{Type: EventTextDelta, Content: ev.Text}
+				}
+			}
+			ch <- Event{Type: EventDone}
+			return
+		}
 		select {
 		case <-ctx.Done():
 			ch <- Event{Type: EventError, Content: "cancelled"}
@@ -879,7 +938,7 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 			}
 
 			toolCtx := tool.WithProjectDir(ctx, a.projectDir)
-			if tc.Function.Name == "file_edit" && result.Content != "" {
+			if (tc.Function.Name == "file_edit" || tc.Function.Name == "patch") && result.Content != "" {
 				toolCtx = tool.WithMessageContent(toolCtx, result.Content)
 			}
 			if a.sessionID != "" {
@@ -1099,6 +1158,16 @@ func (a *AgentLoop) buildMessages(conv *Conversation) []engine.ChatMessage {
 		})
 	}
 
+	if len(msgs) >= 10 && a.agent.Name != "compaction" {
+		reminder := "\n\n<system-reminder>\nRemember: grep before reading | read before editing | never guess URLs | prefer editing over creating | check MCP before bash | follow project_rules strictly | do the smallest thing | run lint/typecheck after completing\n</system-reminder>"
+		for i := len(messages) - 1; i >= 0; i-- {
+			if messages[i].Role == "system" {
+				messages[i].Content += reminder
+				break
+			}
+		}
+	}
+
 	messages = append(messages, filteredMsgs...)
 	result := sanitizeMessageSequence(sanitizeToolCallPairs(messages))
 
@@ -1120,6 +1189,48 @@ func (a *AgentLoop) buildMessages(conv *Conversation) []engine.ChatMessage {
 	}
 
 	return result
+}
+
+func (a *AgentLoop) buildMaxStepsPrompt(conv *Conversation) []engine.ChatMessage {
+	normalized := strings.ReplaceAll(a.projectDir, "\\", "/")
+	sysPrompt := strings.ReplaceAll(a.systemPrompt, "{{WorkingDirectory}}", normalized)
+
+	maxStepsPrompt := `CRITICAL - MAXIMUM STEPS REACHED
+
+The maximum number of steps allowed for this task has been reached. Tools are now disabled. You MUST respond with text only.
+
+Your response must include:
+- Statement that maximum steps have been reached
+- Summary of what was accomplished so far
+- List of any remaining tasks that were not completed
+- Recommendations for what should be done next
+
+Do NOT make any tool calls. Respond with text ONLY.`
+
+	messages := []engine.ChatMessage{
+		{Role: "system", Content: sysPrompt + "\n\n" + maxStepsPrompt},
+	}
+
+	var userMsgs []engine.ChatMessage
+	for _, m := range conv.Messages {
+		if m.Role == "user" {
+			userMsgs = append(userMsgs, m)
+		}
+	}
+	if len(userMsgs) > 0 {
+		last := userMsgs[len(userMsgs)-1]
+		messages = append(messages, engine.ChatMessage{
+			Role:    "user",
+			Content: last.Content,
+		})
+	}
+
+	messages = append(messages, engine.ChatMessage{
+		Role:    "user",
+		Content: "Maximum steps reached. Please provide a summary of work done and remaining tasks.",
+	})
+
+	return messages
 }
 
 // sanitizeToolCallPairs ensures every assistant message with tool_calls

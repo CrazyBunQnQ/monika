@@ -209,7 +209,7 @@ func TestFileWriteRule(t *testing.T) {
 			},
 			ctx: CheckContext{
 				ToolName: "file_write",
-				Args:     json.RawMessage(`{"path": "src/main.go"}`),
+				Args:     json.RawMessage(`{"filePath": "src/main.go"}`),
 			},
 			expected: denyPtr(),
 		},
@@ -220,7 +220,7 @@ func TestFileWriteRule(t *testing.T) {
 			},
 			ctx: CheckContext{
 				ToolName: "file_write",
-				Args:     json.RawMessage(`{"path": "src/main.go"}`),
+				Args:     json.RawMessage(`{"filePath": "src/main.go"}`),
 			},
 			expected: allowPtr(),
 		},
@@ -231,7 +231,7 @@ func TestFileWriteRule(t *testing.T) {
 			},
 			ctx: CheckContext{
 				ToolName: "file_write",
-				Args:     json.RawMessage(`{"path": "dist/output.js"}`),
+				Args:     json.RawMessage(`{"filePath": "dist/output.js"}`),
 			},
 			expected: nil,
 		},
@@ -272,7 +272,7 @@ func TestFileEditRule(t *testing.T) {
 			},
 			ctx: CheckContext{
 				ToolName: "file_edit",
-				Args:     json.RawMessage(`{"path": "src/main.go"}`),
+				Args:     json.RawMessage(`{"filePath": "src/main.go"}`),
 			},
 			expected: denyPtr(),
 		},
@@ -283,7 +283,7 @@ func TestFileEditRule(t *testing.T) {
 			},
 			ctx: CheckContext{
 				ToolName: "file_edit",
-				Args:     json.RawMessage(`{"path": "src/main.go"}`),
+				Args:     json.RawMessage(`{"filePath": "src/main.go"}`),
 			},
 			expected: allowPtr(),
 		},
@@ -294,7 +294,7 @@ func TestFileEditRule(t *testing.T) {
 			},
 			ctx: CheckContext{
 				ToolName: "file_edit",
-				Args:     json.RawMessage(`{"path": "dist/output.js"}`),
+				Args:     json.RawMessage(`{"filePath": "dist/output.js"}`),
 			},
 			expected: nil,
 		},

@@ -21,6 +21,7 @@ func RegisterDefaults(r *tool.ToolRegistry, projectDir, homeDir string, tsQuery 
 	r.Register(NewFileRead(projectDir, homeDir, tsQuery))
 	r.Register(NewFileWrite(projectDir))
 	r.Register(NewFileEdit(projectDir))
+	r.Register(NewFilePatch(projectDir))
 	r.Register(NewFileList(projectDir))
 	r.Register(NewGlob(projectDir))
 	r.Register(NewGrep(projectDir, tsQuery))
@@ -146,6 +147,11 @@ func WireLSPHooks(r *tool.ToolRegistry) {
 	if t, ok := r.Get("file_edit"); ok {
 		if fe, ok := t.(interface{ SetDiagFunc(LSPDiagFunc) }); ok {
 			fe.SetDiagFunc(diagFunc)
+		}
+	}
+	if t, ok := r.Get("patch"); ok {
+		if fp, ok := t.(interface{ SetDiagFunc(LSPDiagFunc) }); ok {
+			fp.SetDiagFunc(diagFunc)
 		}
 	}
 	if t, ok := r.Get("file_write"); ok {

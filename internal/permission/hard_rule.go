@@ -81,8 +81,8 @@ func (e *HardRuleEngine) extractMatchValue(ctx CheckContext) string {
 		if cmd, ok := args["command"].(string); ok {
 			return cmd
 		}
-	case "file_write", "file_edit":
-		if path, ok := args["path"].(string); ok {
+	case "file_write", "file_edit", "patch":
+		if path, ok := args["filePath"].(string); ok {
 			return path
 		}
 	case "skill":

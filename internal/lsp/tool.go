@@ -188,7 +188,7 @@ func (t *LSPTool) Execute(ctx context.Context, args json.RawMessage) (tool.Execu
 		beforeDiagSeq = client.DiagSeq(uri)
 	}
 
-	changed, err := t.manager.EnsureAndSync(ctx, client, filePath, serverName)
+	_, err = t.manager.EnsureAndSync(ctx, client, filePath, serverName)
 	if err != nil {
 		lspLog("EnsureAndSync error: %v", err)
 		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
@@ -202,9 +202,7 @@ func (t *LSPTool) Execute(ctx context.Context, args json.RawMessage) (tool.Execu
 			return tool.ExecutionResult{Content: ctx.Err().Error(), IsError: true}, nil
 		default:
 		}
-		if changed {
-			client.WaitForDiagUpdate(ctx, uri, beforeDiagSeq, 3*time.Second)
-		}
+		client.WaitForDiagUpdate(ctx, uri, beforeDiagSeq, 5*time.Second)
 		lspLog("diagnostics action: uri=%s", uri)
 		normURI := normalizeURI(uri)
 		lspLog("diagnostics action: normalized_uri=%s", normURI)

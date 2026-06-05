@@ -54,9 +54,44 @@ func resolveShell() (string, string) {
 	return "", ""
 }
 
-func (b *bashTool) Name() string        { return "bash" }
+func (b *bashTool) Name() string { return "bash" }
 func (b *bashTool) Description() string {
-	return "Execute a shell command. NEVER use bash for file reading/searching — use dedicated tools instead. Forbidden commands: cat, head, tail, less, more, ls (use file_list), grep/rg (use grep tool), find/fd (use glob), awk, sed. Use bash ONLY when no dedicated tool covers the operation. Commands timeout after 120 seconds. Output exceeding 30000 characters is truncated with a midpoint marker."
+	return `Execute a shell command. Use bash ONLY when no dedicated tool covers the operation.
+
+IMPORTANT: Do NOT use bash for file operations:
+- File search: Use glob (NOT find/ls)
+- Content search: Use grep (NOT grep/rg)
+- Read files: Use file_read (NOT cat/head/tail)
+- Edit files: Use file_edit or patch (NOT sed/awk)
+- Write files: Use file_write (NOT echo/cat)
+- Communication: Output text directly (NOT echo/printf)
+
+When running multiple independent commands, make multiple bash calls in parallel.
+Commands timeout after 120 seconds. Output exceeding 30000 characters is truncated.
+
+# Committing changes with git
+
+Only create commits when requested by the user.
+
+Git Safety Protocol:
+- NEVER update git config
+- NEVER run destructive/irreversible git commands (push --force, reset --hard) unless explicitly requested
+- NEVER skip hooks (--no-verify) unless explicitly requested
+- NEVER force push to main/master — warn the user if they request it
+- Avoid git commit --amend. ONLY use --amend when ALL conditions met:
+  (1) User explicitly requested amend, OR commit succeeded but pre-commit hooks auto-modified files
+  (2) HEAD commit was created by you in this conversation
+  (3) Commit has NOT been pushed to remote
+- If commit FAILED or was REJECTED by hook, NEVER amend — fix the issue and create a NEW commit
+- If already pushed to remote, NEVER amend unless user explicitly requests it
+
+When creating a commit:
+1. Run in parallel: git status, git diff, git log --oneline -10
+2. Analyze changes, draft commit message matching repo style
+3. Stage files and commit
+4. Run git status to verify
+Do NOT push unless explicitly asked.
+Do NOT use git commands with -i flag (requires interactive input).`
 }
 
 func (b *bashTool) Parameters() map[string]any {

@@ -108,8 +108,8 @@ func TestFileServiceListDir(t *testing.T) {
 	if nodes[0].Children[0].Name != "c.txt" {
 		t.Errorf("expected c.txt, got %q", nodes[0].Children[0].Name)
 	}
-	if nodes[0].Children[0].Path != filepath.Join("b", "c.txt") {
-		t.Errorf("expected path %q, got %q", filepath.Join("b", "c.txt"), nodes[0].Children[0].Path)
+	if nodes[0].Children[0].Path != "b/c.txt" {
+		t.Errorf("expected path %q, got %q", "b/c.txt", nodes[0].Children[0].Path)
 	}
 
 	if len(nodes[1].Children) != 1 {

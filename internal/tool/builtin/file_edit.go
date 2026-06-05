@@ -30,7 +30,7 @@ func (f *fileEdit) SetDiagFunc(fn LSPDiagFunc) { f.diagFunc = fn }
 func (f *fileEdit) Name() string { return "file_edit" }
 
 func (f *fileEdit) Description() string {
-	return "Replaces lines in a file using line-number positioning with hash verification. The anchor (from file_read output, format 'hash:lineNumber') identifies the starting line and verifies it has not changed. line_count specifies how many lines to replace (default 1). Set line_count to 0 to insert new_string after the anchor line without replacing anything. The new code is passed as natural text in your message content (not in JSON args). Refuses to edit files containing merge conflict markers."
+	return "Replaces lines in a file using line-number positioning with hash verification. The anchor (from file_read output, format 'hash:lineNumber') identifies the starting line and verifies it has not changed. line_count specifies how many lines to replace (default 1). Set line_count to 0 to insert new_string after the anchor line without replacing anything. The new_string parameter is REQUIRED. Refuses to edit files containing merge conflict markers."
 }
 
 func (f *fileEdit) Parameters() map[string]any {
@@ -47,14 +47,14 @@ func (f *fileEdit) Parameters() map[string]any {
 			},
 			"new_string": map[string]any{
 				"type":        "string",
-				"description": "The replacement text. Optional — if not provided in JSON args, the natural code from the assistant's message content is used instead.",
+				"description": "The replacement text. REQUIRED — must always be provided explicitly.",
 			},
 			"line_count": map[string]any{
 				"type":        "integer",
 				"description": "Number of lines to replace starting from the anchor line. Default is 1. Set to 0 to insert new_string after the anchor line without deleting any lines.",
 			},
 		},
-		"required": []string{"filePath", "anchor"},
+		"required": []string{"filePath", "anchor", "new_string"},
 	}
 }
 
@@ -69,11 +69,9 @@ func (f *fileEdit) Execute(ctx context.Context, args json.RawMessage) (tool.Exec
 		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 	}
 
-	// new_string from message content (natural code) takes priority over JSON args
-	if content := tool.MessageContentFromContext(ctx); content != "" {
-		params.NewString = content
+	if params.NewString == "" {
+		return tool.ExecutionResult{Content: "new_string is required and must not be empty", IsError: true}, nil
 	}
-
 	if params.Anchor == "" {
 		return tool.ExecutionResult{Content: "anchor must not be empty", IsError: true}, nil
 	}

@@ -3,7 +3,7 @@ import { create } from 'zustand'
 import { useNotificationStore, setMainWindowVisible } from './notificationStore'
 import { Events, Call } from '@wailsio/runtime'
 import { App, StreamEvent } from '../../bindings/monika'
-import type { RecentProject, BranchInfo, ModelInfo, ProviderInfo, ChangeStat, SessionInfo } from '../../bindings/monika'
+import type { RecentProject, BranchInfo, ModelInfo, ProviderInfo, ChangeStat, SessionInfo, CommitInfo } from '../../bindings/monika'
 import type { DockviewApi } from 'dockview'
 
 export interface PermissionRequiredEvent {
@@ -168,6 +168,7 @@ interface AppState {
     tasks: Record<string, TaskItem[]>
     todoCollapsed: Record<string, boolean>
     changeStats: { stats: ChangeStat[]; loading: boolean; error: string }
+    commitHistory: { commits: CommitInfo[]; loading: boolean; error: string }
     recentProjects: RecentProject[]
     allBranches: BranchInfo[]
     availableProviders: ProviderInfo[]
@@ -247,6 +248,7 @@ interface AppState {
     setSelectedProvider: (providerId: string) => Promise<void>
     loadModelsForProvider: (providerId: string) => Promise<void>
     setChangeStats: (st: Partial<{ stats: ChangeStat[]; loading: boolean; error: string }>) => void
+    loadCommitHistory: () => void
     respondPermission: (resp: { requestId: string; decision: string; rulePattern?: string }) => Promise<void>
     respondAskUser: (resp: { requestId: string; answer: string }) => Promise<void>
     loadPermissionRules: () => Promise<void>
@@ -315,6 +317,7 @@ export const useStore = create<AppState>((set, get) => ({
     tasks: {},
     todoCollapsed: {},
     changeStats: { stats: [], loading: false, error: '' },
+    commitHistory: { commits: [], loading: false, error: '' },
     recentProjects: [],
     allBranches: [],
     availableProviders: [],
@@ -1081,6 +1084,19 @@ export const useStore = create<AppState>((set, get) => ({
 
     setChangeStats: (st) => set((s) => ({ changeStats: { ...s.changeStats, ...st } })),
 
+
+    loadCommitHistory: async () => {
+        const { projectPath } = get()
+        if (!projectPath) return
+        set((s) => ({ commitHistory: { ...s.commitHistory, loading: true, error: '' } }))
+        try {
+            const result = await App.GitLog(projectPath)
+            const commits = Array.isArray(result) ? result : []
+            set({ commitHistory: { commits, loading: false, error: '' } })
+        } catch {
+            set((s) => ({ commitHistory: { commits: s.commitHistory.commits, loading: false, error: 'Failed to load history' } }))
+        }
+    },
     respondPermission: async (resp) => {
         await Call.ByName('monika/internal/api.App.RespondPermission', resp)
         set({ pendingPermission: null })
@@ -1299,6 +1315,7 @@ export const useStore = create<AppState>((set, get) => ({
             displayCounts: {},
             tasks: {},
             changeStats: { stats: [], loading: false, error: '' },
+            commitHistory: { commits: [], loading: false, error: '' },
             allBranches: [],
             recentProjects: [],
             availableProviders: [],
@@ -1741,6 +1758,9 @@ export function setupWailsEvents() {
 
     Events.On('branch-changed', (ev) => {
         useStore.getState().setBranch(ev.data as string)
+    })
+    Events.On('commit-history-changed', (ev) => {
+        useStore.getState().loadCommitHistory()
     })
 
     // Track main window visibility to skip Toast when hidden

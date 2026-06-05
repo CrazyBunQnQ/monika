@@ -23,6 +23,7 @@ type FileNode struct {
 	IsDir    bool       `json:"is_dir"`
 	Children []FileNode `json:"children,omitempty"`
 	Status   string     `json:"status,omitempty"`
+	Ignored  bool       `json:"ignored,omitempty"`
 }
 
 func (f *FileService) CreateDir(relPath string) error {
@@ -161,6 +162,19 @@ func (f *FileService) WriteFile(relPath, content string) error {
 func (f *FileService) ListDir(relPath string, showHidden bool) ([]FileNode, error) {
 	// Build git status map once at top level.
 	statusMap := f.gitStatusMap()
+	ignoredSet := f.gitIgnoredSet()
+
+	var markIgnored func(nodes []FileNode)
+	markIgnored = func(nodes []FileNode) {
+		for i := range nodes {
+			if ignoredSet[nodes[i].Path] {
+				nodes[i].Ignored = true
+			}
+			if nodes[i].Children != nil {
+				markIgnored(nodes[i].Children)
+			}
+		}
+	}
 
 	var listDirRecursive func(relPath string) ([]FileNode, error)
 	listDirRecursive = func(relPath string) ([]FileNode, error) {
@@ -214,7 +228,14 @@ func (f *FileService) ListDir(relPath string, showHidden bool) ([]FileNode, erro
 		return nodes, nil
 	}
 
-	return listDirRecursive(relPath)
+	result, err := listDirRecursive(relPath)
+	if err != nil {
+		return nil, err
+	}
+	if len(ignoredSet) > 0 {
+		markIgnored(result)
+	}
+	return result, nil
 }
 
 func (f *FileService) readGitStatus() ([]FileChange, error) {
@@ -252,6 +273,59 @@ func (f *FileService) gitStatusMap() map[string]string {
 		m[c.Path] = c.Status
 	}
 	return m
+}
+
+// gitIgnoredSet returns a set of paths ignored by .gitignore (via git check-ignore).
+func (f *FileService) gitIgnoredSet() map[string]bool {
+	var paths []string
+	var collect func(relPath string)
+	collect = func(relPath string) {
+		absPath := filepath.Join(f.projectDir, relPath)
+		entries, err := os.ReadDir(absPath)
+		if err != nil {
+			return
+		}
+		for _, entry := range entries {
+			name := entry.Name()
+			if strings.HasPrefix(name, ".") {
+				continue
+			}
+			p := filepath.ToSlash(filepath.Join(relPath, name))
+			paths = append(paths, p)
+			if entry.IsDir() {
+				collect(filepath.Join(relPath, name))
+			}
+		}
+	}
+	collect("")
+	if len(paths) == 0 {
+		return nil
+	}
+
+	cmd := command("git", "check-ignore", "--stdin", "-z")
+	cmd.Dir = f.projectDir
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil
+	}
+	go func() {
+		for _, p := range paths {
+			stdin.Write([]byte(p))
+			stdin.Write([]byte{0})
+		}
+		stdin.Close()
+	}()
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	result := make(map[string]bool)
+	for _, line := range strings.Split(strings.TrimRight(string(out), "\x00"), "\x00") {
+		if line != "" {
+			result[filepath.ToSlash(line)] = true
+		}
+	}
+	return result
 }
 
 func (f *FileService) ListChanges() ([]FileChange, error) {

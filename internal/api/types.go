@@ -42,10 +42,11 @@ type FileChangeEvent struct {
 }
 
 type ProjectInfo struct {
-	Path      string         `json:"path"`
-	Name      string         `json:"name"`
-	Branch    string         `json:"branch"`
-	Worktrees []WorktreeInfo `json:"worktrees"`
+	Path           string         `json:"path"`
+	Name           string         `json:"name"`
+	Branch         string         `json:"branch"`
+	Worktrees      []WorktreeInfo `json:"worktrees"`
+	LastCommitHash string         `json:"last_commit_hash"`
 }
 
 type WorktreeInfo struct {
@@ -98,6 +99,15 @@ type ChangeStat struct {
 	Path    string `json:"path"`
 	Added   int    `json:"added"`
 	Deleted int    `json:"deleted"`
+}
+
+type CommitInfo struct {
+	Hash      string `json:"hash"`
+	Author    string `json:"author"`
+	Date      string `json:"date"`
+	Message   string `json:"message"`
+	Refs      string `json:"refs"`
+	GraphLine string `json:"graph_line"`
 }
 
 // ProviderInfo identifies a configured provider for the frontend selector.

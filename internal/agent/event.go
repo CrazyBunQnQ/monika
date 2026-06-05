@@ -15,6 +15,7 @@ const (
 	EventTurnStart
 	EventCompaction
 	EventRetrying
+	EventMaxSteps
 )
 
 type Event struct {

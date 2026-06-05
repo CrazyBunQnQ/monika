@@ -17,6 +17,7 @@ import (
 	"monika/internal/bootstrap"
 	config2 "monika/internal/config"
 	"monika/internal/permission"
+	"monika/internal/prompt"
 	"monika/internal/tool"
 	"monika/internal/tool/builtin"
 	"monika/internal/update"
@@ -170,15 +171,16 @@ func main() {
 	application.RegisterEvent[string]("branch-changed")
 	application.RegisterEvent[[]api.NotificationData]("tray-notifications-changed")
 
+	ps := agent.PromptForModel(pr.Model)
 	systemParts := []string{
 		fmt.Sprintf("OS Version: %s\nWorking directory: {{WorkingDirectory}}", runtime.GOOS),
-		agent.PromptIdentity,
-		agent.PromptToolUsage,
-		agent.PromptPlanning,
-		agent.PromptCodeQuality,
-		agent.PromptResponseStyle,
-		agent.PromptSafetyBoundaries,
-		agent.PromptRemember,
+		ps.Identity,
+		ps.ToolUsage,
+		ps.Planning,
+		ps.CodeQuality,
+		ps.ResponseStyle,
+		ps.SafetyBoundaries,
+		ps.Remember,
 	}
 	if p := loadSystemPrompt(cwd); p != "" {
 		wrapped := `<project_rules>
@@ -211,6 +213,9 @@ The content below is your PROJECT RULES from AGENTS.md. These rules are NON-NEGO
 	loopOpts = append(loopOpts, agent.WithMCPRegistry(mcpRegistry))
 
 	// Build agent registry with builtin agents
+	exploreBasePrompt := baseSystemPrompt + "\n\n" + prompt.ExplorePrompt
+	planBasePrompt := baseSystemPrompt + "\n\n" + prompt.PlanPrompt
+
 	agentRegistry := agent.NewAgentRegistry([]agent.Agent{
 		{
 			Name:         "general",
@@ -220,7 +225,12 @@ The content below is your PROJECT RULES from AGENTS.md. These rules are NON-NEGO
 		{
 			Name:         "explore",
 			Description:  "Fast agent specialized for exploring codebases",
-			SystemPrompt: systemPrompt,
+			SystemPrompt: exploreBasePrompt,
+		},
+		{
+			Name:         "plan",
+			Description:  "Read-only planning agent that analyzes and plans before implementation",
+			SystemPrompt: planBasePrompt,
 		},
 		{
 			Name:         "compaction",
