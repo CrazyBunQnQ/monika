@@ -452,15 +452,23 @@ func parseSSEStream(ctx context.Context, r io.Reader, ch chan<- engine.ChatEvent
 		}
 	}
 
+	// If connection closed cleanly (no read error) and we received data,
+	// treat it as a normal stream end. Some providers (e.g., Zhipu coding plan)
+	// may not send [DONE] or finish_reason but still complete successfully.
 	if receivedData && !cleanEnd {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		errMsg := "stream ended unexpectedly: connection closed without [DONE] or finish_reason"
-		if rawError.Len() > 0 {
-			errMsg = fmt.Sprintf("%s. Provider raw error: %s", errMsg, rawError.String())
+		if scanner.Err() != nil {
+			// Connection had a real read error - report it
+			errMsg := "stream ended unexpectedly: connection closed without [DONE] or finish_reason"
+			if rawError.Len() > 0 {
+				errMsg = fmt.Sprintf("%s. Provider raw error: %s", errMsg, rawError.String())
+			}
+			return fmt.Errorf(errMsg)
 		}
-		return fmt.Errorf(errMsg)
+
+		return nil
 	}
 
 	return scanner.Err()
