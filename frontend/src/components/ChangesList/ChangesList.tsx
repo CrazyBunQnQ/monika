@@ -16,12 +16,8 @@ function ChangesList(_props: IDockviewPanelProps) {
         >
             {/* Tab bar */}
             <div
-                className="flex items-center gap-0 select-none shrink-0"
-                style={{
-                    fontFamily: 'var(--font-sans)',
-                    background: 'var(--bg-sidebar)',
-                    borderBottom: '1px solid var(--border)',
-                }}
+                className="flex items-center gap-1 px-2 border-b border-[var(--border)] shrink-0 select-none"
+                style={{ background: 'var(--bg-sidebar)', height: '30px' }}
             >
                 <TabButton
                     label="CHANGES"
@@ -50,15 +46,17 @@ function ChangesList(_props: IDockviewPanelProps) {
 function TabButton({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
     return (
         <button
-            className="text-[12px] px-3 py-[5px] cursor-pointer transition-colors"
+            className="text-[11px] px-2 py-1 cursor-pointer transition-colors rounded"
             style={{
                 fontFamily: 'var(--font-sans)',
                 color: active ? 'var(--text-primary)' : 'var(--text-dim)',
-                background: 'transparent',
+                background: active ? 'var(--bg-active)' : 'transparent',
                 border: 'none',
                 borderBottom: active ? '2px solid var(--accent)' : '2px solid transparent',
-                fontWeight: active ? 600 : 400,
+                fontWeight: 500,
             }}
+            onMouseEnter={(e) => { if (!active) { e.currentTarget.style.background = 'var(--bg-hover)'; e.currentTarget.style.color = 'var(--text-secondary)' } }}
+            onMouseLeave={(e) => { if (!active) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-dim)' } }}
             onClick={onClick}
         >
             {label}
@@ -246,7 +244,7 @@ function HistoryTab({ active }: { active: boolean }) {
     }
 
     return (
-        <div className="flex-1 overflow-y-auto" style={{ padding: '0 4px' }}>
+        <div className="flex-1 overflow-y-auto" style={{ padding: '0 8px' }}>
             {commitHistory.commits.map((commit, idx) => (
                 <CommitRow key={commit.hash + '-' + idx} commit={commit} />
             ))}
@@ -257,13 +255,11 @@ function HistoryTab({ active }: { active: boolean }) {
 function CommitRow({ commit }: { commit: CommitInfo }) {
     return (
         <div
-            className="flex items-start gap-1 text-[12px] leading-[22px] rounded-sm transition-colors duration-100 mx-1 px-[4px] cursor-default"
+            className="flex items-center gap-1 text-[12px] leading-[22px] rounded-md transition-colors duration-150 px-1 cursor-pointer hover:bg-[var(--bg-hover)]"
             style={{
                 fontFamily: 'var(--font-sans)',
                 color: 'var(--text-secondary)',
             }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.04)' }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
         >
             {/* Graph column */}
             <span
@@ -282,20 +278,23 @@ function CommitRow({ commit }: { commit: CommitInfo }) {
             {/* Hash */}
             <span
                 className="flex-shrink-0"
-                style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)', fontSize: '11px' }}
+                style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)', fontSize: '11px', width: '8ch' }}
             >
-                {commit.hash}
+                {commit.hash.slice(0, 7)}
             </span>
 
             {/* Refs */}
             {commit.refs && <RefTags refs={commit.refs} />}
 
-            {/* Message + author + date */}
-            <span className="truncate min-w-0" style={{ color: 'var(--text-primary)' }}>
+            {/* Message */}
+            <span className="truncate flex-1 min-w-0" style={{ color: 'var(--text-primary)' }}>
                 {commit.message}
             </span>
-            <span className="flex-shrink-0" style={{ color: 'var(--text-dim)', fontSize: '11px' }}>
-                {commit.author} · {commit.date}
+
+            {/* Author + date */}
+            <span className="flex-shrink-0 flex items-center" style={{ color: 'var(--text-dim)', fontSize: '11px', width: '25ch' }}>
+                <span>{commit.author}</span>
+                <span className="ml-auto">{commit.date}</span>
             </span>
         </div>
     )
