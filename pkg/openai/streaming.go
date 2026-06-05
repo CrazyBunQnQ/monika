@@ -452,15 +452,17 @@ func parseSSEStream(ctx context.Context, r io.Reader, ch chan<- engine.ChatEvent
 		}
 	}
 
-	// If connection closed cleanly (no read error) and we received data,
-	// treat it as a normal stream end. Some providers (e.g., Zhipu coding plan)
-	// may not send [DONE] or finish_reason but still complete successfully.
+	// Some providers (e.g., Zhipu coding plan) never send [DONE] or finish_reason.
+	// They close the connection after the last content chunk, sometimes with a
+	// sentinel error JSON like {"error":{"code":"1234",...}} that is NOT a real error.
+	// If we received content data, treat the stream as successfully completed unless
+	// there is a real non-EOF read error AND no sentinel pseudo-error was seen.
 	if receivedData && !cleanEnd {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if scanner.Err() != nil {
-			// Connection had a real read error - report it
+		hasSentinel := rawError.Len() > 0 && strings.Contains(rawError.String(), `"code":"1234"`)
+		if scanner.Err() != nil && scanner.Err() != io.EOF && !hasSentinel {
 			errMsg := "stream ended unexpectedly: connection closed without [DONE] or finish_reason"
 			if rawError.Len() > 0 {
 				errMsg = fmt.Sprintf("%s. Provider raw error: %s", errMsg, rawError.String())
@@ -468,6 +470,29 @@ func parseSSEStream(ctx context.Context, r io.Reader, ch chan<- engine.ChatEvent
 			return fmt.Errorf(errMsg)
 		}
 
+		for _, buf := range toolCallBuf {
+			if buf.Function.Name != "" {
+				if err := send(engine.ChatEvent{
+					Kind: engine.EventToolCallEnd,
+					ToolCall: &engine.ToolCall{
+						ID:   buf.ID,
+						Type: "function",
+						Function: engine.ToolCallFunc{
+							Name:      buf.Function.Name,
+							Arguments: buf.Function.Arguments,
+						},
+					},
+				}); err != nil {
+					return err
+				}
+			}
+		}
+		if err := send(engine.ChatEvent{
+			Kind: engine.EventMessageEnd,
+			Text: "stop",
+		}); err != nil {
+			return err
+		}
 		return nil
 	}
 

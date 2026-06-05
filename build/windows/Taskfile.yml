@@ -25,14 +25,15 @@ tasks:
 
   generate:icon:
     summary: Generates application icon and Windows resources
+    dir: winres
     sources:
-      - winres/gen_icon.go
+      - gen_icon.go
     generates:
-      - winres/icon.ico
-      - rsrc_windows_amd64.syso
+      - icon.ico
+      - ../rsrc_windows_amd64.syso
     cmds:
-      - bash -c 'cd winres && go run gen_icon.go'
-      - go-winres make
+      - go run gen_icon.go
+      - cd .. && go-winres make
 
   package:
     summary: Packages a production build
