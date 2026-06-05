@@ -1,0 +1,26 @@
+# Auto-detect text files and normalize to LF in repo
+* text=auto
+
+# Go source
+*.go text diff=golang
+
+# Markdown
+*.md text
+
+# YAML/TOML/JSON config
+*.yml text
+*.yaml text
+*.toml text
+*.json text
+
+# Shell scripts (must stay LF)
+*.sh text eol=lf
+
+# Batch scripts (must stay CRLF)
+*.bat text eol=crlf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.ico binary
+*.zip binary
