@@ -79,8 +79,9 @@ type App struct {
 	pipeline *permission.Pipeline
 	checker  *update.Checker
 
-	trayMgr  *TrayManager
-	tsBridge *tsBridge
+	trayMgr   *TrayManager
+	tsBridge  *tsBridge
+	bgTaskMgr *BackgroundTaskManager
 
 	eventSeq atomic.Int64
 }
@@ -108,6 +109,7 @@ func NewApp(home, cwd string, cfg config2.Config, providers map[string]engine2.P
 		baseLoopOptsCount: len(loopOpts),
 		mcpRegistry:       mcpRegistry,
 		checker:           update.NewChecker(),
+		bgTaskMgr:         NewBackgroundTaskManager(),
 	}
 }
 
@@ -256,6 +258,18 @@ func (a *App) ServiceStartup(ctx context.Context, options application.ServiceOpt
 		application.Get().Event.Emit("update-available", *info)
 	})
 
+	go func() {
+		for ev := range a.bgTaskMgr.Subscribe() {
+			se := StreamEvent{
+				Type: "bg_task",
+				Seq:  a.eventSeq.Add(1),
+			}
+			data, _ := json.Marshal(ev)
+			se.Content = string(data)
+			application.Get().Event.Emit("stream", se)
+		}
+	}()
+
 	return nil
 }
 
@@ -286,8 +300,24 @@ func (a *App) ServiceShutdown() error {
 		cancel()
 	}
 	a.cancelMu.Unlock()
+	a.bgTaskMgr.Cleanup()
 	a.eventBus.Close()
 	return nil
+}
+func (a *App) ListBgTasks() []BgTaskInfo {
+	return a.bgTaskMgr.List()
+}
+
+func (a *App) StopBgTask(taskID string) error {
+	return a.bgTaskMgr.Stop(taskID)
+}
+
+func (a *App) GetBgTaskLogs(taskID string) ([]string, error) {
+	return a.bgTaskMgr.Logs(taskID, 100)
+}
+
+func (a *App) BgTaskManager() *BackgroundTaskManager {
+	return a.bgTaskMgr
 }
 
 func (a *App) ListProjects() []ProjectInfo {

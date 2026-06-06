@@ -14,10 +14,17 @@ import (
 	"monika/internal/tool"
 )
 
+type BgManager interface {
+	Start(command, workdir, shell, shellArg string) (string, error)
+	Stop(taskID string) error
+	Logs(taskID string, lines int) ([]string, error)
+}
+
 type bashTool struct {
 	projectDir string
 	shell      string
 	shellArg   string
+	bgMgr      BgManager
 }
 
 func NewBash(projectDir string) (tool.Tool, error) {
@@ -30,6 +37,10 @@ func NewBash(projectDir string) (tool.Tool, error) {
 		shell:      shell,
 		shellArg:   shellArg,
 	}, nil
+}
+
+func (b *bashTool) SetBgManager(mgr BgManager) {
+	b.bgMgr = mgr
 }
 
 func resolveShell() (string, string) {
@@ -67,7 +78,7 @@ IMPORTANT: Do NOT use bash for file operations:
 - Communication: Output text directly (NOT echo/printf)
 
 When running multiple independent commands, make multiple bash calls in parallel.
-Commands timeout after 120 seconds. Output exceeding 30000 characters is truncated.
+Commands timeout after 120 seconds by default. Use the "timeout" parameter (max 600 seconds) for long-running commands like npm install, docker build, etc. Output exceeding 30000 characters is truncated.
 
 # Committing changes with git
 
@@ -91,7 +102,11 @@ When creating a commit:
 3. Stage files and commit
 4. Run git status to verify
 Do NOT push unless explicitly asked.
-Do NOT use git commands with -i flag (requires interactive input).`
+Do NOT use git commands with -i flag (requires interactive input).
+
+# Background Tasks
+
+When a command is expected to run for a long time (dev servers, watchers, file watchers, build watchers, etc.), use action='background' instead of blocking. The command runs in the background and you get a task_id back. You can check logs with action='logs' and stop with action='stop'. Do NOT block waiting for long-running commands.`
 }
 
 func (b *bashTool) Parameters() map[string]any {
@@ -106,8 +121,21 @@ func (b *bashTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "The working directory. Defaults to the project directory.",
 			},
+			"action": map[string]any{
+				"type":        "string",
+				"enum":        []string{"run", "background", "stop", "logs"},
+				"description": "Action mode: 'run' (default, wait for completion), 'background' (run in background, return task_id), 'stop' (stop a background task), 'logs' (get recent logs of a background task).",
+			},
+			"task_id": map[string]any{
+				"type":        "string",
+				"description": "Background task ID. Required when action is 'stop' or 'logs'.",
+			},
+			"timeout": map[string]any{
+				"type":        "integer",
+				"description": "Timeout in seconds for the command. Default 120, max 600. Use higher values for long-running commands like npm install, docker build, etc.",
+			},
 		},
-		"required": []string{"command"},
+		"required": []string{},
 	}
 }
 
@@ -115,14 +143,86 @@ func (b *bashTool) Execute(ctx context.Context, args json.RawMessage) (tool.Exec
 	var params struct {
 		Command string `json:"command"`
 		Workdir string `json:"workdir"`
+		Action  string `json:"action"`
+		TaskID  string `json:"task_id"`
+		Timeout int    `json:"timeout"`
 	}
+
 	if err := json.Unmarshal(args, &params); err != nil {
 		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 	}
 
+	switch params.Action {
+	case "stop":
+		if b.bgMgr == nil {
+			return tool.ExecutionResult{Content: "background tasks not available", IsError: true}, nil
+		}
+		if params.TaskID == "" {
+			return tool.ExecutionResult{Content: "task_id is required for stop action", IsError: true}, nil
+		}
+		if err := b.bgMgr.Stop(params.TaskID); err != nil {
+			return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
+		}
+		return tool.ExecutionResult{Content: "stopped task " + params.TaskID}, nil
+
+	case "logs":
+		if b.bgMgr == nil {
+			return tool.ExecutionResult{Content: "background tasks not available", IsError: true}, nil
+		}
+		if params.TaskID == "" {
+			return tool.ExecutionResult{Content: "task_id is required for logs action", IsError: true}, nil
+		}
+		lines, err := b.bgMgr.Logs(params.TaskID, 50)
+		if err != nil {
+			return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
+		}
+		out := strings.Join(lines, "\n")
+		return tool.ExecutionResult{Content: out}, nil
+
+	case "background":
+		if b.bgMgr == nil {
+			return tool.ExecutionResult{Content: "background tasks not available", IsError: true}, nil
+		}
+		workdir := tool.ProjectDirOrDefault(ctx, b.projectDir)
+		if params.Workdir != "" {
+			if !filepath.IsAbs(params.Workdir) {
+				return tool.ExecutionResult{Content: "workdir must be absolute", IsError: true}, nil
+			}
+			absProject, err := filepath.Abs(tool.ProjectDirOrDefault(ctx, b.projectDir))
+			if err != nil {
+				return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
+			}
+			if real, err := filepath.EvalSymlinks(absProject); err == nil {
+				absProject = real
+			}
+			absWD, err := filepath.Abs(params.Workdir)
+			if err != nil {
+				return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
+			}
+			if real, err := filepath.EvalSymlinks(absWD); err == nil {
+				absWD = real
+			}
+			rel, err := filepath.Rel(absProject, absWD)
+			if err != nil || strings.HasPrefix(rel, "..") {
+				return tool.ExecutionResult{Content: "workdir is outside project directory", IsError: true}, nil
+			}
+			workdir = absWD
+		}
+		taskID, err := b.bgMgr.Start(params.Command, workdir, b.shell, b.shellArg)
+		if err != nil {
+			return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
+		}
+		return tool.ExecutionResult{Content: "background task started with id: " + taskID}, nil
+
+	default:
+		return b.executeRun(ctx, params.Command, params.Workdir, params.Timeout)
+	}
+}
+
+func (b *bashTool) executeRun(ctx context.Context, command, workdirParam string, timeoutSec int) (tool.ExecutionResult, error) {
 	workdir := tool.ProjectDirOrDefault(ctx, b.projectDir)
-	if params.Workdir != "" {
-		if !filepath.IsAbs(params.Workdir) {
+	if workdirParam != "" {
+		if !filepath.IsAbs(workdirParam) {
 			return tool.ExecutionResult{Content: "workdir must be absolute", IsError: true}, nil
 		}
 		absProject, err := filepath.Abs(tool.ProjectDirOrDefault(ctx, b.projectDir))
@@ -132,7 +232,7 @@ func (b *bashTool) Execute(ctx context.Context, args json.RawMessage) (tool.Exec
 		if real, err := filepath.EvalSymlinks(absProject); err == nil {
 			absProject = real
 		}
-		absWD, err := filepath.Abs(params.Workdir)
+		absWD, err := filepath.Abs(workdirParam)
 		if err != nil {
 			return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 		}
@@ -146,10 +246,21 @@ func (b *bashTool) Execute(ctx context.Context, args json.RawMessage) (tool.Exec
 		workdir = absWD
 	}
 
-	timeoutCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	const defaultTimeout = 120
+	const maxTimeout = 600
+
+	timeout := defaultTimeout
+	if timeoutSec > 0 {
+		timeout = timeoutSec
+	}
+	if timeout > maxTimeout {
+		timeout = maxTimeout
+	}
+
+	timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(timeoutCtx, b.shell, b.shellArg, params.Command)
+	cmd := exec.CommandContext(timeoutCtx, b.shell, b.shellArg, command)
 	cmd.Dir = workdir
 	hideWindow(cmd)
 
@@ -172,7 +283,6 @@ func (b *bashTool) Execute(ctx context.Context, args json.RawMessage) (tool.Exec
 	isError := err != nil
 	out = strings.TrimSpace(out)
 
-	// Truncate very long output, keeping head and tail with a midpoint marker.
 	const maxOutputChars = 30000
 	if len(out) > maxOutputChars {
 		headLen := maxOutputChars / 2

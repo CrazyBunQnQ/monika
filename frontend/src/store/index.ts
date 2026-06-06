@@ -32,6 +32,16 @@ export interface TaskItem {
     blockedBy?: string[]
 }
 
+interface BgTaskInfo {
+    id: string
+    command: string
+    work_dir: string
+    pid: number
+    status: 'running' | 'stopped' | 'exited'
+    exit_code: number
+    started_at: string
+}
+
 export interface AvailableProviderInfo {
     id: string
     display_name: string
@@ -83,7 +93,7 @@ interface SessionTabInfo {
 }
 
 interface PreviewState {
-    mode: 'file' | 'diff' | null
+    mode: 'file' | 'diff' | 'task' | null
     filePath: string | null
     fileName: string | null
     fileContent: string | null
@@ -155,6 +165,7 @@ interface AppState {
     sessionParents: Record<string, string>
     subagentStack: Record<string, string[]>
     preview: PreviewState
+    fileTreeActiveTab: 'files' | 'tasks'
     lastEditedFile: string | null
     lastEditedOldContent: string | null
     lastEditVersion: number
@@ -190,6 +201,10 @@ interface AppState {
     msgFilter: 'all' | 'chat' | 'user' | 'assistant'
     chatInputAppendPath: string | null
     selection: { mode: 'quote' | 'forward'; ids: string[] } | null
+
+    bgTasks: BgTaskInfo[]
+    selectedBgTaskId: string | null
+    bgTaskLogs: Record<string, string[]>
 
     addMessage: (msg: Message) => void
     setPermissionMode: (mode: 'auto' | 'manual') => void
@@ -240,6 +255,7 @@ interface AppState {
     clearPreview: () => void
     setLastEditedFile: (filePath: string | null) => void
     setRevealFilePath: (filePath: string | null) => void
+    setFileTreeActiveTab: (tab: 'files' | 'tasks') => void
     revealFilePath: string | null
 
     loadRecentProjects: () => Promise<void>
@@ -283,6 +299,11 @@ interface AppState {
     toggleMessageSelection: (id: string) => void
     enterMultiSelect: (mode: 'quote' | 'forward', initialId: string) => void
     clearSelection: () => void
+
+    selectBgTask: (id: string | null) => void
+    updateBgTask: (info: BgTaskInfo) => void
+    appendBgTaskLog: (taskId: string, line: string) => void
+    stopBgTask: (taskId: string) => Promise<void>
 }
 
 const INITIAL_DISPLAY_COUNT = 15
@@ -304,6 +325,7 @@ export const useStore = create<AppState>((set, get) => ({
     subagentStack: {},
     preview: { mode: null, filePath: null, fileName: null, fileContent: null, diffLines: null },
     lastEditedFile: null,
+    fileTreeActiveTab: 'files' as 'files' | 'tasks',
     lastEditedOldContent: null,
     revealFilePath: null,
     lastEditVersion: 0,
@@ -339,6 +361,10 @@ export const useStore = create<AppState>((set, get) => ({
     msgFilter: 'all' as const,
     chatInputAppendPath: null as string | null,
     selection: null as { mode: 'quote' | 'forward'; ids: string[] } | null,
+
+    bgTasks: [] as BgTaskInfo[],
+    selectedBgTaskId: null as string | null,
+    bgTaskLogs: {} as Record<string, string[]>,
 
     addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
 
@@ -587,6 +613,27 @@ export const useStore = create<AppState>((set, get) => ({
     clearSelection: () => set({
         selection: null,
     }),
+
+    selectBgTask: (id) => set({ selectedBgTaskId: id, preview: { mode: 'task', filePath: null, fileName: null, fileContent: null, diffLines: null } }),
+    updateBgTask: (info) => set((state) => {
+        const idx = state.bgTasks.findIndex(t => t.id === info.id)
+        if (idx >= 0) {
+            const tasks = [...state.bgTasks]
+            tasks[idx] = info
+            return { bgTasks: tasks }
+        }
+        return { bgTasks: [...state.bgTasks, info] }
+    }),
+    appendBgTaskLog: (taskId, line) => set((state) => ({
+        bgTaskLogs: { ...state.bgTaskLogs, [taskId]: [...(state.bgTaskLogs[taskId] || []), line].slice(-500) },
+    })),
+    stopBgTask: async (taskId: string) => {
+        try {
+            await Call.ByName('monika/internal/api.App.StopBgTask', taskId)
+        } catch (e) {
+            console.error('[monika] failed to stop bg task:', e)
+        }
+    },
 
     setLastAssistantMeta: (sessionId, meta) => {
         set((s) => {
@@ -987,11 +1034,11 @@ export const useStore = create<AppState>((set, get) => ({
     },
 
     setPreviewFile: (filePath, fileName, content) => {
-        set({ preview: { mode: 'file', filePath, fileName, fileContent: content, diffLines: null } })
+        set({ preview: { mode: 'file', filePath, fileName, fileContent: content, diffLines: null }, selectedBgTaskId: null })
     },
 
     setPreviewDiff: (filePath, fileName, lines) => {
-        set({ preview: { mode: 'diff', filePath, fileName, fileContent: null, diffLines: lines } })
+        set({ preview: { mode: 'diff', filePath, fileName, fileContent: null, diffLines: lines }, selectedBgTaskId: null })
     },
 
     clearPreview: () => {
@@ -1004,6 +1051,9 @@ export const useStore = create<AppState>((set, get) => ({
 
     setRevealFilePath: (filePath: string | null) => {
         set({ revealFilePath: filePath })
+    },
+    setFileTreeActiveTab: (tab: 'files' | 'tasks') => {
+        set({ fileTreeActiveTab: tab })
     },
 
     loadRecentProjects: async () => {
@@ -1698,6 +1748,38 @@ export function setupWailsEvents() {
         let store = useStore.getState()
         const data = ev.data as StreamEvent & { seq?: number }
         const sid = data.session_id
+
+        if (data.type === 'bg_task') {
+            try {
+                const ev = typeof data.content === 'string' ? JSON.parse(data.content) : data.content
+                const store = useStore.getState()
+                switch (ev.type) {
+                    case 'started':
+                        store.updateBgTask({
+                            id: ev.task_id,
+                            command: ev.command,
+                            work_dir: ev.work_dir,
+                            pid: ev.pid,
+                            status: 'running',
+                            exit_code: 0,
+                            started_at: new Date().toISOString(),
+                        })
+                        break
+                    case 'log':
+                        store.appendBgTaskLog(ev.task_id, ev.log_line)
+                        break
+                    case 'stopped':
+                    case 'exited': {
+                        const task = store.bgTasks.find(t => t.id === ev.task_id)
+                        if (task) {
+                            store.updateBgTask({ ...task, status: ev.status, exit_code: ev.exit_code || 0 })
+                        }
+                        break
+                    }
+                }
+            } catch { /* ignore parse errors */ }
+            return
+        }
 
         // Auto-create entry for child session so streaming events are buffered
         if (sid && (sid.startsWith('call_') || sid.startsWith('sub_') || data.type === 'compaction') && !store.sessionMessages[sid]) {

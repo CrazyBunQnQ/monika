@@ -11,6 +11,7 @@ type HeaderAction = 'none' | 'new-file' | 'new-folder' | 'search'
 interface ContextMenuState {
     x: number
     y: number
+    /**/
     node: FileNode
 }
 
@@ -20,6 +21,8 @@ interface Clipboard {
 }
 
 function FileTree(_props: IDockviewPanelProps) {
+    const activeTab = useStore((s) => s.fileTreeActiveTab)
+    const setActiveTab = useStore((s) => s.setFileTreeActiveTab)
     const [tree, setTree] = useState<FileNode[]>([])
     const [expanded, setExpanded] = useState<Set<string>>(new Set())
     const [showHidden, setShowHidden] = useState(false)
@@ -44,6 +47,15 @@ function FileTree(_props: IDockviewPanelProps) {
     const previewFilePath = useStore((s) => s.preview.filePath)
     const revealFilePath = useStore((s) => s.revealFilePath)
     const setRevealFilePath = useStore((s) => s.setRevealFilePath)
+    const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
+    const toggleGroup = (label: string) => {
+        setCollapsedGroups((prev) => {
+            const next = new Set(prev)
+            if (next.has(label)) next.delete(label)
+            else next.add(label)
+            return next
+        })
+    }
 
     useEffect(() => {
         if (!projectPath) return
@@ -476,93 +488,189 @@ function FileTree(_props: IDockviewPanelProps) {
         )
     }
 
+    const bgTasks = useStore((s) => s.bgTasks)
+    const selectedBgTaskId = useStore((s) => s.selectedBgTaskId)
+    const selectBgTask = useStore((s) => s.selectBgTask)
+
     return (
         <div className="flex flex-col h-full" style={{ background: 'var(--bg-sidebar)' }}>
+            {/* Tab bar */}
             <div
-                className="flex items-center gap-1.5 text-[12px] select-none shrink-0"
-                style={{ fontFamily: 'var(--font-sans)', padding: '6px 10px', background: 'var(--bg-sidebar)' }}
+                className="flex items-center gap-1 px-2 border-b border-[var(--border)] shrink-0 select-none"
+                style={{ background: 'var(--bg-sidebar)', height: '30px' }}
             >
-                <span className="truncate min-w-0">FILES</span>
-                <div className="ml-auto flex items-center gap-0.5">
-                    <button
-                        className={headerBtnClass}
-                        style={{ color: headerAction === 'new-file' ? 'var(--text-primary)' : 'var(--text-dim)' }}
-                        title="New file"
-                        onClick={() => toggleAction('new-file')}
-                    >
-                        <IconFilePlus size={13} />
-                    </button>
-                    <button
-                        className={headerBtnClass}
-                        style={{ color: headerAction === 'new-folder' ? 'var(--text-primary)' : 'var(--text-dim)' }}
-                        title="New folder"
-                        onClick={() => toggleAction('new-folder')}
-                    >
-                        <IconFolderPlus size={13} />
-                    </button>
-                    <button
-                        className={headerBtnClass}
-                        style={{ color: headerAction === 'search' ? 'var(--text-primary)' : 'var(--text-dim)' }}
-                        title="Search files"
-                        onClick={() => toggleAction('search')}
-                    >
-                        <IconSearch size={13} />
-                    </button>
-                    <button
-                        className={headerBtnClass}
-                        style={{ color: showHidden ? 'var(--text-primary)' : 'var(--text-dim)' }}
-                        title={showHidden ? 'Hide hidden files' : 'Show hidden files'}
-                        onClick={() => setShowHidden(!showHidden)}
-                    >
-                        <IconEye size={13} />
-                    </button>
+                <button
+                    className="text-[11px] px-2 py-1 cursor-pointer transition-colors rounded"
+                    style={{
+                        fontFamily: 'var(--font-sans)',
+                        color: activeTab === 'files' ? 'var(--text-primary)' : 'var(--text-dim)',
+                        background: activeTab === 'files' ? 'var(--bg-active)' : 'transparent',
+                        border: 'none',
+                        borderBottom: activeTab === 'files' ? '2px solid var(--accent)' : '2px solid transparent',
+                        fontWeight: 500,
+                    }}
+                    onMouseEnter={(e) => { if (activeTab !== 'files') { e.currentTarget.style.background = 'var(--bg-hover)'; e.currentTarget.style.color = 'var(--text-secondary)' } }}
+                    onMouseLeave={(e) => { if (activeTab !== 'files') { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-dim)' } }}
+                    onClick={() => setActiveTab('files')}
+                >
+                    FILES
+                </button>
+                <button
+                    className="text-[11px] px-2 py-1 cursor-pointer transition-colors rounded"
+                    style={{
+                        fontFamily: 'var(--font-sans)',
+                        color: activeTab === 'tasks' ? 'var(--text-primary)' : 'var(--text-dim)',
+                        background: activeTab === 'tasks' ? 'var(--bg-active)' : 'transparent',
+                        border: 'none',
+                        borderBottom: activeTab === 'tasks' ? '2px solid var(--accent)' : '2px solid transparent',
+                        fontWeight: 500,
+                    }}
+                    onMouseEnter={(e) => { if (activeTab !== 'tasks') { e.currentTarget.style.background = 'var(--bg-hover)'; e.currentTarget.style.color = 'var(--text-secondary)' } }}
+                    onMouseLeave={(e) => { if (activeTab !== 'tasks') { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-dim)' } }}
+                    onClick={() => setActiveTab('tasks')}
+                >
+                    TASKS
+                </button>
+            </div>
+
+            {/* FILES tab content */}
+            <div style={{ display: activeTab === 'files' ? 'flex' : 'none', flex: 1, overflow: 'hidden', flexDirection: 'column' }}>
+                <div
+                    className="flex items-center gap-1.5 text-[12px] select-none shrink-0"
+                    style={{ fontFamily: 'var(--font-sans)', padding: '6px 10px', background: 'var(--bg-sidebar)' }}
+                >
+                    <div className="ml-auto flex items-center gap-0.5">
+                        <button
+                            className={headerBtnClass}
+                            style={{ color: headerAction === 'new-file' ? 'var(--text-primary)' : 'var(--text-dim)' }}
+                            title="New file"
+                            onClick={() => toggleAction('new-file')}
+                        >
+                            <IconFilePlus size={13} />
+                        </button>
+                        <button
+                            className={headerBtnClass}
+                            style={{ color: headerAction === 'new-folder' ? 'var(--text-primary)' : 'var(--text-dim)' }}
+                            title="New folder"
+                            onClick={() => toggleAction('new-folder')}
+                        >
+                            <IconFolderPlus size={13} />
+                        </button>
+                        <button
+                            className={headerBtnClass}
+                            style={{ color: headerAction === 'search' ? 'var(--text-primary)' : 'var(--text-dim)' }}
+                            title="Search files"
+                            onClick={() => toggleAction('search')}
+                        >
+                            <IconSearch size={13} />
+                        </button>
+                        <button
+                            className={headerBtnClass}
+                            style={{ color: showHidden ? 'var(--text-primary)' : 'var(--text-dim)' }}
+                            title={showHidden ? 'Hide hidden files' : 'Show hidden files'}
+                            onClick={() => setShowHidden(!showHidden)}
+                        >
+                            <IconEye size={13} />
+                        </button>
+                    </div>
+                </div>
+                <div>
+                    {/* Inline input for new file / new folder / search */}
+                    {headerAction !== 'none' && (
+                        <div className="px-2 pb-1.5 shrink-0">
+                            <div className="flex items-center gap-1.5 rounded-md px-2 py-1" style={{ background: 'var(--bg-input)', border: '1px solid var(--border)' }}>
+                                {headerAction === 'search' && (
+                                    <span style={{ color: 'var(--text-dim)', flexShrink: 0 }}><IconSearch size={12} /></span>
+                                )}
+                                <input
+                                    ref={inputRef}
+                                    className="flex-1 bg-transparent text-[12px] outline-none"
+                                    style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}
+                                    placeholder={
+                                        headerAction === 'new-file' ? 'File name...'
+                                            : headerAction === 'new-folder' ? 'Folder name...'
+                                                : 'Search...'
+                                    }
+                                    value={headerAction === 'search' ? searchQuery : inputValue}
+                                    onChange={(e) => {
+                                        if (headerAction === 'search') setSearchQuery(e.target.value)
+                                        else setInputValue(e.target.value)
+                                    }}
+                                    onKeyDown={handleInputKeyDown}
+                                    onBlur={() => {
+                                        setTimeout(() => {
+                                            setHeaderAction('none')
+                                            setInputValue('')
+                                            setSearchQuery('')
+                                        }, 200)
+                                    }}
+                                />
+                            </div>
+                        </div>
+                    )}
+                </div>
+                <div className="flex-1 overflow-y-auto" style={{ padding: '0 8px' }}>
+                    {!tree || tree.length === 0 ? (
+                        <div className="py-4 text-[12px] text-[var(--text-dim)] px-1">No project opened</div>
+                    ) : displayTree.length === 0 && searchQuery ? (
+                        <div className="py-4 text-[12px] text-[var(--text-dim)] px-1">No files found</div>
+                    ) : (
+                        displayTree.map(node => renderNode(node))
+                    )}
+                </div>
+                {renderContextMenu()}
+            </div>
+
+            {/* TASKS tab content */}
+            <div style={{ display: activeTab === 'tasks' ? 'flex' : 'none', flex: 1, overflow: 'hidden', flexDirection: 'column' }}>
+                <div className="flex-1 overflow-auto">
+                    {bgTasks.length === 0 && (
+                        <div className="px-3 py-8 text-xs text-center text-[var(--text-muted)]">No background tasks</div>
+                    )}
+                    {(() => {
+                        const groups: { label: string; tasks: typeof bgTasks }[] = [
+                            { label: 'Running', tasks: bgTasks.filter(t => t.status === 'running') },
+                            { label: 'Completed', tasks: bgTasks.filter(t => t.status === 'exited' && t.exit_code === 0) },
+                            { label: 'Stopped', tasks: bgTasks.filter(t => t.status === 'stopped' || (t.status === 'exited' && t.exit_code > 0)) },
+                        ].filter(g => g.tasks.length > 0)
+                        return groups.map(group => (
+                            <div key={group.label}>
+                                <div
+                                    role="button"
+                                    tabIndex={0}
+                                    onClick={() => toggleGroup(group.label)}
+                                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleGroup(group.label) }}
+                                    className="flex items-center gap-1 text-[11px] text-[var(--text-dim)] px-2 pt-3 pb-1 select-none font-medium uppercase tracking-wider cursor-pointer hover:text-[var(--text-secondary)] transition-colors sticky top-0 z-10"
+                                    style={{ background: 'var(--bg-sidebar)' }}
+                                >
+                                    <span className={`inline-block transition-transform ${collapsedGroups.has(group.label) ? '' : 'rotate-90'}`}>&#9654;</span>
+                                    <span>{group.label}</span>
+                                    <span className="ml-auto">{group.tasks.length}</span>
+                                </div>
+                                {!collapsedGroups.has(group.label) && group.tasks.map((task) => (
+                                    <div
+                                        key={task.id}
+                                        onClick={() => selectBgTask(task.id)}
+                                        className={`flex items-center gap-2.5 px-2 py-1 cursor-pointer rounded-md transition-colors duration-100 ${selectedBgTaskId === task.id
+                                            ? 'bg-[var(--bg-active)] text-[var(--text-primary)]'
+                                            : 'hover:bg-[var(--bg-hover)] text-[var(--text-secondary)]'
+                                            }`}
+                                    >
+                                        {task.status === 'running' ? (
+                                            <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse flex-shrink-0 shadow-[0_0_4px_rgba(34,197,94,0.6)]" />
+                                        ) : task.status === 'stopped' ? (
+                                            <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" />
+                                        ) : (
+                                            <span className="w-2 h-2 rounded-full bg-gray-500 flex-shrink-0" />
+                                        )}
+                                        <span className="text-sm font-mono text-[var(--text)] truncate">{task.command}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        ))
+                    })()}
                 </div>
             </div>
-            <div>
-                {/* Inline input for new file / new folder / search */}
-                {headerAction !== 'none' && (
-                    <div className="px-2 pb-1.5 shrink-0">
-                        <div className="flex items-center gap-1.5 rounded-md px-2 py-1" style={{ background: 'var(--bg-input)', border: '1px solid var(--border)' }}>
-                            {headerAction === 'search' && (
-                                <span style={{ color: 'var(--text-dim)', flexShrink: 0 }}><IconSearch size={12} /></span>
-                            )}
-                            <input
-                                ref={inputRef}
-                                className="flex-1 bg-transparent text-[12px] outline-none"
-                                style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}
-                                placeholder={
-                                    headerAction === 'new-file' ? 'File name...'
-                                        : headerAction === 'new-folder' ? 'Folder name...'
-                                            : 'Search...'
-                                }
-                                value={headerAction === 'search' ? searchQuery : inputValue}
-                                onChange={(e) => {
-                                    if (headerAction === 'search') setSearchQuery(e.target.value)
-                                    else setInputValue(e.target.value)
-                                }}
-                                onKeyDown={handleInputKeyDown}
-                                onBlur={() => {
-                                    setTimeout(() => {
-                                        setHeaderAction('none')
-                                        setInputValue('')
-                                        setSearchQuery('')
-                                    }, 200)
-                                }}
-                            />
-                        </div>
-                    </div>
-                )}
-            </div>
-            <div className="flex-1 overflow-y-auto" style={{ padding: '0 8px' }}>
-                {!tree || tree.length === 0 ? (
-                    <div className="py-4 text-[12px] text-[var(--text-dim)] px-1">No project opened</div>
-                ) : displayTree.length === 0 && searchQuery ? (
-                    <div className="py-4 text-[12px] text-[var(--text-dim)] px-1">No files found</div>
-                ) : (
-                    displayTree.map(node => renderNode(node))
-                )}
-            </div>
-            {renderContextMenu()}
         </div>
     )
 }

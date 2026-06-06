@@ -294,6 +294,13 @@ The content below is your PROJECT RULES from AGENTS.md. These rules are NON-NEGO
 	appService.InitTSBridge(tsBridge)
 	appGetProjectPath = appService.GetProjectPath
 
+	// Wire background task manager to bash tool
+	if bashTool, ok := registry.Get("bash"); ok {
+		if setter, ok := bashTool.(interface{ SetBgManager(builtin.BgManager) }); ok {
+			setter.SetBgManager(appService.BgTaskManager())
+		}
+	}
+
 	// Wire skill management callbacks to App
 	skillInstallFn = func(url string, scope string) ([]string, error) {
 		args, _ := json.Marshal(map[string]string{"url": url, "scope": scope})
