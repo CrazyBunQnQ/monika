@@ -201,6 +201,8 @@ Third-party components:
 | [dockview](https://dockview.dev) | MIT |
 | [React](https://react.dev) | MIT |
 | [zustand](https://zustand.docs.pmnd.rs) | MIT |
+| [LXGW WenKai](https://github.com/lxgw/LxgwWenKai) | SIL OFL 1.1 |
+| [Maple Mono NF](https://github.com/subframe7536/Maple-font) | SIL OFL 1.1 |
 
 ## Acknowledgments
 
@@ -211,5 +213,4 @@ Monika stands on the shoulders of giants. These projects shaped our thinking and
 - **[OpenCode](https://github.com/sst/opencode)** — An open-source AI coding agent built for the terminal. Its clean architecture and provider-agnostic approach informed our own design.
 
 We are grateful to these projects and their authors. Open source builds on open source — and we're glad to be part of that tradition.
-| [LXGW WenKai](https://github.com/lxgw/LxgwWenKai) | SIL OFL 1.1 |
-| [Maple Mono NF](https://github.com/subframe7536/Maple-font) | SIL OFL 1.1 |
+
