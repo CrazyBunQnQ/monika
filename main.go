@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -119,19 +120,12 @@ func main() {
 		}
 	}
 
-	// Discover skills
-	var skillList []engine2.SkillMeta
+	// Initialize skill engine
 	var skEngine engine2.SkillEngine
 	skillEng, err := engine2.EngineByID("skill")
 	if err == nil {
 		if sk, ok := skillEng.(engine2.SkillEngine); ok {
 			skEngine = sk
-			discovered, err := sk.Discover(ctx, home, cwd, pr.Config.Skill.Paths)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "[monika] skill discover: %v\n", err)
-			} else {
-				skillList = discovered
-			}
 		}
 	}
 
@@ -145,6 +139,7 @@ func main() {
 	}
 	if skEngine != nil {
 		builtin.RegisterSkillTool(registry, skEngine, home, getCwd, &pr.Config)
+		builtin.RegisterSkillSearchTool(registry, skEngine, home, getCwd, &pr.Config)
 	}
 
 	// Register skill management tools (install/uninstall) with deferred App binding
@@ -190,17 +185,25 @@ The content below is your PROJECT RULES from AGENTS.md. These rules are NON-NEGO
 </project_rules>`
 		systemParts = append(systemParts, wrapped)
 	}
+	dynamicCapabilities := `
+## Dynamic Capabilities
+
+Skills, MCP tools, and LSP servers are discoverable at runtime — their availability
+changes as you install or configure them. Always search before assuming:
+
+- **skill_search(query)** — fuzzy search installed skills by name or description
+- **mcp_search(query)** — fuzzy search MCP tools by name, server, or capability
+- **lsp_list** — list currently available language servers
+
+Once you identify the right skill or tool, load it with **skill** or call the MCP tool directly.`
+
+	systemParts = append(systemParts, strings.TrimSpace(dynamicCapabilities))
 	systemPrompt := strings.Join(systemParts, "\n\n")
-	skillsPrompt := agent.BuildSkillsPrompt(skillList)
-	mcpPrompt := agent.BuildMCPPrompt(mcpRegistry)
-	systemPrompt = systemPrompt + skillsPrompt + mcpPrompt + builtin.LSPStatusPrompt(registry)
 	loopOpts := []agent.LoopOption{
 		agent.WithProjectDir(cwd),
 		agent.WithModel(pr.Model),
 		agent.WithSystemPrompt(systemPrompt),
 	}
-
-	baseSystemPrompt := strings.Join(systemParts, "\n\n")
 
 	// Wire permission pipeline
 	rules, _ := permission.LoadRules(home, cwd)
@@ -212,9 +215,13 @@ The content below is your PROJECT RULES from AGENTS.md. These rules are NON-NEGO
 	// MCP registry
 	loopOpts = append(loopOpts, agent.WithMCPRegistry(mcpRegistry))
 
+	// Register runtime discovery tools
+	builtin.RegisterMCPSearchTool(registry, mcpRegistry)
+	builtin.RegisterLSPListTool(registry)
+
 	// Build agent registry with builtin agents
-	exploreBasePrompt := baseSystemPrompt + "\n\n" + prompt.ExplorePrompt
-	planBasePrompt := baseSystemPrompt + "\n\n" + prompt.PlanPrompt
+	exploreBasePrompt := systemPrompt + "\n\n" + prompt.ExplorePrompt
+	planBasePrompt := systemPrompt + "\n\n" + prompt.PlanPrompt
 
 	agentRegistry := agent.NewAgentRegistry([]agent.Agent{
 		{
@@ -290,7 +297,7 @@ The content below is your PROJECT RULES from AGENTS.md. These rules are NON-NEGO
 		taskStoreAccessor = accessor
 	}
 
-	appService = api.NewApp(home, cwd, pr.Config, pr.Providers, pr.Model, registry, loopOpts, taskStoreAccessor, agentRegistry, taskRunner, baseSystemPrompt, mcpRegistry)
+	appService = api.NewApp(home, cwd, pr.Config, pr.Providers, pr.Model, registry, loopOpts, taskStoreAccessor, agentRegistry, taskRunner, mcpRegistry)
 	appService.InitTSBridge(tsBridge)
 	appGetProjectPath = appService.GetProjectPath
 
@@ -368,6 +375,28 @@ The content below is your PROJECT RULES from AGENTS.md. These rules are NON-NEGO
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
+			Middleware: func(next http.Handler) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if strings.HasPrefix(r.URL.Path, "/__local__/") {
+						relPath := strings.TrimPrefix(r.URL.Path, "/__local__/")
+						relPath = strings.TrimPrefix(relPath, "/")
+						pp := appService.GetProjectPath()
+						if pp == "" {
+							http.NotFound(w, r)
+							return
+						}
+						absPath := filepath.Join(pp, filepath.FromSlash(relPath))
+						absPath = filepath.Clean(absPath)
+						if !strings.HasPrefix(absPath, filepath.Clean(pp)) {
+							http.NotFound(w, r)
+							return
+						}
+						http.ServeFile(w, r, absPath)
+						return
+					}
+					next.ServeHTTP(w, r)
+				})
+			},
 		},
 	})
 

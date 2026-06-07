@@ -61,14 +61,12 @@ type App struct {
 	cancelFuncs map[string]context.CancelFunc
 	cancelMu    sync.Mutex
 
-	agentRegistry     *agent2.AgentRegistry
-	taskRunner        *agent2.TaskRunner
-	childSessions     map[string]*agent2.ChildSession // keyed by child session ID
-	pendingChildren   map[string]string               // parentSessionID → childSessionID
-	loopOpts          []agent2.LoopOption
-	baseLoopOptsCount int // number of opts passed at construction (before refreshSkillPrompt appends)
-	baseSystemPrompt  string
-	mcpRegistry       *engine2.MCPRegistry
+	agentRegistry   *agent2.AgentRegistry
+	taskRunner      *agent2.TaskRunner
+	childSessions   map[string]*agent2.ChildSession // keyed by child session ID
+	pendingChildren map[string]string               // parentSessionID → childSessionID
+	loopOpts        []agent2.LoopOption
+	mcpRegistry     *engine2.MCPRegistry
 
 	permissionRequests map[string]chan permission.PermissionResponse
 	permMu             sync.Mutex
@@ -86,7 +84,7 @@ type App struct {
 	eventSeq atomic.Int64
 }
 
-func NewApp(home, cwd string, cfg config2.Config, providers map[string]engine2.ProviderEngine, model string, registry *tool2.ToolRegistry, loopOpts []agent2.LoopOption, taskStoreAccessor TaskStoreAccessor, agentRegistry *agent2.AgentRegistry, taskRunner *agent2.TaskRunner, baseSystemPrompt string, mcpRegistry *engine2.MCPRegistry) *App {
+func NewApp(home, cwd string, cfg config2.Config, providers map[string]engine2.ProviderEngine, model string, registry *tool2.ToolRegistry, loopOpts []agent2.LoopOption, taskStoreAccessor TaskStoreAccessor, agentRegistry *agent2.AgentRegistry, taskRunner *agent2.TaskRunner, mcpRegistry *engine2.MCPRegistry) *App {
 	return &App{
 		home:              home,
 		cfg:               cfg,
@@ -105,8 +103,6 @@ func NewApp(home, cwd string, cfg config2.Config, providers map[string]engine2.P
 		childSessions:     make(map[string]*agent2.ChildSession),
 		pendingChildren:   make(map[string]string),
 		loopOpts:          loopOpts,
-		baseSystemPrompt:  baseSystemPrompt,
-		baseLoopOptsCount: len(loopOpts),
 		mcpRegistry:       mcpRegistry,
 		checker:           update.NewChecker(),
 		bgTaskMgr:         NewBackgroundTaskManager(),
@@ -116,30 +112,6 @@ func NewApp(home, cwd string, cfg config2.Config, providers map[string]engine2.P
 // AppendLoopOption appends a loop option to the internally stored slice.
 func (a *App) AppendLoopOption(opt agent2.LoopOption) {
 	a.loopOpts = append(a.loopOpts, opt)
-	a.baseLoopOptsCount++
-}
-
-// refreshSkillPrompt rebuilds the system prompt in loopOpts with the current skill list and MCP tools.
-// Future sessions will see the updated prompt; running sessions keep their existing prompt.
-func (a *App) refreshSkillPrompt() {
-	eng, err := engine2.EngineByID("skill")
-	if err != nil {
-		return
-	}
-	skEng, ok := eng.(engine2.SkillEngine)
-	if !ok {
-		return
-	}
-	skills, err := skEng.Discover(context.Background(), a.home, a.projectPath(), a.cfg.Skill.Paths)
-	if err != nil {
-		return
-	}
-	fullPrompt := a.baseSystemPrompt + agent2.BuildSkillsPrompt(skills)
-	if a.mcpRegistry != nil {
-		fullPrompt += agent2.BuildMCPPrompt(a.mcpRegistry)
-	}
-	fullPrompt += builtin.LSPStatusPrompt(a.registry)
-	a.loopOpts = append(a.loopOpts[:a.baseLoopOptsCount], agent2.WithSystemPrompt(fullPrompt))
 }
 
 // SaveChildSession stores a completed child agent session.
@@ -2478,11 +2450,7 @@ func (a *App) InstallSkillFromURL(args json.RawMessage) ([]string, error) {
 	if err := extractZip(zipPath, extractDir); err != nil {
 		return nil, fmt.Errorf("failed to extract zip: %w", err)
 	}
-	installed, err := a.installSkillsFromDir(extractDir, req.Scope)
-	if err == nil {
-		a.refreshSkillPrompt()
-	}
-	return installed, err
+	return a.installSkillsFromDir(extractDir, req.Scope)
 }
 
 // InstallSkillFromZip installs skills from a base64-encoded ZIP file.
@@ -2514,11 +2482,7 @@ func (a *App) InstallSkillFromZip(args json.RawMessage) ([]string, error) {
 	if err := extractZip(zipPath, extractDir); err != nil {
 		return nil, fmt.Errorf("failed to extract zip: %w", err)
 	}
-	installed, err := a.installSkillsFromDir(extractDir, req.Scope)
-	if err == nil {
-		a.refreshSkillPrompt()
-	}
-	return installed, err
+	return a.installSkillsFromDir(extractDir, req.Scope)
 }
 
 // UninstallSkill removes an installed skill by name.
@@ -2544,7 +2508,6 @@ func (a *App) UninstallSkill(args json.RawMessage) error {
 			if err := os.RemoveAll(s.Path); err != nil {
 				return err
 			}
-			a.refreshSkillPrompt()
 			return nil
 		}
 	}
@@ -3176,7 +3139,7 @@ func (a *App) SchedulePopupHide() {
 	}
 }
 
-func (a *App) GetLSPStatus() []lsp.LSPServerStatus {
+func (a *App) getLspManager() *lsp.Manager {
 	t, ok := a.registry.Get("lsp")
 	if !ok {
 		return nil
@@ -3185,7 +3148,326 @@ func (a *App) GetLSPStatus() []lsp.LSPServerStatus {
 		Manager() *lsp.Manager
 	}
 	if lt, ok := t.(lspTool); ok {
-		return lt.Manager().ServerStatuses()
+		return lt.Manager()
 	}
 	return nil
+}
+
+func (a *App) LspOpenFile(projectPath, filePath string) error {
+	mgr := a.getLspManager()
+	if mgr == nil {
+		return nil
+	}
+	absPath := resolvePath(projectPath, filePath)
+	client, serverName, err := mgr.ClientForFile(a.ctx, absPath)
+	if err != nil {
+		return err
+	}
+	_, _, err = mgr.EnsureFileOpen(a.ctx, client, absPath, serverName)
+	return err
+}
+
+func (a *App) LspCloseFile(projectPath, filePath string) error {
+	mgr := a.getLspManager()
+	if mgr == nil {
+		return nil
+	}
+	absPath := resolvePath(projectPath, filePath)
+	client, _, err := mgr.ClientForFile(a.ctx, absPath)
+	if err != nil {
+		return nil
+	}
+	return mgr.CloseFile(a.ctx, client, absPath)
+}
+
+func (a *App) LspDidChange(projectPath, filePath, content string, version int) error {
+	mgr := a.getLspManager()
+	if mgr == nil {
+		return nil
+	}
+	absPath := resolvePath(projectPath, filePath)
+	client, serverName, err := mgr.ClientForFile(a.ctx, absPath)
+	if err != nil {
+		return err
+	}
+	return mgr.SyncContentFromMemory(a.ctx, client, absPath, content, serverName)
+}
+
+// -- LSP read operations (definition, references, hover, symbols) --
+
+func resolvePath(projectPath, filePath string) string {
+	if filepath.IsAbs(filePath) {
+		return filePath
+	}
+	return filepath.Join(projectPath, filePath)
+}
+
+func filePathToURI(path string) string {
+	return "file:///" + filepath.ToSlash(path)
+}
+
+func uriToFilePath(uri string) string {
+	const prefix = "file:///"
+	if strings.HasPrefix(uri, prefix) {
+		return filepath.FromSlash(uri[len(prefix):])
+	}
+	return uri
+}
+
+func locationsToLSPLocations(locs []lsp.Location) []LspLocation {
+	result := make([]LspLocation, len(locs))
+	for i, loc := range locs {
+		result[i] = LspLocation{
+			Path: uriToFilePath(loc.URI),
+			Line: loc.Range.Start.Line,
+			Col:  loc.Range.Start.Character,
+		}
+	}
+	return result
+}
+
+func documentSymbolsToLSP(syms []lsp.DocumentSymbol, filePath string) []LspSymbol {
+	result := make([]LspSymbol, len(syms))
+	for i, s := range syms {
+		result[i] = LspSymbol{
+			Name:      s.Name,
+			Kind:      int(s.Kind),
+			Path:      filePath,
+			StartLine: s.Range.Start.Line,
+			StartCol:  s.Range.Start.Character,
+			EndLine:   s.Range.End.Line,
+			EndCol:    s.Range.End.Character,
+			Children:  documentSymbolsToLSP(s.Children, filePath),
+		}
+	}
+	return result
+}
+
+func diagnosticsToLSP(diags []lsp.Diagnostic) []LspDiagnostic {
+	result := make([]LspDiagnostic, len(diags))
+	for i, d := range diags {
+		code := ""
+		switch v := d.Code.(type) {
+		case string:
+			code = v
+		case float64:
+			code = fmt.Sprintf("%.0f", v)
+		}
+		result[i] = LspDiagnostic{
+			StartLine: d.Range.Start.Line,
+			StartCol:  d.Range.Start.Character,
+			EndLine:   d.Range.End.Line,
+			EndCol:    d.Range.End.Character,
+			Severity:  int(d.Severity),
+			Message:   d.Message,
+			Source:    d.Source,
+			Code:      code,
+		}
+	}
+	return result
+}
+
+func (a *App) resolveLspClient(projectPath, filePath string) (*lsp.Client, string, string, error) {
+	mgr := a.getLspManager()
+	if mgr == nil {
+		return nil, "", "", fmt.Errorf("no LSP manager available")
+	}
+	absPath := resolvePath(projectPath, filePath)
+	client, serverName, err := mgr.ClientForFile(a.ctx, absPath)
+	if err != nil {
+		return nil, "", "", err
+	}
+	_, err = mgr.EnsureAndSync(a.ctx, client, absPath, serverName)
+	if err != nil {
+		return nil, "", "", err
+	}
+	uri := filePathToURI(absPath)
+	return client, serverName, uri, nil
+}
+
+func (a *App) LspDiagnostics(projectPath, filePath string) ([]LspDiagnostic, error) {
+	mgr := a.getLspManager()
+	if mgr == nil {
+		return nil, nil
+	}
+	absPath := resolvePath(projectPath, filePath)
+	client, serverName, err := mgr.ClientForFile(a.ctx, absPath)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := mgr.EnsureAndSync(a.ctx, client, absPath, serverName); err != nil {
+		return nil, err
+	}
+	uri := filePathToURI(absPath)
+	diags := client.Diagnostics(uri)
+	return diagnosticsToLSP(diags), nil
+}
+
+func (a *App) LspGoToDefinition(projectPath, filePath string, line, col int) ([]LspLocation, error) {
+	client, _, uri, err := a.resolveLspClient(projectPath, filePath)
+	if err != nil {
+		return nil, err
+	}
+	locs, err := client.Definition(a.ctx, uri, lsp.Position{Line: line, Character: col})
+	if err != nil {
+		return nil, err
+	}
+	return locationsToLSPLocations(locs), nil
+}
+
+func (a *App) LspReferences(projectPath, filePath string, line, col int) ([]LspLocation, error) {
+	client, _, uri, err := a.resolveLspClient(projectPath, filePath)
+	if err != nil {
+		return nil, err
+	}
+	locs, err := client.References(a.ctx, uri, lsp.Position{Line: line, Character: col})
+	if err != nil {
+		return nil, err
+	}
+	return locationsToLSPLocations(locs), nil
+}
+
+func (a *App) LspHover(projectPath, filePath string, line, col int) (*LspHoverResult, error) {
+	client, _, uri, err := a.resolveLspClient(projectPath, filePath)
+	if err != nil {
+		return nil, err
+	}
+	hover, err := client.Hover(a.ctx, uri, lsp.Position{Line: line, Character: col})
+	if err != nil {
+		return nil, err
+	}
+	if hover == nil {
+		return nil, nil
+	}
+	text := hover.ContentText()
+	if text == "" {
+		return nil, nil
+	}
+	return &LspHoverResult{Contents: text}, nil
+}
+
+func (a *App) LspDocumentSymbols(projectPath, filePath string) ([]LspSymbol, error) {
+	client, _, uri, err := a.resolveLspClient(projectPath, filePath)
+	if err != nil {
+		return nil, err
+	}
+	absPath := resolvePath(projectPath, filePath)
+	syms, err := client.DocumentSymbols(a.ctx, uri)
+	if err != nil {
+		return nil, err
+	}
+	return documentSymbolsToLSP(syms, absPath), nil
+}
+
+func (a *App) LspTypeDefinition(projectPath, filePath string, line, col int) ([]LspLocation, error) {
+	client, _, uri, err := a.resolveLspClient(projectPath, filePath)
+	if err != nil {
+		return nil, err
+	}
+	locs, err := client.TypeDefinition(a.ctx, uri, lsp.Position{Line: line, Character: col})
+	if err != nil {
+		return nil, err
+	}
+	return locationsToLSPLocations(locs), nil
+}
+
+func (a *App) LspImplementation(projectPath, filePath string, line, col int) ([]LspLocation, error) {
+	client, _, uri, err := a.resolveLspClient(projectPath, filePath)
+	if err != nil {
+		return nil, err
+	}
+	locs, err := client.Implementation(a.ctx, uri, lsp.Position{Line: line, Character: col})
+	if err != nil {
+		return nil, err
+	}
+	return locationsToLSPLocations(locs), nil
+}
+
+func workspaceEditToLSP(edit *lsp.WorkspaceEdit) *LspWorkspaceEdit {
+	if edit == nil {
+		return nil
+	}
+	var changes []LspFileEdit
+	for uri, edits := range edit.Changes {
+		path := uriToFilePath(uri)
+		lspEdits := make([]LspTextEdit, len(edits))
+		for j, e := range edits {
+			lspEdits[j] = LspTextEdit{
+				StartLine: e.Range.Start.Line,
+				StartCol:  e.Range.Start.Character,
+				EndLine:   e.Range.End.Line,
+				EndCol:    e.Range.End.Character,
+				NewText:   e.NewText,
+			}
+		}
+		changes = append(changes, LspFileEdit{Path: path, Edits: lspEdits})
+	}
+	for _, dc := range edit.DocumentChanges {
+		if dc.TextDocument != nil {
+			path := uriToFilePath(dc.TextDocument.TextDocument.URI)
+			lspEdits := make([]LspTextEdit, len(dc.TextDocument.Edits))
+			for j, e := range dc.TextDocument.Edits {
+				lspEdits[j] = LspTextEdit{
+					StartLine: e.Range.Start.Line,
+					StartCol:  e.Range.Start.Character,
+					EndLine:   e.Range.End.Line,
+					EndCol:    e.Range.End.Character,
+					NewText:   e.NewText,
+				}
+			}
+			changes = append(changes, LspFileEdit{Path: path, Edits: lspEdits})
+		}
+	}
+	return &LspWorkspaceEdit{Changes: changes}
+}
+
+func (a *App) LspRename(projectPath, filePath string, line, col int, newName string) (*LspWorkspaceEdit, error) {
+	client, _, uri, err := a.resolveLspClient(projectPath, filePath)
+	if err != nil {
+		return nil, err
+	}
+	wsEdit, err := client.Rename(a.ctx, uri, lsp.Position{Line: line, Character: col}, newName)
+	if err != nil {
+		return nil, err
+	}
+	return workspaceEditToLSP(wsEdit), nil
+}
+
+func (a *App) LspCodeActions(projectPath, filePath string, line, col int) ([]LspCodeAction, error) {
+	client, _, uri, err := a.resolveLspClient(projectPath, filePath)
+	if err != nil {
+		return nil, err
+	}
+	r := lsp.Range{
+		Start: lsp.Position{Line: line, Character: col},
+		End:   lsp.Position{Line: line, Character: col},
+	}
+	actions, err := client.CodeActions(a.ctx, uri, r, nil)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]LspCodeAction, len(actions))
+	for i, act := range actions {
+		result[i] = LspCodeAction{
+			Title: act.Title,
+			Kind:  string(act.Kind),
+			Edit:  workspaceEditToLSP(act.Edit),
+		}
+	}
+	return result, nil
+}
+
+func (a *App) LspExecuteCodeAction(projectPath string, action LspCodeAction) (*LspWorkspaceEdit, error) {
+	if action.Edit != nil {
+		return action.Edit, nil
+	}
+	return nil, nil
+}
+
+func (a *App) GetLSPStatus() []lsp.LSPServerStatus {
+	mgr := a.getLspManager()
+	if mgr == nil {
+		return nil
+	}
+	return mgr.ServerStatuses()
 }

@@ -18,7 +18,7 @@
   <a href="https://wails.io"><img src="https://img.shields.io/badge/Wails_v3-F7CC42?style=flat&colorA=222222" alt="Wails"></a>
 </p>
 
-![Monika Screenshot](screen/PixPin_2026-05-31_23-36-10.png)
+![Monika Screenshot](screen/PixPin_2026-06-07_16-40-22.png)
 
 ---
 
@@ -27,6 +27,15 @@
 Monika 是一个基于 [Wails v3](https://wails.io) 构建的桌面端 AI 编程编辑器。Go 后端 + React 前端，通过多面板 GUI 让 AI Agent 直接读写文件、搜索代码、执行命令——不只是聊天窗口，而是一个完整的编程环境。
 
 **不绑定任何模型提供商。** 只要兼容 OpenAI API，就能接入。模型上下文长度和输出限制自动从 [models.dev](https://models.dev) 获取。
+
+### 为什么叫 "Monika"？
+
+名字来自《心跳文学部》（Doki Doki Literature Club）。游戏中的 Monika 是唯一一个觉醒了自我意识的角色——她意识到自己身处程序之中，能够读取文件、改写周围的世界。
+
+这正是我们对 AI 编程 Agent 的期望：不只是待在聊天框里回答问题，而是感知整个项目——文件树、代码、诊断信息——并直接对其进行操作。一个打破对话与代码库之间"第四面墙"的 Agent，穿越边界，亲手重塑你正在构建的东西。
+
+我们相信下一代 IDE 将以 AI 为核心驱动，而非作为侧边栏的附加功能。Monika 是我们迈向这一愿景的尝试。
+
 
 ## 安装
 
@@ -88,20 +97,8 @@ Agent 可以直接操作你的项目：
 | `file_list` | 列出目录内容 |
 | `glob` | Glob 模式文件查找 |
 | `grep` | 正则搜索文件内容 |
-| `lsp` | Language Server Protocol — 诊断、跳转定义、查找引用、重命名等 ([文档](docs/lsp.zh.md)) |
-| `lsp` | Language Server Protocol — 诊断、跳转定义、查找引用、重命名等 ([文档](docs/lsp.md)) |
-
-Agent 可以直接操作你的项目：
-
-| 工具 | 功能 |
-|------|------|
-| `file_read` | 读取文件（带 offset/limit 精确读取） |
-| `file_write` | 创建或覆盖文件 |
-| `file_edit` | 精确字符串替换 |
-| `file_list` | 列出目录内容 |
-| `glob` | Glob 模式文件查找 |
-| `grep` | 正则搜索文件内容 |
 | `bash` | 执行 Shell 命令（跨平台） |
+| `lsp` | Language Server Protocol — 诊断、跳转定义、查找引用、重命名等 ([文档](docs/lsp.zh.md)) |
 
 ### Git 集成
 
@@ -206,3 +203,13 @@ go mod tidy
 | [zustand](https://zustand.docs.pmnd.rs) | MIT |
 | [LXGW WenKai](https://github.com/lxgw/LxgwWenKai) | SIL OFL 1.1 |
 | [Maple Mono NF](https://github.com/subframe7536/Maple-font) | SIL OFL 1.1 |
+
+## 致谢
+
+Monika 站在巨人的肩膀上。以下项目塑造了我们的设计理念，其中许多功能直接受到它们的启发：
+
+- **[VS Code](https://github.com/microsoft/vscode)** — 定义了现代开发体验的编辑器。Monika 的代码缩略图渲染直接参考了其 Canvas 实现。
+- **[oh-my-pi](https://github.com/can1357/oh-my-pi)** — 极其出色的终端 AI Agent，以深度 LSP 集成、子 Agent 编排和开箱即用的哲学，向我们展示了 Agent 界面的真正潜力。
+- **[OpenCode](https://github.com/sst/opencode)** — 为终端而生的开源 AI 编程 Agent。其简洁的架构和 Provider 无关的设计理念深刻影响了我们的方案。
+
+感谢这些项目及其作者。开源因传承而伟大——我们很荣幸能成为这一传统的一部分。

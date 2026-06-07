@@ -18,7 +18,7 @@
   <a href="https://wails.io"><img src="https://img.shields.io/badge/Wails_v3-F7CC42?style=flat&colorA=222222" alt="Wails"></a>
 </p>
 
-![Monika Screenshot](screen/PixPin_2026-05-31_23-36-10.png)
+![Monika Screenshot](screen/PixPin_2026-06-07_16-40-22.png)
 
 ---
 
@@ -27,6 +27,15 @@
 Monika is a desktop AI coding editor built on [Wails v3](https://wails.io). A Go backend paired with a React frontend, it lets an AI agent read and write files, search code, and run commands through a multi-panel GUI — not just a chat window, but a complete coding environment.
 
 **Provider-agnostic.** Any OpenAI-compatible API endpoint works. Model context and output limits are automatically fetched from [models.dev](https://models.dev).
+
+### Why "Monika"?
+
+The name comes from *Doki Doki Literature Club*. In the game, Monika is the one character who becomes self-aware — she realizes she's inside a program, reads its files, and rewrites the world around her.
+
+That's exactly what we want an AI coding agent to do: not just sit in a chat box, but perceive the entire project — the file tree, the code, the diagnostics — and act on it directly. An agent that breaks the fourth wall between conversation and codebase, reaching through to reshape what you're building.
+
+We believe the next generation of IDEs will be driven by AI at the core, not bolted on as a sidebar panel. Monika is our attempt to build that future.
+
 
 ## Quick Start
 
@@ -90,18 +99,6 @@ The agent can manipulate your project directly:
 | `grep` | Regex search across files |
 | `bash` | Execute shell commands (cross-platform) |
 | `lsp` | Language Server Protocol — diagnostics, go-to-definition, references, rename, etc. ([docs](docs/lsp.md)) |
-
-The agent can manipulate your project directly:
-
-| Tool | Description |
-|------|-------------|
-| `file_read` | Read files with precision (offset/limit) |
-| `file_write` | Create or overwrite files |
-| `file_edit` | Exact string replacement |
-| `file_list` | List directory contents |
-| `glob` | Glob pattern file discovery |
-| `grep` | Regex search across files |
-| `bash` | Execute shell commands (cross-platform) |
 
 ### Git Integration
 
@@ -204,5 +201,15 @@ Third-party components:
 | [dockview](https://dockview.dev) | MIT |
 | [React](https://react.dev) | MIT |
 | [zustand](https://zustand.docs.pmnd.rs) | MIT |
+
+## Acknowledgments
+
+Monika stands on the shoulders of giants. These projects shaped our thinking and, in many cases, provided direct inspiration for features you see today:
+
+- **[VS Code](https://github.com/microsoft/vscode)** — The editor that defined the modern development experience. Our minimap rendering draws directly from its canvas-based implementation.
+- **[oh-my-pi](https://github.com/can1357/oh-my-pi)** — A remarkably capable terminal AI agent with deep LSP integration, subagent orchestration, and a batteries-included philosophy that showed us what an agent surface could be.
+- **[OpenCode](https://github.com/sst/opencode)** — An open-source AI coding agent built for the terminal. Its clean architecture and provider-agnostic approach informed our own design.
+
+We are grateful to these projects and their authors. Open source builds on open source — and we're glad to be part of that tradition.
 | [LXGW WenKai](https://github.com/lxgw/LxgwWenKai) | SIL OFL 1.1 |
 | [Maple Mono NF](https://github.com/subframe7536/Maple-font) | SIL OFL 1.1 |

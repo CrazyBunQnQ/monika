@@ -136,7 +136,10 @@ func copyDirRecursive(src, dst string) error {
 }
 
 func (f *FileService) ReadFile(relPath string) (FileContent, error) {
-	absPath := filepath.Join(f.projectDir, relPath)
+	absPath := relPath
+	if !filepath.IsAbs(relPath) {
+		absPath = filepath.Join(f.projectDir, relPath)
+	}
 	data, err := os.ReadFile(absPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -152,7 +155,10 @@ func (f *FileService) ReadFile(relPath string) (FileContent, error) {
 }
 
 func (f *FileService) WriteFile(relPath, content string) error {
-	absPath := filepath.Join(f.projectDir, relPath)
+	absPath := relPath
+	if !filepath.IsAbs(relPath) {
+		absPath = filepath.Join(f.projectDir, relPath)
+	}
 	if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
 		return err
 	}

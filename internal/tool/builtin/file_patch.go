@@ -24,7 +24,7 @@ func (f *filePatch) SetDiagFunc(fn LSPDiagFunc) { f.diagFunc = fn }
 func (f *filePatch) Name() string { return "patch" }
 
 func (f *filePatch) Description() string {
-	return "Applies a search/replace patch to a file. Finds the exact occurrence of `search` in the file content and replaces it with `replace`. The `search` string must match exactly one location in the file (whitespace-sensitive). Fails if `search` is not found or matches multiple locations. The `replace` text is taken from the message content when not provided in JSON args — use this for large code blocks."
+	return "Applies a search/replace patch to a file. Finds the exact occurrence of `search` in the file content and replaces it with `replace`. The `search` string must match exactly one location in the file (whitespace-sensitive). Fails if `search` is not found or matches multiple locations."
 }
 
 func (f *filePatch) Parameters() map[string]any {
@@ -41,7 +41,7 @@ func (f *filePatch) Parameters() map[string]any {
 			},
 			"replace": map[string]any{
 				"type":        "string",
-				"description": "The replacement text. If not provided in JSON args, the natural code from the assistant's message content is used instead.",
+				"description": "The replacement text.",
 			},
 		},
 		"required": []string{"filePath", "search"},
@@ -56,11 +56,6 @@ func (f *filePatch) Execute(ctx context.Context, args json.RawMessage) (tool.Exe
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
-	}
-
-	// replace from message content (natural code) takes priority over JSON args
-	if content := tool.MessageContentFromContext(ctx); content != "" {
-		params.Replace = content
 	}
 
 	if params.Search == "" {

@@ -8,7 +8,6 @@ var deepseekPrompt = PromptSet{
 	ResponseStyle:    deepseekResponseStyle,
 	SafetyBoundaries: defaultSafetyBoundaries,
 	Remember:         defaultRemember,
-	MaxSteps:         defaultMaxSteps,
 }
 
 const deepseekIdentity = `You are Monika, an interactive general AI agent and coding assistant.

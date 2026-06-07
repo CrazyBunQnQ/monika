@@ -165,20 +165,6 @@ func WireLSPHooks(r *tool.ToolRegistry) {
 		}
 	}
 }
-func LSPStatusPrompt(r *tool.ToolRegistry) string {
-	t, ok := r.Get("lsp")
-	if !ok {
-		return ""
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	statusArgs, _ := json.Marshal(map[string]string{"action": "status"})
-	result, err := t.Execute(ctx, statusArgs)
-	if err != nil || result.IsError || result.Content == "" {
-		return ""
-	}
-	return "\n## Available LSP Servers\n" + result.Content
-}
 
 // RegisterAskUser registers the ask_user tool for user interaction.
 func RegisterAskUser(r *tool.ToolRegistry) {
@@ -205,6 +191,11 @@ func RegisterSkillTool(r *tool.ToolRegistry, skEng engine.SkillEngine, home stri
 	r.Register(NewSkillTool(skEng, home, getCwd, cfg))
 }
 
+// RegisterSkillSearchTool registers the skill_search tool for fuzzy discovery.
+func RegisterSkillSearchTool(r *tool.ToolRegistry, skEng engine.SkillEngine, home string, getCwd func() string, cfg *config.Config) {
+	r.Register(NewSkillSearchTool(skEng, home, getCwd, cfg))
+}
+
 // RegisterSkillManagement registers install_skill and uninstall_skill tools.
 // The installFn and uninstallFn callbacks are typically wired to App methods.
 func RegisterSkillManagement(r *tool.ToolRegistry, installFn func(url string, scope string) ([]string, error), uninstallFn func(name string) error) {
@@ -224,4 +215,14 @@ func RegisterMCPManagement(
 	r.Register(NewMCPInstallTool(saveFn, reconnectFn))
 	r.Register(NewMCPUninstallTool(deleteFn))
 	r.Register(NewMCPListTool(listFn))
+}
+
+// RegisterMCPSearchTool registers the mcp_search tool for fuzzy discovery.
+func RegisterMCPSearchTool(r *tool.ToolRegistry, mcpRegistry *engine.MCPRegistry) {
+	r.Register(NewMCPSearchTool(mcpRegistry))
+}
+
+// RegisterLSPListTool registers the lsp_list tool for querying language server status.
+func RegisterLSPListTool(r *tool.ToolRegistry) {
+	r.Register(NewLSPListTool(r))
 }

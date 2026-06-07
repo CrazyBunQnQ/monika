@@ -1,16 +1,20 @@
 package agent
 
-import "testing"
+import (
+	"monika/internal/prompt"
+	"testing"
+)
 
 func TestPromptConstantsNotEmpty(t *testing.T) {
+	ps := prompt.Get("")
 	constants := map[string]string{
-		"PromptIdentity":         PromptIdentity,
-		"PromptToolUsage":        PromptToolUsage,
-		"PromptPlanning":         PromptPlanning,
-		"PromptCodeQuality":      PromptCodeQuality,
-		"PromptResponseStyle":    PromptResponseStyle,
-		"PromptSafetyBoundaries": PromptSafetyBoundaries,
-		"PromptRemember":         PromptRemember,
+		"Identity":         ps.Identity,
+		"ToolUsage":        ps.ToolUsage,
+		"Planning":         ps.Planning,
+		"CodeQuality":      ps.CodeQuality,
+		"ResponseStyle":    ps.ResponseStyle,
+		"SafetyBoundaries": ps.SafetyBoundaries,
+		"Remember":         ps.Remember,
 	}
 	for name, value := range constants {
 		if value == "" {
@@ -20,13 +24,14 @@ func TestPromptConstantsNotEmpty(t *testing.T) {
 }
 
 func TestPromptTokenBudget(t *testing.T) {
-	total := len(PromptIdentity) +
-		len(PromptToolUsage) +
-		len(PromptPlanning) +
-		len(PromptCodeQuality) +
-		len(PromptResponseStyle) +
-		len(PromptSafetyBoundaries) +
-		len(PromptRemember)
+	ps := prompt.Get("")
+	total := len(ps.Identity) +
+		len(ps.ToolUsage) +
+		len(ps.Planning) +
+		len(ps.CodeQuality) +
+		len(ps.ResponseStyle) +
+		len(ps.SafetyBoundaries) +
+		len(ps.Remember)
 
 	const maxChars = 17000
 	if total > maxChars {

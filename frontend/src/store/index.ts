@@ -5,6 +5,7 @@ import { Events, Call } from '@wailsio/runtime'
 import { App, StreamEvent } from '../../bindings/monika'
 import type { RecentProject, BranchInfo, ModelInfo, ProviderInfo, ChangeStat, SessionInfo, CommitInfo } from '../../bindings/monika'
 import type { DockviewApi } from 'dockview'
+import { lspService, LspDiagnostic, LspSymbol } from '../lib/lspService'
 
 export interface PermissionRequiredEvent {
     type: string
@@ -166,9 +167,7 @@ interface AppState {
     subagentStack: Record<string, string[]>
     preview: PreviewState
     fileTreeActiveTab: 'files' | 'tasks'
-    lastEditedFile: string | null
-    lastEditedOldContent: string | null
-    lastEditVersion: number
+
     fileTreeVersion: number
     sessionListVersion: number
     dockviewApi: DockviewApi | null
@@ -195,6 +194,10 @@ interface AppState {
     skillPaths: string[]
     mcpServers: MCPServerInfo[]
     lspServers: LSPServerStatus[]
+    lspReady: Record<string, boolean>
+    lspDiagnostics: Record<string, LspDiagnostic[]>
+    lspSymbols: Record<string, LspSymbol[]>
+    previewNeedsRefresh: string | null
     providerDetails: ProviderFull[]
     availableProvidersCatalog: AvailableProviderInfo[]
     settingsOpen: boolean
@@ -253,7 +256,7 @@ interface AppState {
     setPreviewFile: (filePath: string, fileName: string, content: string) => void
     setPreviewDiff: (filePath: string, fileName: string, lines: string[]) => void
     clearPreview: () => void
-    setLastEditedFile: (filePath: string | null) => void
+
     setRevealFilePath: (filePath: string | null) => void
     setFileTreeActiveTab: (tab: 'files' | 'tasks') => void
     revealFilePath: string | null
@@ -284,6 +287,10 @@ interface AppState {
     setSkillEnabled: (name: string) => Promise<void>
     loadMCPServers: () => Promise<void>
     loadLSPStatus: () => Promise<void>
+    openLspFile: (projectPath: string, filePath: string) => void
+    closeLspFile: (projectPath: string, filePath: string) => void
+    setLspDiagnostics: (filePath: string, diags: LspDiagnostic[]) => void
+    setLspSymbols: (filePath: string, syms: LspSymbol[]) => void
     saveMCPServer: (srv: MCPServerInfo) => Promise<void>
     deleteMCPServer: (id: string) => Promise<void>
     importMCPServers: (json: string) => Promise<string[]>
@@ -324,11 +331,11 @@ export const useStore = create<AppState>((set, get) => ({
     sessionParents: {},
     subagentStack: {},
     preview: { mode: null, filePath: null, fileName: null, fileContent: null, diffLines: null },
-    lastEditedFile: null,
+
     fileTreeActiveTab: 'files' as 'files' | 'tasks',
-    lastEditedOldContent: null,
+
     revealFilePath: null,
-    lastEditVersion: 0,
+
     fileTreeVersion: 0,
     sessionListVersion: 0,
     dockviewApi: null as DockviewApi | null,
@@ -355,6 +362,10 @@ export const useStore = create<AppState>((set, get) => ({
     skillPaths: [],
     mcpServers: [],
     lspServers: [] as LSPServerStatus[],
+    lspReady: {},
+    lspDiagnostics: {},
+    lspSymbols: {},
+    previewNeedsRefresh: null as string | null,
     providerDetails: [],
     availableProvidersCatalog: [] as AvailableProviderInfo[],
     settingsOpen: false,
@@ -402,33 +413,18 @@ export const useStore = create<AppState>((set, get) => ({
     updateToolDone: (toolId, output, status) =>
         set((s) => {
             const msgs = [...s.messages]
-            let updatedFile: string | null = null
             for (let i = msgs.length - 1; i >= 0; i--) {
                 if (msgs[i].role === 'assistant' && msgs[i].tools) {
                     msgs[i] = {
                         ...msgs[i],
-                        tools: msgs[i].tools!.map((t) => {
-                            if (t.id === toolId && t.status === 'running') {
-                                if (status === 'done' && (t.name === 'file_edit' || t.name === 'file_write') && t.input) {
-                                    try {
-                                        const parsed = JSON.parse(t.input)
-                                        if (parsed.filePath) updatedFile = parsed.filePath
-                                    } catch { }
-                                }
-                                return { ...t, output, status }
-                            }
-                            return t
-                        }),
+                        tools: msgs[i].tools!.map((t) =>
+                            t.id === toolId && t.status === 'running' ? { ...t, output, status } : t
+                        ),
                     }
                     break
                 }
             }
-            const result: Partial<AppState> = { messages: msgs }
-            if (updatedFile) {
-                (result as any).lastEditedFile = updatedFile
-                    ; (result as any).lastEditVersion = s.lastEditVersion + 1
-            }
-            return result
+            return { messages: msgs }
         }),
 
     updateToolInput: (toolId, input) =>
@@ -1045,9 +1041,7 @@ export const useStore = create<AppState>((set, get) => ({
         set({ preview: { mode: null, filePath: null, fileName: null, fileContent: null, diffLines: null } })
     },
 
-    setLastEditedFile: (filePath) => {
-        set({ lastEditedFile: filePath })
-    },
+
 
     setRevealFilePath: (filePath: string | null) => {
         set({ revealFilePath: filePath })
@@ -1270,6 +1264,29 @@ export const useStore = create<AppState>((set, get) => ({
         } catch { set({ lspServers: [] }) }
     },
 
+    openLspFile: (projectPath: string, filePath: string) => {
+        lspService.openFile(projectPath, filePath).catch(() => {
+            set({ lspReady: { ...get().lspReady, [filePath]: false } })
+        })
+        set({ lspReady: { ...get().lspReady, [filePath]: true } })
+    },
+
+    closeLspFile: (projectPath: string, filePath: string) => {
+        lspService.closeFile(projectPath, filePath).catch(() => {})
+        set((state) => {
+            const { [filePath]: _, ...rest } = state.lspReady
+            return { lspReady: rest }
+        })
+    },
+
+    setLspDiagnostics: (filePath: string, diags: LspDiagnostic[]) => {
+        set({ lspDiagnostics: { ...get().lspDiagnostics, [filePath]: diags } })
+    },
+
+    setLspSymbols: (filePath: string, syms: LspSymbol[]) => {
+        set({ lspSymbols: { ...get().lspSymbols, [filePath]: syms } })
+    },
+
     saveMCPServer: async (srv) => {
         await Call.ByName('monika/internal/api.App.SaveMCPServer', srv)
         await get().loadMCPServers()
@@ -1357,9 +1374,8 @@ export const useStore = create<AppState>((set, get) => ({
             sessionParents: {},
             subagentStack: {},
             preview: { mode: null, filePath: null, fileName: null, fileContent: null, diffLines: null },
-            lastEditedFile: null,
-            lastEditedOldContent: null,
-            lastEditVersion: 0,
+
+
             openSessions: [],
             sessionMessages: {},
             displayCounts: {},
@@ -1381,6 +1397,10 @@ export const useStore = create<AppState>((set, get) => ({
             skillPaths: [],
             mcpServers: [],
             lspServers: [],
+            lspReady: {},
+            lspDiagnostics: {},
+            lspSymbols: {},
+            previewNeedsRefresh: null,
             providerDetails: [],
 
             settingsOpen: false,
@@ -1548,18 +1568,7 @@ export function setupWailsEvents() {
                     store.addSessionToolStart(sid, { id: data.tool.id, name: data.tool.name, input: data.tool.input || '', status: 'running' })
                     if (sid === store.activeSessionId || (!store.activeSessionId && sid === 'chat')) {
                         store.addToolStart({ id: data.tool.id, name: data.tool.name, input: data.tool.input || '', status: 'running' })
-                        if ((data.tool.name === 'file_edit' || data.tool.name === 'file_write') && data.tool.input) {
-                            try {
-                                const parsed = JSON.parse(data.tool.input)
-                                if (parsed.filePath && store.projectPath) {
-                                    App.ReadFile(store.projectPath, parsed.filePath).then((fc) => {
-                                        if (fc && fc.content !== undefined) {
-                                            useStore.setState({ lastEditedOldContent: fc.content })
-                                        }
-                                    }).catch(() => { })
-                                }
-                            } catch { }
-                        }
+
                     }
                 }
                 break
@@ -1643,6 +1652,13 @@ export function setupWailsEvents() {
 
             case 'file_changed':
                 store.bumpFileTreeVersion()
+                // If changed file matches current preview, flag it for refresh
+                if (data.file_change && data.file_change.path) {
+                    const curPreview = useStore.getState().preview
+                    if (curPreview.mode === 'file' && curPreview.filePath === data.file_change.path) {
+                        useStore.setState({ previewNeedsRefresh: data.file_change.path })
+                    }
+                }
                 break
 
             case 'done': {

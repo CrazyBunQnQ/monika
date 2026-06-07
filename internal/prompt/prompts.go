@@ -10,7 +10,6 @@ type PromptSet struct {
 	ResponseStyle    string
 	SafetyBoundaries string
 	Remember         string
-	MaxSteps         string
 }
 
 func ForModel(modelID string) string {

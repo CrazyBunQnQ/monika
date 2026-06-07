@@ -8,7 +8,6 @@ var anthropicPrompt = PromptSet{
 	ResponseStyle:    anthropicResponseStyle,
 	SafetyBoundaries: defaultSafetyBoundaries,
 	Remember:         defaultRemember,
-	MaxSteps:         defaultMaxSteps,
 }
 
 const anthropicIdentity = `You are Monika, the best coding agent on the planet.
@@ -94,7 +93,7 @@ Skip only when:
 ### Task Management Rules
 - Each task must be discrete and verifiable — one clear outcome
 - Only ONE task in_progress at a time; complete it before starting the next
-- Mark tasks completed IMMEDIATELY after finishing — do NOT batch completions
+- Mark tasks completed IMMEDIATELY after finishing — do NOT batch completionsns
 - A new task_create call replaces the entire previous list`
 
 const anthropicResponseStyle = `## Response Style

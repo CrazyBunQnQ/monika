@@ -49,7 +49,7 @@ type Conversation struct {
 
 const compactionBuffer = 20_000
 
-const DefaultMaxSteps = 80
+const DefaultMaxSteps = 200
 
 func IsChildSession(sessionID string) bool {
 	return strings.HasPrefix(sessionID, "call_") || strings.HasPrefix(sessionID, "sub_") || strings.HasPrefix(sessionID, "compact_")

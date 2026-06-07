@@ -157,3 +157,68 @@ type SkillContentResult struct {
 	Content string   `json:"content"`
 	Files   []string `json:"files"`
 }
+
+// LSP API types -- flattened for Wails IPC, no raw LSP URIs
+
+// LspLocation represents a file position (line/col are 0-based).
+type LspLocation struct {
+	Path string `json:"path"`
+	Line int    `json:"line"`
+	Col  int    `json:"col"`
+}
+
+// LspHoverResult contains the hover info text (markdown).
+type LspHoverResult struct {
+	Contents string `json:"contents"`
+}
+
+// LspSymbol is a document symbol with a tree of children.
+type LspSymbol struct {
+	Name      string       `json:"name"`
+	Kind      int          `json:"kind"`
+	Path      string       `json:"path"`
+	StartLine int          `json:"startLine"`
+	StartCol  int          `json:"startCol"`
+	EndLine   int          `json:"endLine"`
+	EndCol    int          `json:"endCol"`
+	Children  []LspSymbol  `json:"children,omitempty"`
+}
+
+// LspDiagnostic is a diagnostic with severity/range/message.
+type LspDiagnostic struct {
+	StartLine int    `json:"startLine"`
+	StartCol  int    `json:"startCol"`
+	EndLine   int    `json:"endLine"`
+	EndCol    int    `json:"endCol"`
+	Severity  int    `json:"severity"`
+	Message   string `json:"message"`
+	Source    string `json:"source"`
+	Code      string `json:"code,omitempty"`
+}
+
+// LspTextEdit represents a single text edit.
+type LspTextEdit struct {
+	StartLine int    `json:"startLine"`
+	StartCol  int    `json:"startCol"`
+	EndLine   int    `json:"endLine"`
+	EndCol    int    `json:"endCol"`
+	NewText   string `json:"newText"`
+}
+
+// LspFileEdit is a set of edits for one file.
+type LspFileEdit struct {
+	Path  string        `json:"path"`
+	Edits []LspTextEdit `json:"edits"`
+}
+
+// LspWorkspaceEdit is a collection of file edits.
+type LspWorkspaceEdit struct {
+	Changes []LspFileEdit `json:"changes"`
+}
+
+// LspCodeAction represents a code action with optional workspace edit.
+type LspCodeAction struct {
+	Title string             `json:"title"`
+	Kind  string             `json:"kind"`
+	Edit  *LspWorkspaceEdit  `json:"edit,omitempty"`
+}

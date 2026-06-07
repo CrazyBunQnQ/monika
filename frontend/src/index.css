@@ -130,6 +130,51 @@
   --purple: #877bb5;
   --blue:   #588dd5;
 
+  /* ── Syntax Highlighting (Catppuccin Mocha) ── */
+  --syn-comment:    #6c7086;   /* overlay0 */
+  --syn-string:     #a6e3a1;   /* green */
+  --syn-number:     #fab387;   /* peach */
+  --syn-type:       #b4befe;   /* lavender */
+  --syn-keyword:    #cba6f7;   /* mauve */
+  --syn-variable:   #74c7ec;   /* sapphire (fields/properties) */
+  --syn-function:   #89b4fa;   /* blue */
+  --syn-punct:      #7f849c;   /* overlay1 */
+  --syn-operator:   #94e2d5;   /* teal */
+  --syn-regex:      #a6e3a1;   /* green */
+  --syn-heading:    #f38ba8;   /* red */
+  --syn-link:       #89b4fa;   /* blue */
+  --syn-meta:       #cba6f7;   /* mauve */
+  --syn-markup:     #f9e2af;   /* yellow */
+  --syn-escape:     #fab387;   /* peach */
+
+  /* ── Context menu ── */
+  --ctx-menu-bg:       #161820;
+  --ctx-menu-border:   rgba(255,255,255,0.08);
+  --ctx-menu-shadow:   0 8px 24px rgba(0,0,0,0.5);
+  --ctx-menu-hover:    rgba(255,255,255,0.05);
+  --ctx-menu-sep:      rgba(255,255,255,0.06);
+  --ctx-menu-shortcut: #5c6370;
+
+  /* ── Symbol sidebar ── */
+  --sym-bg:             #0a0b10;
+  --sym-active-bg:      rgba(97,175,239,0.10);
+  --sym-active-fg:      #61afef;
+  --sym-kind-fg:        #5c6370;
+  --sym-expand-fg:      #5c6370;
+  --sym-border:         rgba(255,255,255,0.06);
+
+  /* ── Editor bottom bar ── */
+  --editor-bar-bg:      #0a0b10;
+  --editor-bar-fg:      #5c6370;
+  --editor-bar-fg-dim:  #3e4451;
+
+  /* ── Hover tooltip ── */
+  --hover-bg:        #161820;
+  --hover-border:    rgba(255,255,255,0.08);
+  --hover-radius:    var(--radius-md);
+  --hover-code-bg:   #101218;
+  --hover-shadow:    var(--ctx-menu-shadow);
+
   /* ── Markdown element colors ── */
   --md-h1:       var(--text-primary);
   --md-h2:       var(--text-primary);
@@ -454,3 +499,64 @@
   .markdown-body ol li { counter-increment: none; }
   .markdown-body ol li::before { display: none; }
 }
+
+/* ---- Preview Markdown (wider spacing for file reading) ---- */
+.markdown-preview {
+  font-size: 15px;
+  line-height: 1.8;
+}
+.markdown-preview h1 {
+  font-size: 1.6em;
+  margin-top: 28px;
+  padding-bottom: 8px;
+}
+.markdown-preview h2 {
+  font-size: 1.35em;
+  margin-top: 24px;
+  padding-bottom: 6px;
+}
+.markdown-preview h3 {
+  font-size: 1.18em;
+  margin-top: 20px;
+}
+.markdown-preview h4 { font-size: 1.06em; }
+.markdown-preview h5 { font-size: 1.0em; }
+.markdown-preview h6 { font-size: 0.95em; }
+.markdown-preview p {
+  margin-top: 12px;
+  margin-bottom: 12px;
+}
+.markdown-preview ul,
+.markdown-preview ol {
+  margin-top: 10px;
+  margin-bottom: 10px;
+  padding-left: 2em;
+}
+.markdown-preview blockquote {
+  margin: 16px 0;
+  padding: 8px 16px;
+}
+.markdown-preview table {
+  margin: 16px 0;
+}
+.markdown-preview pre {
+  margin: 16px 0;
+  padding: 14px 16px;
+  border-radius: 6px;
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+.markdown-preview code {
+  font-size: 13.5px;
+}
+.markdown-preview img {
+  display: inline-block;
+  max-width: 100%;
+  margin: 16px 0;
+  border-radius: 6px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.3);
+}
+.markdown-preview hr {
+  margin: 24px 0;
+}
+

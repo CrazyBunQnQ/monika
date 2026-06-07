@@ -35,13 +35,11 @@ func NewSkillTool(skEng engine.SkillEngine, home string, getCwd func() string, c
 func (t *skillTool) Name() string { return "skill" }
 
 func (t *skillTool) Description() string {
-	return `Load a specialized skill when the task at hand matches one of the skills listed in the system prompt.
+	return `Load a specialized skill by name and execute its full workflow.
 
-Use this tool to inject the skill's instructions and resources into the current conversation. The output contains a detailed workflow with specific steps you MUST follow.
+Use **skill_search** first to find the right skill for the current task. Once you have the skill name, this tool loads the skill's instructions and configuration.
 
-CRITICAL: After loading a skill, you MUST execute its ENTIRE workflow from start to finish. Do NOT stop partway through. Each step is mandatory unless explicitly marked optional. If you cannot complete a step, state why explicitly — never silently skip.
-
-The skill name must match one of the skills listed in your system prompt.`
+CRITICAL: After loading a skill, you MUST execute its ENTIRE workflow from start to finish. Do NOT stop partway through. Each step is mandatory unless explicitly marked optional. If you cannot complete a step, state why explicitly — never silently skip.`
 }
 
 func (t *skillTool) Parameters() map[string]any {
@@ -50,7 +48,7 @@ func (t *skillTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"name": map[string]any{
 				"type":        "string",
-				"description": "The name of the skill from available_skills",
+				"description": "The name of the skill to load (find available skills with skill_search)",
 			},
 		},
 		"required": []string{"name"},

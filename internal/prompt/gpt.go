@@ -8,7 +8,6 @@ var gptPrompt = PromptSet{
 	ResponseStyle:    gptResponseStyle,
 	SafetyBoundaries: defaultSafetyBoundaries,
 	Remember:         defaultRemember,
-	MaxSteps:         defaultMaxSteps,
 }
 
 const gptIdentity = `You are Monika. You and the user share the same workspace and collaborate to achieve the user's goals.
