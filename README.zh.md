@@ -41,20 +41,41 @@ Monika 是一个基于 [Wails v3](https://wails.io) 构建的桌面端 AI 编程
 
 从 [Releases](https://github.com/RedTeaLab/monika/releases) 下载对应平台的安装包，或从源码构建：
 
-```powershell
-# 前置依赖: Go 1.25+, Node.js 18+, Wails v3 CLI
-go install github.com/wailsapp/wails/v3/cmd/wails3@latest
+### 前置依赖
 
+| 平台 | 依赖 |
+|------|------|
+| **macOS** | Go 1.25+, Node.js 18+, Xcode Command Line Tools |
+| **Windows** | Go 1.25+, Node.js 18+, WebView2 |
+
+### 安装 Wails v3 CLI
+
+```bash
+# 安装与项目匹配的 CLI 版本 (v3.0.0-alpha.78)
+go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha.78
+```
+
+### 从源码构建
+
+```bash
 git clone https://github.com/RedTeaLab/monika.git
 cd monika
+
+# 1. 安装前端依赖
 cd frontend && npm install && cd ..
 
-# 开发模式 (热重载)
+# 2. 生成 Wails 绑定 (Go 类型 → TypeScript)
+wails3 generate bindings -ts
+node -e "require('fs').copyFileSync('build/barrel_index.ts','frontend/bindings/monika/index.ts')"
+
+# 3a. 开发模式 (热重载)
 wails3 dev
 
-# 构建独立可执行文件
+# 3b. 或构建独立可执行文件
 cd frontend && npm run build && cd ..
-go build .
+go build -o monika .
+# macOS: ./monika
+# Windows: .\monika.exe
 ```
 
 ### 配置模型提供商
@@ -164,7 +185,7 @@ monika/
 
 ## 开发
 
-```powershell
+```bash
 # 测试
 go test ./...
 
@@ -178,7 +199,8 @@ gofmt -w .
 cd frontend && npm run build
 
 # 重新生成 Wails 绑定 (修改 Go API 类型后)
-wails3 generate bindings -f "..." -ts
+wails3 generate bindings -ts
+node -e "require('fs').copyFileSync('build/barrel_index.ts','frontend/bindings/monika/index.ts')"
 
 # 依赖整理
 go mod tidy

@@ -2,7 +2,7 @@
 
 ## Build / Run
 
-```powershell
+```bash
 # Dev mode (hot reload): runs wails3 dev with Vite + Go rebuild
 wails3 dev
 
@@ -18,10 +18,15 @@ task build
 cd frontend && npm run dev
 
 # Regenerate Wails bindings (after changing Go API types)
-wails3 generate bindings -f "..." -ts
+# NOTE: do NOT pass -f "..." — it causes "go mod tidy" errors on some platforms
+wails3 generate bindings -ts
+node -e "require('fs').copyFileSync('build/barrel_index.ts','frontend/bindings/monika/index.ts')"
 ```
 
-- **Prerequisites**: Go 1.25+, Node.js 18+, `wails3` CLI (`go install github.com/wailsapp/wails/v3/cmd/wails3@latest`)
+- **Prerequisites**: Go 1.25+ (use `go@1.25` via Homebrew on macOS), Node.js 18+, `wails3` CLI
+- **Install wails3**: `go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha.78` (pin to project version)
+- **macOS**: requires Xcode Command Line Tools (`xcode-select --install`); if Go 1.26+ is installed alongside, use `export PATH="/usr/local/opt/go@1.25/bin:$PATH"` to ensure bindings generation works
+- **Windows**: requires WebView2 runtime
 - **Build orchestration**: `Taskfile.yml` at root, `build/Taskfile.yml` for common tasks, `build/windows/Taskfile.yml` for Windows-specific
 - **Frontend build** depends on bindings generation (`wails3 generate bindings`) — the Go types in `internal/api/` are the source of truth for the TS bindings at `frontend/bindings/monika/`
 - **Version injection**: `internal/version/version.go` vars are set via ldflags at build time

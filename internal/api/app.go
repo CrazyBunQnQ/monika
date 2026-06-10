@@ -1539,6 +1539,11 @@ func (a *App) ListDrives() []FileNode {
 	return listDrives()
 }
 
+// GetHomePath returns the user's home directory path.
+func (a *App) GetHomePath() string {
+	return a.home
+}
+
 // ListDirectory returns the non-recursive contents of a directory.
 func (a *App) ListDirectory(parentPath string) ([]FileNode, error) {
 	// Canonicalize and reject obviously invalid paths.

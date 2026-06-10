@@ -41,20 +41,41 @@ We believe the next generation of IDEs will be driven by AI at the core, not bol
 
 Download from [Releases](https://github.com/RedTeaLab/monika/releases), or build from source:
 
-```powershell
-# Prerequisites: Go 1.25+, Node.js 18+, Wails v3 CLI
-go install github.com/wailsapp/wails/v3/cmd/wails3@latest
+### Prerequisites
 
+| Platform | Requirements |
+|----------|-------------|
+| **macOS** | Go 1.25+, Node.js 18+, Xcode Command Line Tools |
+| **Windows** | Go 1.25+, Node.js 18+, WebView2 |
+
+### Install Wails v3 CLI
+
+```bash
+# Install the CLI version matching this project (v3.0.0-alpha.78)
+go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha.78
+```
+
+### Build from Source
+
+```bash
 git clone https://github.com/RedTeaLab/monika.git
 cd monika
+
+# 1. Install frontend dependencies
 cd frontend && npm install && cd ..
 
-# Dev mode (hot reload)
+# 2. Generate Wails bindings (Go types → TypeScript)
+wails3 generate bindings -ts
+node -e "require('fs').copyFileSync('build/barrel_index.ts','frontend/bindings/monika/index.ts')"
+
+# 3a. Dev mode (hot reload)
 wails3 dev
 
-# Build standalone
+# 3b. Or build standalone
 cd frontend && npm run build && cd ..
-go build .
+go build -o monika .
+# macOS: ./monika
+# Windows: .\monika.exe
 ```
 
 ### Configure Provider
@@ -164,7 +185,7 @@ Tools implement `Name()` / `Description()` / `Parameters()` / `Execute()` and ar
 
 ## Development
 
-```powershell
+```bash
 # Run tests
 go test ./...
 
@@ -178,7 +199,8 @@ gofmt -w .
 cd frontend && npm run build
 
 # Regenerate Wails bindings (after changing Go API types)
-wails3 generate bindings -f "..." -ts
+wails3 generate bindings -ts
+node -e "require('fs').copyFileSync('build/barrel_index.ts','frontend/bindings/monika/index.ts')"
 
 # Tidy dependencies
 go mod tidy
