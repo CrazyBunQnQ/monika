@@ -1,6 +1,14 @@
 "use strict";
 const readline = require("readline");
 
+function quoteId(name) {
+  return '"' + name.replace(/"/g, '""') + '"';
+}
+
+function quoteMySqlId(name) {
+  return '`' + name.replace(/`/g, '``') + '`';
+}
+
 const conns = new Map();
 const rl = readline.createInterface({ input: process.stdin });
 rl.on("line", (line) => {
@@ -148,7 +156,7 @@ async function doSchema(req) {
     const result = [];
     for (const t of tableRows) {
       const tname = Object.values(t)[0];
-      const [colRows] = await client.execute("DESCRIBE " + tname);
+      const [colRows] = await client.execute("DESCRIBE " + quoteMySqlId(tname));
       result.push({ name: tname, columns: colRows.map((c) => ({ name: c.Field, type: c.Type, nullable: c.Null === "YES", pk: c.Key === "PRI" })) });
     }
     return { tables: result };
@@ -158,7 +166,7 @@ async function doSchema(req) {
     const tables = client.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
     const result = [];
     for (const t of tables) {
-      const cols = client.pragma("table_info(" + t.name + ")");
+      const cols = client.pragma("table_info(" + quoteId(t.name) + ")");
       result.push({ name: t.name, columns: cols.map((c) => ({ name: c.name, type: c.type, nullable: c.notnull === 0, pk: c.pk > 0 })) });
     }
     return { tables: result };

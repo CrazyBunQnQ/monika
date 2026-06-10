@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"monika/internal/tool"
 )
@@ -39,6 +40,9 @@ func (d *dbQuery) Parameters() map[string]any {
 }
 
 func (d *dbQuery) Execute(ctx context.Context, args json.RawMessage) (tool.ExecutionResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	var params struct {
 		Connection string `json:"connection"`
 		Query      string `json:"query"`

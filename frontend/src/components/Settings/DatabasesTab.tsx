@@ -202,13 +202,14 @@ export default function DatabasesTab() {
               }}
             />
             <button
-              onClick={handleRescan}
-              disabled={!addName || !addDSN}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium rounded border border-[var(--border-strong)] bg-[var(--bg-elevated)] text-[var(--text-primary)] cursor-pointer hover:bg-[var(--bg-hover)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled
+              title="Manual connections coming soon"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium rounded border border-[var(--border-strong)] bg-[var(--bg-elevated)] text-[var(--text-dim)] cursor-not-allowed opacity-50"
             >
               <IconPlus size={12} />
               Add
             </button>
+            <span className="text-[10px] text-[var(--text-dim)] self-center italic">Coming soon</span>
           </div>
           {addError && (
             <p className="text-[11px] text-[var(--red)] m-0">{addError}</p>
