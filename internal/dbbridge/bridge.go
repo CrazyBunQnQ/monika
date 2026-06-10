@@ -314,13 +314,14 @@ func (b *BridgeManager) handleCrash(ctx context.Context) {
 	b.retries++
 	log.Printf("[dbbridge] restarting bridge (attempt %d/%d)", b.retries, b.maxRetries)
 
-	if err := b.startLocked(ctx); err != nil {
+	restartCtx := context.Background()
+	if err := b.startLocked(restartCtx); err != nil {
 		b.mu.Unlock()
 		log.Printf("[dbbridge] restart failed: %v", err)
 		return
 	}
 	if b.OnRestart != nil {
-		b.OnRestart()
+		go b.OnRestart()
 	}
 	b.mu.Unlock()
 }

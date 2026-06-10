@@ -44,6 +44,13 @@ func ValidateReadOnlySQL(query string) error {
 	normalized := strings.ToUpper(string(q[0])) + q[1:]
 	normalizedUpper := strings.ToUpper(normalized)
 
+	if strings.HasPrefix(normalizedUpper, "PRAGMA ") {
+		if strings.Contains(normalizedUpper, "=") {
+			return fmt.Errorf("query rejected: PRAGMA write operations are not allowed")
+		}
+		return nil
+	}
+
 	if strings.HasPrefix(normalizedUpper, "WITH RECURSIVE ") || strings.HasPrefix(normalizedUpper, "WITH ") {
 		mainStmt := extractCteMainStatement(normalizedUpper)
 		if mainStmt == "" {

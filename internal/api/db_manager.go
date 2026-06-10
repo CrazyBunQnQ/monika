@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"monika/internal/dbbridge"
 	"monika/internal/dbdiscovery"
@@ -166,7 +167,9 @@ func (m *DBManager) SchemaSummary() string {
 
 	for _, name := range names {
 		mc := conns[name]
-		sr, err := m.Schema(context.Background(), name, "")
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		sr, err := m.Schema(ctx, name, "")
+		cancel()
 		if err != nil {
 			fmt.Fprintf(&summary, "## %s (%s)\n  Error: %v\n\n", name, mc.info.Driver, err)
 			continue
@@ -356,7 +359,7 @@ func (m *DBManager) getConnection(ctx context.Context, connName string) (*manage
 
 	resp, err := m.bridge.Send(dbbridge.Request{
 		ID:     m.bridge.NextID(),
-		Action: "connect",
+		Action: "open",
 		Driver: mc.info.Driver,
 		DSN:    m.resolveDSN(mc.info.DSN),
 		Conn:   connName,

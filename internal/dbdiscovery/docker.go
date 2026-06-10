@@ -179,7 +179,7 @@ func buildDockerDSN(driver string, env map[string]string, port string) string {
 		}
 		return dsn
 	case "redis":
-		return fmt.Sprintf("%s:%s", host, port)
+		return fmt.Sprintf("redis://%s:%s", host, port)
 	case "mongo":
 		user := env["MONGO_INITDB_ROOT_USERNAME"]
 		pass := env["MONGO_INITDB_ROOT_PASSWORD"]

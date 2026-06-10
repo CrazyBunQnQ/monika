@@ -75,12 +75,8 @@ func (c *Conn) Query(ctx context.Context, query string) (*dbdriver.QueryResult, 
 }
 
 func (c *Conn) Schema(ctx context.Context, filter string) (*dbdriver.SchemaResult, error) {
-	info, err := c.client.Info(ctx, "keyspace").Result()
-	if err != nil {
-		return nil, fmt.Errorf("redis: info keyspace: %w", err)
-	}
-
 	var tables []dbdriver.TableInfo
+	var err error
 	var cursor uint64
 	for {
 		var keys []string
@@ -111,7 +107,6 @@ func (c *Conn) Schema(ctx context.Context, filter string) (*dbdriver.SchemaResul
 		}
 	}
 
-	_ = info
 	return &dbdriver.SchemaResult{Tables: tables}, nil
 }
 
