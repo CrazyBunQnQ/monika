@@ -44,6 +44,33 @@ type findQuery struct {
 	Limit      int64          `json:"limit"`
 }
 
+var forbiddenMongoOps = map[string]bool{
+	"$where":      true,
+	"$function":   true,
+	"$accumulator": true,
+}
+
+func validateFilter(v any) error {
+	switch m := v.(type) {
+	case map[string]any:
+		for key, val := range m {
+			if forbiddenMongoOps[key] {
+				return fmt.Errorf("query rejected: %s operator is not allowed", key)
+			}
+			if err := validateFilter(val); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for _, item := range m {
+			if err := validateFilter(item); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (c *Conn) Query(ctx context.Context, query string) (*dbdriver.QueryResult, error) {
 	var fq findQuery
 	if err := json.Unmarshal([]byte(query), &fq); err != nil {
@@ -51,6 +78,9 @@ func (c *Conn) Query(ctx context.Context, query string) (*dbdriver.QueryResult, 
 	}
 	if fq.Collection == "" {
 		return nil, fmt.Errorf("mongo: collection is required")
+	}
+	if err := validateFilter(fq.Filter); err != nil {
+		return nil, fmt.Errorf("mongo: %w", err)
 	}
 
 	dbName := c.getDBName()
