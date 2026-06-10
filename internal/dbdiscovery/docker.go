@@ -150,7 +150,7 @@ func buildDockerDSN(driver string, env map[string]string, port string) string {
 			dsn += fmt.Sprintf(" user=%s", user)
 		}
 		if pass != "" {
-			dsn += fmt.Sprintf(" password=%s", pass)
+			dsn += fmt.Sprintf(" password=%s", quoteDSNValue(pass))
 		}
 		dsn += fmt.Sprintf(" dbname=%s sslmode=prefer", db)
 		return dsn

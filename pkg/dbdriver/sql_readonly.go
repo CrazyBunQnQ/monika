@@ -44,7 +44,7 @@ func ValidateReadOnlySQL(query string) error {
 	normalized := strings.ToUpper(string(q[0])) + q[1:]
 	normalizedUpper := strings.ToUpper(normalized)
 
-	if strings.HasPrefix(normalizedUpper, "WITH ") {
+	if strings.HasPrefix(normalizedUpper, "WITH RECURSIVE ") || strings.HasPrefix(normalizedUpper, "WITH ") {
 		mainStmt := extractCteMainStatement(normalizedUpper)
 		if mainStmt == "" {
 			return fmt.Errorf("query rejected: unable to parse CTE structure")
@@ -117,7 +117,7 @@ func extractCteMainStatement(upper string) string {
 	rest := upper
 	for {
 		rest = strings.TrimSpace(rest)
-		if !strings.HasPrefix(rest, "WITH ") {
+		if !strings.HasPrefix(rest, "WITH RECURSIVE ") && !strings.HasPrefix(rest, "WITH ") {
 			break
 		}
 		asIdx := strings.Index(rest, " AS (")

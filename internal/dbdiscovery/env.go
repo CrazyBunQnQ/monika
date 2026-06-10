@@ -142,6 +142,13 @@ func parseDatabaseURL(raw, source, name string) *DiscoveredDB {
 	}
 }
 
+func quoteDSNValue(val string) string {
+	if strings.ContainsAny(val, " '=\"\\") {
+		return "'" + strings.ReplaceAll(val, "'", "\\'") + "'"
+	}
+	return val
+}
+
 func buildDSN(driver, host, port, user, pass, dbname string) string {
 	switch driver {
 	case "postgres":
@@ -153,10 +160,10 @@ func buildDSN(driver, host, port, user, pass, dbname string) string {
 			dsn += " user=" + user
 		}
 		if pass != "" {
-			dsn += " password=" + pass
+			dsn += " password=" + quoteDSNValue(pass)
 		}
 		if dbname != "" {
-			dsn += " dbname=" + dbname
+			dsn += " dbname=" + quoteDSNValue(dbname)
 		}
 		dsn += " sslmode=prefer"
 		return dsn

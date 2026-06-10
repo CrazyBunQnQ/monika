@@ -37,6 +37,7 @@ type BridgeManager struct {
 	reqID      atomic.Int64
 	maxRetries int
 	retries    int
+	OnRestart  func()
 }
 
 func NewBridgeManager() *BridgeManager {
@@ -317,6 +318,9 @@ func (b *BridgeManager) handleCrash(ctx context.Context) {
 		b.mu.Unlock()
 		log.Printf("[dbbridge] restart failed: %v", err)
 		return
+	}
+	if b.OnRestart != nil {
+		b.OnRestart()
 	}
 	b.mu.Unlock()
 }

@@ -101,6 +101,7 @@ func (m *DBManager) Init(cache *dbdiscovery.CacheFile) {
 
 	if needsBridge {
 		m.bridge = dbbridge.NewBridgeManager()
+		m.bridge.OnRestart = m.resetConnectionStates
 		ctx := context.Background()
 		if err := m.bridge.Start(ctx, m.projectDir, m.runtime); err != nil {
 			for _, mc := range m.conns {
@@ -269,6 +270,20 @@ func (m *DBManager) ListConnectionNames() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+func (m *DBManager) resetConnectionStates() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, mc := range m.conns {
+		mc.ready = false
+		mc.dbConn = nil
+		mc.lastErr = nil
+	}
+
+	m.schemaMu.Lock()
+	m.schemaCache = ""
+	m.schemaMu.Unlock()
 }
 
 func (m *DBManager) CloseAll() {

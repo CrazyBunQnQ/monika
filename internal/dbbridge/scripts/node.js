@@ -90,9 +90,11 @@ const SQL_FORBIDDEN = /INTO\s+OUTFILE|INTO\s+DUMPFILE|FOR\s+UPDATE|FOR\s+SHARE|I
 
 function isReadOnlyCTE(query) {
   const upper = query.toUpperCase();
+  let start = 5;
+  if (upper.startsWith("WITH RECURSIVE ")) start = 16;
   let depth = 0;
   let inStr = false;
-  for (let i = 5; i < upper.length; i++) {
+  for (let i = start; i < upper.length; i++) {
     const ch = upper[i];
     if (inStr) { if (ch === "'") inStr = false; continue; }
     if (ch === "'") { inStr = true; continue; }

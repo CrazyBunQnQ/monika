@@ -26,9 +26,12 @@ def respond(resp):
 
 def is_readonly_cte(q):
     upper = q.upper()
+    start = 5
+    if upper.startswith("WITH RECURSIVE "):
+        start = 16
     depth = 0
     in_str = False
-    i = 5
+    i = start
     while i < len(upper):
         ch = upper[i]
         if in_str:
@@ -78,15 +81,41 @@ def do_open(req):
     elif driver == "mysql":
         import pymysql
 
-        result = urlparse(dsn)
-        client = pymysql.connect(
-            host=result.hostname or "localhost",
-            port=result.port or 3306,
-            user=result.username,
-            password=result.password,
-            database=result.path.lstrip("/") if result.path else "",
-            autocommit=True,
-        )
+        if "@tcp(" in dsn:
+            at_idx = dsn.index("@tcp(")
+            user_pass = dsn[:at_idx]
+            rest = dsn[at_idx + 5:]
+            if ":" in user_pass:
+                user, password = user_pass.split(":", 1)
+            else:
+                user, password = user_pass, ""
+            paren_close = rest.index(")")
+            host_port = rest[:paren_close]
+            after = rest[paren_close + 1 :]
+            if ":" in host_port:
+                host, port = host_port.split(":", 1)
+                port = int(port)
+            else:
+                host, port = host_port, 3306
+            dbname = after.lstrip("/") if after.startswith("/") else ""
+            client = pymysql.connect(
+                host=host,
+                port=port,
+                user=user,
+                password=password,
+                database=dbname,
+                autocommit=True,
+            )
+        else:
+            result = urlparse(dsn)
+            client = pymysql.connect(
+                host=result.hostname or "localhost",
+                port=result.port or 3306,
+                user=result.username or "",
+                password=result.password or "",
+                database=result.path.lstrip("/") if result.path else "",
+                autocommit=True,
+            )
     elif driver == "sqlite":
         import sqlite3
 
