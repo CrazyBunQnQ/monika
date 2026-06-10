@@ -1,8 +1,15 @@
 import sys
 import json
 import re
+from urllib.parse import urlparse
 
 conns = {}
+
+def _quote_id(name):
+    return '"' + name.replace('"', '""') + '"'
+
+def _quote_mysql_id(name):
+    return '`' + name.replace('`', '``') + '`'
 
 SQL_READONLY = re.compile(r"^(SELECT|SHOW|DESCRIBE|EXPLAIN)\s", re.IGNORECASE)
 REDIS_READONLY = re.compile(
@@ -55,7 +62,15 @@ def do_open(req):
     elif driver == "mysql":
         import pymysql
 
-        client = pymysql.connect(dsn, autocommit=True)
+        result = urlparse(dsn)
+        client = pymysql.connect(
+            host=result.hostname or "localhost",
+            port=result.port or 3306,
+            user=result.username,
+            password=result.password,
+            database=result.path.lstrip("/") if result.path else "",
+            autocommit=True,
+        )
     elif driver == "sqlite":
         import sqlite3
 
@@ -169,7 +184,7 @@ def do_schema(req):
         cur.execute("SHOW TABLES")
         tables = []
         for (tname,) in cur.fetchall():
-            cur.execute("DESCRIBE " + tname)
+            cur.execute("DESCRIBE " + _quote_mysql_id(tname))
             cols = cur.fetchall()
             tables.append(
                 {
@@ -194,7 +209,7 @@ def do_schema(req):
         )
         tables = []
         for (tname,) in cur.fetchall():
-            cols = client.execute("PRAGMA table_info(" + tname + ")").fetchall()
+            cols = client.execute("PRAGMA table_info(" + _quote_id(tname) + ")").fetchall()
             tables.append(
                 {
                     "name": tname,

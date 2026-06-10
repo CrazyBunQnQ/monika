@@ -2115,9 +2115,7 @@ func (a *App) RescanDatabases() ([]ConnectionInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	a.dbMgr.CloseAll()
-	a.dbMgr = NewDBManager(cwd)
-	a.dbMgr.Init(cache)
+	a.dbMgr.Reset(cache)
 	return a.dbMgr.ListConnections(), nil
 }
 

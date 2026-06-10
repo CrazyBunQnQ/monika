@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -19,7 +20,6 @@ type DBManager struct {
 	bridge     *dbbridge.BridgeManager
 	runtime    string
 
-	schemaOnce  sync.Once
 	schemaCache string
 	schemaMu    sync.RWMutex
 }
@@ -145,52 +145,57 @@ func (m *DBManager) SchemaSummary() string {
 	m.schemaMu.RUnlock()
 
 	var summary strings.Builder
-	m.schemaOnce.Do(func() {
-		m.mu.RLock()
-		names := make([]string, 0, len(m.conns))
-		for name := range m.conns {
-			names = append(names, name)
-		}
-		conns := make(map[string]*managedConn, len(m.conns))
-		for k, v := range m.conns {
-			conns[k] = v
-		}
-		m.mu.RUnlock()
-
-		for _, name := range names {
-			mc := conns[name]
-			sr, err := m.Schema(context.Background(), name, "")
-			if err != nil {
-				fmt.Fprintf(&summary, "## %s (%s)\n  Error: %v\n\n", name, mc.info.Driver, err)
-				continue
-			}
-
-			fmt.Fprintf(&summary, "## %s (%s)\n", name, mc.info.Driver)
-			for _, t := range sr.Tables {
-				fmt.Fprintf(&summary, "### %s\n", t.Name)
-				for _, c := range t.Columns {
-					pk := ""
-					if c.PK {
-						pk = " [PK]"
-					}
-					null := ""
-					if c.Nullable {
-						null = "?"
-					}
-					fmt.Fprintf(&summary, "  - %s %s%s%s\n", c.Name, c.Type, null, pk)
-				}
-			}
-			summary.WriteString("\n")
-		}
-
-		m.schemaMu.Lock()
-		m.schemaCache = summary.String()
+	m.schemaMu.Lock()
+	if m.schemaCache != "" {
 		m.schemaMu.Unlock()
-	})
+		return m.schemaCache
+	}
+	m.schemaMu.Unlock()
 
-	m.schemaMu.RLock()
-	defer m.schemaMu.RUnlock()
-	return m.schemaCache
+	m.mu.RLock()
+	names := make([]string, 0, len(m.conns))
+	for name := range m.conns {
+		names = append(names, name)
+	}
+	conns := make(map[string]*managedConn, len(m.conns))
+	for k, v := range m.conns {
+		conns[k] = v
+	}
+	m.mu.RUnlock()
+
+	for _, name := range names {
+		mc := conns[name]
+		sr, err := m.Schema(context.Background(), name, "")
+		if err != nil {
+			fmt.Fprintf(&summary, "## %s (%s)\n  Error: %v\n\n", name, mc.info.Driver, err)
+			continue
+		}
+
+		fmt.Fprintf(&summary, "## %s (%s)\n", name, mc.info.Driver)
+		for _, t := range sr.Tables {
+			fmt.Fprintf(&summary, "### %s\n", t.Name)
+			for _, c := range t.Columns {
+				pk := ""
+				if c.PK {
+					pk = " [PK]"
+				}
+				null := ""
+				if c.Nullable {
+					null = "?"
+				}
+				fmt.Fprintf(&summary, "  - %s %s%s%s\n", c.Name, c.Type, null, pk)
+			}
+		}
+		summary.WriteString("\n")
+	}
+
+	result := summary.String()
+
+	m.schemaMu.Lock()
+	m.schemaCache = result
+	m.schemaMu.Unlock()
+
+	return result
 }
 
 func (m *DBManager) ListConnections() []ConnectionInfo {
@@ -229,7 +234,17 @@ func (m *DBManager) TestConnection(ctx context.Context, connName string) error {
 	if err != nil {
 		return err
 	}
-	return mc.lastErr
+	if mc.useBridge {
+		if m.bridge == nil || !m.bridge.IsRunning() {
+			return fmt.Errorf("dbmanager: bridge not running for connection %q", connName)
+		}
+		return nil
+	}
+	if mc.dbConn == nil {
+		return fmt.Errorf("dbmanager: connection %q has no underlying connection", connName)
+	}
+	_, err = mc.dbConn.Query(ctx, "SELECT 1")
+	return err
 }
 
 func (m *DBManager) DefaultConnection() string {
@@ -238,10 +253,12 @@ func (m *DBManager) DefaultConnection() string {
 	if len(m.conns) == 0 {
 		return ""
 	}
+	names := make([]string, 0, len(m.conns))
 	for name := range m.conns {
-		return name
+		names = append(names, name)
 	}
-	return ""
+	sort.Strings(names)
+	return names[0]
 }
 
 func (m *DBManager) ListConnectionNames() []string {
@@ -270,6 +287,10 @@ func (m *DBManager) CloseAll() {
 		m.bridge.Stop()
 		m.bridge = nil
 	}
+
+	m.schemaMu.Lock()
+	m.schemaCache = ""
+	m.schemaMu.Unlock()
 }
 
 func (m *DBManager) getConnection(ctx context.Context, connName string) (*managedConn, error) {
@@ -280,6 +301,13 @@ func (m *DBManager) getConnection(ctx context.Context, connName string) (*manage
 	if !ok {
 		return nil, fmt.Errorf("dbmanager: unknown connection %q", connName)
 	}
+
+	if mc.ready {
+		return mc, nil
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	if mc.ready {
 		return mc, nil
@@ -302,10 +330,8 @@ func (m *DBManager) getConnection(ctx context.Context, connName string) (*manage
 			return nil, fmt.Errorf("dbmanager: connect %q: %w", connName, err)
 		}
 
-		m.mu.Lock()
 		mc.dbConn = conn
 		mc.ready = true
-		m.mu.Unlock()
 		return mc, nil
 	}
 
@@ -329,9 +355,7 @@ func (m *DBManager) getConnection(ctx context.Context, connName string) (*manage
 		return nil, mc.lastErr
 	}
 
-	m.mu.Lock()
 	mc.ready = true
-	m.mu.Unlock()
 	return mc, nil
 }
 
@@ -406,4 +430,14 @@ func (m *DBManager) resolveDSN(dsn string) string {
 		return filepath.Join(m.projectDir, dsn)
 	}
 	return dsn
+}
+
+func (m *DBManager) Reset(cache *dbdiscovery.CacheFile) {
+	m.CloseAll()
+
+	m.mu.Lock()
+	m.conns = make(map[string]*managedConn)
+	m.mu.Unlock()
+
+	m.Init(cache)
 }

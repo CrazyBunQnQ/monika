@@ -6,6 +6,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"os"
@@ -24,6 +25,8 @@ type BridgeManager struct {
 	cmd        *exec.Cmd
 	stdin      *json.Encoder
 	stdout     *bufio.Scanner
+	stdinPipe  io.WriteCloser
+	stdoutPipe io.ReadCloser
 	cancelKeep context.CancelFunc
 	projectDir string
 	runtime    string
@@ -94,6 +97,8 @@ func (b *BridgeManager) startLocked(ctx context.Context) error {
 
 	b.stdin = json.NewEncoder(stdinPipe)
 	b.stdout = bufio.NewScanner(stdoutPipe)
+	b.stdinPipe = stdinPipe
+	b.stdoutPipe = stdoutPipe
 	b.stdout.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 	b.running.Store(true)
 
@@ -141,6 +146,15 @@ func (b *BridgeManager) stopLocked() {
 	if b.cancelKeep != nil {
 		b.cancelKeep()
 		b.cancelKeep = nil
+	}
+
+	if b.stdinPipe != nil {
+		b.stdinPipe.Close()
+		b.stdinPipe = nil
+	}
+	if b.stdoutPipe != nil {
+		b.stdoutPipe.Close()
+		b.stdoutPipe = nil
 	}
 
 	if b.cmd != nil && b.cmd.Process != nil {
