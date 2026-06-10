@@ -25,6 +25,8 @@ var readOps = map[string]bool{
 	"file_list": true,
 	"skill":     true,
 	"ask_user":  true,
+	"db_schema": true,
+	"db_query":  true,
 }
 
 var writeOps = map[string]bool{
