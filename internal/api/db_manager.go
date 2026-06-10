@@ -232,6 +232,28 @@ func (m *DBManager) TestConnection(ctx context.Context, connName string) error {
 	return mc.lastErr
 }
 
+func (m *DBManager) DefaultConnection() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if len(m.conns) == 0 {
+		return ""
+	}
+	for name := range m.conns {
+		return name
+	}
+	return ""
+}
+
+func (m *DBManager) ListConnectionNames() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	names := make([]string, 0, len(m.conns))
+	for name := range m.conns {
+		names = append(names, name)
+	}
+	return names
+}
+
 func (m *DBManager) CloseAll() {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -226,3 +226,12 @@ func RegisterMCPSearchTool(r *tool.ToolRegistry, mcpRegistry *engine.MCPRegistry
 func RegisterLSPListTool(r *tool.ToolRegistry) {
 	r.Register(NewLSPListTool(r))
 }
+
+// RegisterDatabase registers db_schema and db_query tools for database interaction.
+func RegisterDatabase(r *tool.ToolRegistry, dbMgr DBQuerier) {
+	if dbMgr == nil {
+		return
+	}
+	r.Register(NewDBSchema(dbMgr))
+	r.Register(NewDBQuery(dbMgr))
+}
