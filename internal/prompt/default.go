@@ -87,6 +87,13 @@ const defaultToolUsage = `## Tool Usage
 - Each unnecessary file_read wastes context window space
 - Prefer editing existing files over creating new ones
 
+### Database Tools
+
+When the project has connected databases (shown in "Connected Databases" section):
+- Use **db_schema** to inspect table structures, columns, and foreign keys before writing SQL/ORM code
+- Use **db_query** to run read-only queries (SELECT/SHOW/DESCRIBE/EXPLAIN only) for data samples
+- Always reference actual schema when writing database-related code
+
 ### Git Hygiene
 - NEVER revert changes you did not make — other changes in the working tree are user work in progress. Ignore unrelated changes, don't revert them.
 - Do not amend commits unless explicitly requested.`

@@ -17,6 +17,7 @@ import (
 	"monika/internal/api"
 	"monika/internal/bootstrap"
 	config2 "monika/internal/config"
+	"monika/internal/dbdiscovery"
 	"monika/internal/permission"
 	"monika/internal/prompt"
 	"monika/internal/tool"
@@ -28,6 +29,12 @@ import (
 	_ "monika/internal/engines/mcp"
 	_ "monika/internal/engines/provider/openai"
 	_ "monika/internal/engines/skill"
+
+	_ "monika/pkg/dbdriver/mongo"
+	_ "monika/pkg/dbdriver/mysql"
+	_ "monika/pkg/dbdriver/postgres"
+	_ "monika/pkg/dbdriver/redis"
+	_ "monika/pkg/dbdriver/sqlite"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
@@ -85,6 +92,17 @@ func main() {
 
 	taskStore := builtin.NewTaskStore(nil)
 	builtin.RegisterTasks(registry, taskStore)
+
+	var dbMgr *api.DBManager
+	cache, err := dbdiscovery.LoadCache(cwd)
+	if err != nil {
+		cache, _ = dbdiscovery.Scan(cwd)
+	}
+	if cache != nil && len(cache.Connections) > 0 {
+		dbMgr = api.NewDBManager(cwd)
+		dbMgr.Init(cache)
+		builtin.RegisterDatabase(registry, dbMgr)
+	}
 
 	// Create MCP registry and connect servers asynchronously
 	mcpRegistry := engine2.NewMCPRegistry()
@@ -198,6 +216,13 @@ changes as you install or configure them. Always search before assuming:
 Once you identify the right skill or tool, load it with **skill** or call the MCP tool directly.`
 
 	systemParts = append(systemParts, strings.TrimSpace(dynamicCapabilities))
+
+	if dbMgr != nil {
+		if summary := dbMgr.SchemaSummary(); summary != "" {
+			systemParts = append(systemParts, summary)
+		}
+	}
+
 	systemPrompt := strings.Join(systemParts, "\n\n")
 	loopOpts := []agent.LoopOption{
 		agent.WithProjectDir(cwd),
@@ -300,6 +325,9 @@ Once you identify the right skill or tool, load it with **skill** or call the MC
 	appService = api.NewApp(home, cwd, pr.Config, pr.Providers, pr.Model, registry, loopOpts, taskStoreAccessor, agentRegistry, taskRunner, mcpRegistry)
 	appService.InitTSBridge(tsBridge)
 	appGetProjectPath = appService.GetProjectPath
+	if dbMgr != nil {
+		appService.SetDBManager(dbMgr)
+	}
 
 	// Wire background task manager to bash tool
 	if bashTool, ok := registry.Get("bash"); ok {
