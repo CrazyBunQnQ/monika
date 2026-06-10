@@ -37,6 +37,9 @@ type Conn struct {
 }
 
 func (c *Conn) Query(ctx context.Context, query string) (*dbdriver.QueryResult, error) {
+	if err := dbdriver.ValidateReadOnlySQL(query); err != nil {
+		return nil, fmt.Errorf("sqlite: %w", err)
+	}
 	rows, err := c.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: query: %w", err)

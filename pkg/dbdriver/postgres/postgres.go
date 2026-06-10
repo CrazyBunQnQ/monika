@@ -43,6 +43,9 @@ type Conn struct {
 }
 
 func (c *Conn) Query(ctx context.Context, query string) (*dbdriver.QueryResult, error) {
+	if err := dbdriver.ValidateReadOnlySQL(query); err != nil {
+		return nil, fmt.Errorf("postgres: %w", err)
+	}
 	rows, err := c.pool.Query(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: query: %w", err)
