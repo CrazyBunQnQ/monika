@@ -21,6 +21,7 @@ import (
 
 	agent2 "monika/internal/agent"
 	config2 "monika/internal/config"
+	"monika/internal/dbdiscovery"
 	"monika/internal/lsp"
 	"monika/internal/permission"
 	tool2 "monika/internal/tool"
@@ -2085,6 +2086,39 @@ func (a *App) DeletePermissionRule(args json.RawMessage) error {
 		return err
 	}
 	return permission.DeleteRule(a.home, a.projectPath(), req.Tool, req.Pattern, req.Source)
+}
+
+func (a *App) ListDatabaseConnections() []ConnectionInfo {
+	if a.dbMgr == nil {
+		return nil
+	}
+	return a.dbMgr.ListConnections()
+}
+
+func (a *App) TestDatabaseConnection(args json.RawMessage) error {
+	if a.dbMgr == nil {
+		return fmt.Errorf("no database connections configured")
+	}
+	var req struct{ Name string }
+	if err := json.Unmarshal(args, &req); err != nil {
+		return err
+	}
+	return a.dbMgr.TestConnection(context.Background(), req.Name)
+}
+
+func (a *App) RescanDatabases() ([]ConnectionInfo, error) {
+	if a.dbMgr == nil {
+		return nil, nil
+	}
+	cwd := a.projectPath()
+	cache, err := dbdiscovery.Scan(cwd)
+	if err != nil {
+		return nil, err
+	}
+	a.dbMgr.CloseAll()
+	a.dbMgr = NewDBManager(cwd)
+	a.dbMgr.Init(cache)
+	return a.dbMgr.ListConnections(), nil
 }
 
 func (a *App) projectPath() string {
