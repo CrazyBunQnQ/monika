@@ -86,16 +86,27 @@ function getConn(req) {
 }
 
 const SQL_READONLY = /^(SELECT|SHOW|DESCRIBE|EXPLAIN)\s/i;
-function isWithSelect(q) {
-  const upper = q.toUpperCase();
-  if (!upper.startsWith("WITH")) return false;
-  const forbidden = /\b(INSERT|UPDATE|DELETE)\b/i;
-  const selectRe = /\bSELECT\b/i;
-  const selIdx = upper.search(selectRe);
-  const forbidIdx = upper.search(forbidden);
-  if (selIdx === -1) return false;
-  if (forbidIdx === -1) return true;
-  return selIdx < forbidIdx;
+const SQL_FORBIDDEN = /INTO\s+OUTFILE|INTO\s+DUMPFILE|FOR\s+UPDATE|FOR\s+SHARE|INTO\s+@/i;
+
+function isReadOnlyCTE(query) {
+  const upper = query.toUpperCase();
+  let depth = 0;
+  let inStr = false;
+  for (let i = 5; i < upper.length; i++) {
+    const ch = upper[i];
+    if (inStr) { if (ch === "'") inStr = false; continue; }
+    if (ch === "'") { inStr = true; continue; }
+    if (ch === '(') depth++;
+    else if (ch === ')') {
+      depth--;
+      if (depth === 0) {
+        const rest = upper.substring(i + 1).trim();
+        if (/^(SELECT|SHOW|DESCRIBE|EXPLAIN)\s/.test(rest)) return true;
+        if (/^(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE)/.test(rest)) return false;
+      }
+    }
+  }
+  return false;
 }
 
 const REDIS_READONLY = /^(GET|MGET|KEYS|TYPE|SCAN|HGET|HGETALL|LRANGE|SMEMBERS|ZCARD|ZSCORE|ZRANGE|SCARD|SISMEMBER|EXISTS|TTL|STRLEN)\b/i;
@@ -105,7 +116,9 @@ async function doQuery(req) {
   const q = req.query;
 
   if (driver === "postgres" || driver === "mysql" || driver === "sqlite") {
-    if (!SQL_READONLY.test(q) && !isWithSelect(q)) throw new Error("only read-only queries allowed");
+    if (q.includes(";")) throw new Error("multi-statement queries are not allowed");
+    if (SQL_FORBIDDEN.test(q)) throw new Error("write operation detected in query");
+    if (!SQL_READONLY.test(q) && !isReadOnlyCTE(q)) throw new Error("only read-only queries allowed");
     if (driver === "sqlite") {
       const stmt = client.prepare(q);
       const rows = stmt.all();

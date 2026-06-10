@@ -12,6 +12,7 @@ def _quote_mysql_id(name):
     return '`' + name.replace('`', '``') + '`'
 
 SQL_READONLY = re.compile(r"^(SELECT|SHOW|DESCRIBE|EXPLAIN)\s", re.IGNORECASE)
+SQL_FORBIDDEN = re.compile(r"INTO\s+OUTFILE|INTO\s+DUMPFILE|FOR\s+UPDATE|FOR\s+SHARE|INTO\s+@", re.IGNORECASE)
 REDIS_READONLY = re.compile(
     r"^(GET|MGET|KEYS|TYPE|SCAN|HGET|HGETALL|LRANGE|SMEMBERS|ZCARD|ZSCORE|ZRANGE|SCARD|SISMEMBER|EXISTS|TTL|STRLEN)\b",
     re.IGNORECASE,
@@ -23,19 +24,34 @@ def respond(resp):
     sys.stdout.flush()
 
 
-def is_with_select(q):
+def is_readonly_cte(q):
     upper = q.upper()
-    if not upper.startswith("WITH"):
-        return False
-    forbidden = re.compile(r"\b(INSERT|UPDATE|DELETE)\b", re.IGNORECASE)
-    select_re = re.compile(r"\bSELECT\b", re.IGNORECASE)
-    sel_match = select_re.search(upper)
-    forbid_match = forbidden.search(upper)
-    if sel_match is None:
-        return False
-    if forbid_match is None:
-        return True
-    return sel_match.start() < forbid_match.start()
+    depth = 0
+    in_str = False
+    i = 5
+    while i < len(upper):
+        ch = upper[i]
+        if in_str:
+            if ch == "'":
+                in_str = False
+            i += 1
+            continue
+        if ch == "'":
+            in_str = True
+            i += 1
+            continue
+        if ch == '(':
+            depth += 1
+        elif ch == ')':
+            depth -= 1
+            if depth == 0:
+                rest = upper[i + 1:].strip()
+                if re.match(r"^(SELECT|SHOW|DESCRIBE|EXPLAIN)\s", rest):
+                    return True
+                if re.match(r"^(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE)", rest):
+                    return False
+        i += 1
+    return False
 
 
 def get_conn(req):
@@ -98,7 +114,11 @@ def do_query(req):
     q = req.get("query", "")
 
     if driver in ("postgres", "mysql", "sqlite"):
-        if not SQL_READONLY.match(q) and not is_with_select(q):
+        if ";" in q:
+            raise Exception("multi-statement queries are not allowed")
+        if SQL_FORBIDDEN.search(q):
+            raise Exception("write operation detected in query")
+        if not SQL_READONLY.match(q) and not is_readonly_cte(q):
             raise Exception("only read-only queries allowed")
 
         if driver == "sqlite":
