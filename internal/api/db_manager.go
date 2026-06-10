@@ -426,10 +426,13 @@ func (m *DBManager) resolveDSN(dsn string) string {
 	if dsn == "" {
 		return dsn
 	}
-	if strings.HasPrefix(dsn, "./") || (!strings.Contains(dsn, "://") && !strings.Contains(dsn, "@") && !strings.HasPrefix(dsn, "/")) {
-		return filepath.Join(m.projectDir, dsn)
+	if strings.Contains(dsn, "://") || strings.Contains(dsn, "@") || strings.HasPrefix(dsn, "/") {
+		return dsn
 	}
-	return dsn
+	if strings.Contains(dsn, "=") {
+		return dsn
+	}
+	return filepath.Join(m.projectDir, dsn)
 }
 
 func (m *DBManager) Reset(cache *dbdiscovery.CacheFile) {

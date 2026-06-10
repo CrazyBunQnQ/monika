@@ -2,6 +2,7 @@ package dbbridge
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"embed"
 	"encoding/json"
@@ -27,6 +28,7 @@ type BridgeManager struct {
 	stdout     *bufio.Scanner
 	stdinPipe  io.WriteCloser
 	stdoutPipe io.ReadCloser
+	stderrBuf  bytes.Buffer
 	cancelKeep context.CancelFunc
 	projectDir string
 	runtime    string
@@ -86,12 +88,16 @@ func (b *BridgeManager) startLocked(ctx context.Context) error {
 		return fmt.Errorf("dbbridge: stdout pipe: %w", err)
 	}
 
-	b.cmd.Stderr = os.Stderr
+	b.stderrBuf.Reset()
+	b.cmd.Stderr = &b.stderrBuf
 
 	if err := b.cmd.Start(); err != nil {
 		stdinPipe.Close()
 		stdoutPipe.Close()
 		os.Remove(script)
+		if stderr := b.stderrBuf.String(); stderr != "" {
+			return fmt.Errorf("dbbridge: start process: %w (stderr: %s)", err, stderr)
+		}
 		return fmt.Errorf("dbbridge: start process: %w", err)
 	}
 
@@ -109,6 +115,10 @@ func (b *BridgeManager) startLocked(ctx context.Context) error {
 	return nil
 }
 
+// Send sends a request and waits for the response.
+// Note: concurrent calls are serialized because the bridge protocol
+// uses a single stdin/stdout pipe pair. This is acceptable since
+// db queries are typically sequential in the agent loop.
 func (b *BridgeManager) Send(req Request) (Response, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
