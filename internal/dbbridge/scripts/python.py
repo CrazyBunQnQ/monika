@@ -276,7 +276,6 @@ def do_schema(req):
         return {"tables": tables}
 
     if driver == "redis":
-        info = client.info("keyspace")
         keys = set()
         cursor = 0
         while True:

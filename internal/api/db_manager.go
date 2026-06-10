@@ -247,7 +247,18 @@ func (m *DBManager) TestConnection(ctx context.Context, connName string) error {
 	if mc.dbConn == nil {
 		return fmt.Errorf("dbmanager: connection %q has no underlying connection", connName)
 	}
-	_, err = mc.dbConn.Query(ctx, "SELECT 1")
+
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	switch mc.info.Driver {
+	case "redis":
+		_, err = mc.dbConn.Query(ctx, "PING")
+	case "mongo":
+		_, err = mc.dbConn.Query(ctx, `{"ping": 1}`)
+	default:
+		_, err = mc.dbConn.Query(ctx, "SELECT 1")
+	}
 	return err
 }
 

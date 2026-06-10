@@ -123,16 +123,32 @@ func envToMap(env interface{}) map[string]string {
 
 func extractPort(ports []string, defaultP string) string {
 	for _, p := range ports {
-		parts := strings.Split(p, ":")
-		if len(parts) >= 2 {
-			hostPort := parts[0]
-			if strings.Contains(hostPort, "-") {
-				continue
-			}
-			return hostPort
+		hostPort := extractSinglePort(p)
+		if hostPort == "" {
+			continue
 		}
+		return hostPort
 	}
 	return defaultP
+}
+
+func extractSinglePort(mapping string) string {
+	p := mapping
+	if idx := strings.Index(p, "/"); idx >= 0 {
+		p = p[:idx]
+	}
+	if strings.Contains(p, "-") {
+		return ""
+	}
+	parts := strings.Split(p, ":")
+	switch len(parts) {
+	case 2:
+		return parts[0]
+	case 3:
+		return parts[1]
+	default:
+		return ""
+	}
 }
 
 func buildDockerDSN(driver string, env map[string]string, port string) string {

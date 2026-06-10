@@ -75,9 +75,12 @@ func (c *Conn) Query(ctx context.Context, query string) (*dbdriver.QueryResult, 
 }
 
 func (c *Conn) Schema(ctx context.Context, filter string) (*dbdriver.SchemaResult, error) {
+	const maxSchemaKeys = 500
+
 	var tables []dbdriver.TableInfo
 	var err error
 	var cursor uint64
+	keyCount := 0
 	for {
 		var keys []string
 		keys, cursor, err = c.client.Scan(ctx, cursor, "*", 100).Result()
@@ -101,8 +104,12 @@ func (c *Conn) Schema(ctx context.Context, filter string) (*dbdriver.SchemaResul
 					{Name: "ttl", Type: "integer", Nullable: true},
 				},
 			})
+			keyCount++
+			if keyCount >= maxSchemaKeys {
+				break
+			}
 		}
-		if cursor == 0 {
+		if keyCount >= maxSchemaKeys || cursor == 0 {
 			break
 		}
 	}
