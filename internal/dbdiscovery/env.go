@@ -69,18 +69,10 @@ func discoverFromEnvVars(vars map[string]string, source string) []DiscoveredDB {
 
 	for _, key := range []string{"REDIS_URL", "REDISCLOUD_URL"} {
 		if v, ok := vars[key]; ok && v != "" {
-			dsn := v
-			u, err := url.Parse(v)
-			if err == nil && u.Host != "" {
-				dsn = u.Host
-				if u.User != nil {
-					dsn = u.User.Username() + "@" + dsn
-				}
-			}
 			results = append(results, DiscoveredDB{
 				Name:   "env/" + key,
 				Driver: "redis",
-				DSN:    dsn,
+				DSN:    v,
 				Source: source,
 			})
 		}
@@ -166,7 +158,7 @@ func buildDSN(driver, host, port, user, pass, dbname string) string {
 		if dbname != "" {
 			dsn += " dbname=" + dbname
 		}
-		dsn += " sslmode=disable"
+		dsn += " sslmode=prefer"
 		return dsn
 	case "mysql":
 		dsn := ""

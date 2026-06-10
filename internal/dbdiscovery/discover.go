@@ -2,6 +2,7 @@ package dbdiscovery
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -66,9 +67,16 @@ func Scan(projectDir string) (*CacheFile, error) {
 	}
 
 	cachePath := filepath.Join(projectDir, ".monika", "databases.json")
-	_ = os.MkdirAll(filepath.Dir(cachePath), 0755)
-	data, _ := json.MarshalIndent(cache, "", "  ")
-	_ = os.WriteFile(cachePath, data, 0600)
+	cacheDir := filepath.Dir(cachePath)
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "[monika] dbdiscovery: failed to create cache dir: %v\n", err)
+	}
+	data, err := json.MarshalIndent(cache, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[monika] dbdiscovery: failed to marshal cache: %v\n", err)
+	} else if err := os.WriteFile(cachePath, data, 0600); err != nil {
+		fmt.Fprintf(os.Stderr, "[monika] dbdiscovery: failed to write cache: %v\n", err)
+	}
 
 	return cache, nil
 }

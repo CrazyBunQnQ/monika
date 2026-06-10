@@ -152,7 +152,7 @@ func buildDockerDSN(driver string, env map[string]string, port string) string {
 		if pass != "" {
 			dsn += fmt.Sprintf(" password=%s", pass)
 		}
-		dsn += fmt.Sprintf(" dbname=%s sslmode=disable", db)
+		dsn += fmt.Sprintf(" dbname=%s sslmode=prefer", db)
 		return dsn
 	case "mysql":
 		user := env["MYSQL_USER"]
