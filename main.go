@@ -64,7 +64,7 @@ func main() {
 	}()
 
 	ctx := context.Background()
-	pr, err := bootstrap.InitProvider(ctx, home, cwd, "")
+	pr, err := bootstrap.InitProvider(ctx, home, "")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -80,7 +80,7 @@ func main() {
 	tsBridge := api.NewTSBridge()
 	tsQueryFn := tsBridge.QueryFunc()
 	builtin.RegisterDefaults(registry, cwd, home, builtin.TSQueryFunc(tsQueryFn))
-	builtin.RegisterLSP(registry, cwd)
+	builtin.RegisterLSP(registry, cwd, pr.Config.LSP.Servers, pr.Config.Formatters)
 	builtin.WireLSPHooks(registry)
 
 	taskStore := builtin.NewTaskStore(nil)
@@ -167,8 +167,10 @@ func main() {
 	application.RegisterEvent[[]api.NotificationData]("tray-notifications-changed")
 
 	ps := agent.PromptForModel(pr.Model)
+	shellPath, _ := builtin.ResolveShell()
+	shellName := filepath.Base(shellPath)
 	systemParts := []string{
-		fmt.Sprintf("OS Version: %s\nWorking directory: {{WorkingDirectory}}", runtime.GOOS),
+		fmt.Sprintf("Current date: %s\nOS Version: %s\nWorking directory: {{WorkingDirectory}}\nShell: %s", time.Now().Format("2006-01-02"), runtime.GOOS, shellName),
 		ps.Identity,
 		ps.ToolUsage,
 		ps.Planning,

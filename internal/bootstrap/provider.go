@@ -16,8 +16,8 @@ type Result struct {
 	Config    config.Config
 }
 
-func InitProvider(ctx context.Context, home, cwd, modelOverride string) (*Result, error) {
-	cfg, err := config.Load(config.Options{HomeDir: home, ProjectDir: cwd})
+func InitProvider(ctx context.Context, home string, modelOverride string) (*Result, error) {
+	cfg, err := config.Load(config.Options{HomeDir: home})
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}

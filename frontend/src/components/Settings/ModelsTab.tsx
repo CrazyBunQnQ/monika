@@ -232,7 +232,7 @@ export default function ModelsTab() {
         </div>
         <button
           onClick={openAdd}
-          className="inline-flex items-center gap-1.5 text-[12px] font-medium px-3 py-1.5 rounded cursor-pointer bg-transparent border border-[var(--border)] hover:border-[var(--border-strong)] transition-colors"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] rounded border border-[var(--border-strong)] bg-[var(--bg-elevated)] text-[var(--text-primary)] cursor-pointer hover:bg-[var(--bg-hover)] transition-colors"
           style={{ color: 'var(--text-primary)' }}
         >
           <IconPlus size={12} />

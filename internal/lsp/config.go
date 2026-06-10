@@ -1,7 +1,6 @@
 package lsp
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,10 +11,12 @@ import (
 
 const configDir = ".monika"
 
-// ResolveServers returns the merged list of server configs:
+// ResolveServersFromConfig returns the merged list of server configs:
+
+// ResolveServersFromConfig returns the merged list of server configs:
 // defaults filtered by root markers present in workdir,
-// then overridden by .monika/lsp.json if present.
-func ResolveServers(workdir string) map[string]ServerConfig {
+// then overridden by the provided user server configs (from config.json).
+func ResolveServersFromConfig(workdir string, userServers map[string]ServerConfig) map[string]ServerConfig {
 	result := make(map[string]ServerConfig)
 	for name, cfg := range DefaultServers {
 		if cfg.Disabled {
@@ -24,22 +25,42 @@ func ResolveServers(workdir string) map[string]ServerConfig {
 		if !hasRootMarker(workdir, cfg.RootMarkers) {
 			continue
 		}
-		avail := binaryAvailable(cfg.Command, workdir)
-		if !avail {
+		if !binaryAvailable(cfg.Command, workdir) {
 			continue
 		}
 		result[name] = cfg
 	}
-
-	userCfg := loadUserConfig(workdir)
-	for name, cfg := range userCfg {
+	for name, cfg := range userServers {
 		if cfg.Disabled {
 			delete(result, name)
 			continue
 		}
-		result[name] = cfg
+		// Merge user config into default, preserving default fields not overridden.
+		if existing, ok := result[name]; ok {
+			if cfg.Command != "" {
+				existing.Command = cfg.Command
+			}
+			if len(cfg.Args) > 0 {
+				existing.Args = cfg.Args
+			}
+			if len(cfg.FileTypes) > 0 {
+				existing.FileTypes = cfg.FileTypes
+			}
+			if len(cfg.RootMarkers) > 0 {
+				existing.RootMarkers = cfg.RootMarkers
+			}
+			if cfg.InitOptions != nil {
+				existing.InitOptions = cfg.InitOptions
+			}
+			if cfg.Settings != nil {
+				existing.Settings = cfg.Settings
+			}
+			result[name] = existing
+		} else {
+			result[name] = cfg
+		}
 	}
-
+	return result
 	return result
 }
 
@@ -100,27 +121,7 @@ func resolveExe(name string) string {
 	return name
 }
 
-func loadUserConfig(workdir string) map[string]ServerConfig {
-	configPath := filepath.Join(workdir, configDir, "lsp.json")
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return nil
-	}
-
-	var userCfg map[string]ServerConfig
-	if err := json.Unmarshal(data, &userCfg); err != nil {
-		return nil
-	}
-
-	for name, cfg := range userCfg {
-		if len(cfg.FileTypes) > 0 && !strings.HasPrefix(cfg.Command, "/") && !strings.HasPrefix(cfg.Command, ".") {
-			cfg.Command = resolveExe(cfg.Command)
-		}
-		userCfg[name] = cfg
-	}
-
-	return userCfg
-}
+// FileTypeToServer maps a file extension to server names that handle it,
 
 // FileTypeToServer maps a file extension to server names that handle it,
 // given a set of resolved server configs.

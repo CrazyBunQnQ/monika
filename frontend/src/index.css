@@ -559,4 +559,10 @@
 .markdown-preview hr {
   margin: 24px 0;
 }
-
+/* Chat input placeholder (contentEditable) */
+[data-placeholder]:empty::before {
+  content: attr(data-placeholder);
+  color: var(--text-dim);
+  pointer-events: none;
+  user-select: none;
+}

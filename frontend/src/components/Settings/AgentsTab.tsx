@@ -236,6 +236,7 @@ function AgentsTab() {
   const [permission, setPermission] = useState<Record<string, string>>({})
   const [newRuleTool, setNewRuleTool] = useState('')
   const [newRuleDecision, setNewRuleDecision] = useState<'allow' | 'ask' | 'deny'>('ask')
+  const [ruleOpen, setRuleOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
 
   useEffect(() => { loadAgents() }, [])
@@ -491,15 +492,34 @@ function AgentsTab() {
                       if (e.key === 'Enter') addRule()
                     }}
                   />
-                  <select
-                    value={newRuleDecision}
-                    onChange={(e) => setNewRuleDecision(e.target.value as 'allow' | 'ask' | 'deny')}
-                    className="w-[80px] px-2 py-1.5 text-[11px] rounded-md border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--border-strong)] cursor-pointer"
-                  >
-                    <option value="allow">allow</option>
-                    <option value="ask">ask</option>
-                    <option value="deny">deny</option>
-                  </select>
+                  <div style={{ position: 'relative' }}>
+                    <button
+                        type="button"
+                        onClick={() => setRuleOpen(v => !v)}
+                        className="w-[80px] px-2 py-1.5 text-[11px] rounded-md border cursor-pointer flex items-center justify-between"
+                        style={{ background: 'var(--bg-card)', borderColor: 'var(--border)', color: 'var(--text-primary)', fontFamily: 'inherit', textAlign: 'left' }}
+                    >
+                        <span>{newRuleDecision}</span>
+                        <IconChevronDown size={8} />
+                    </button>
+                    {ruleOpen && (
+                        <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: '4px', width: '80px', background: 'var(--bg-elevated)', border: '1px solid var(--border-strong)', borderRadius: 'var(--radius-md, 6px)', padding: '4px', zIndex: 1000, boxShadow: '0 8px 24px rgba(0,0,0,0.4)' }}>
+                            {(['allow', 'ask', 'deny'] as const).map(d => (
+                                <div
+                                    key={d}
+                                    onClick={() => { setNewRuleDecision(d); setRuleOpen(false) }}
+                                    className="text-[11px] px-2 py-1 rounded cursor-pointer"
+                                    style={{
+                                        background: d === newRuleDecision ? 'var(--bg-sidebar)' : 'transparent',
+                                        color: d === newRuleDecision ? 'var(--text-primary)' : 'var(--text-secondary)',
+                                    }}
+                                >
+                                    {d}
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
                   <button
                     onClick={addRule}
                     className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] rounded-md border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-dim)] cursor-pointer hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors"

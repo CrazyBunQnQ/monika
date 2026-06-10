@@ -9,6 +9,7 @@ import (
 
 	"monika/internal/agent"
 	"monika/internal/config"
+	"monika/internal/lsp"
 	"monika/internal/tool"
 	"monika/pkg/engine"
 )
@@ -34,8 +35,8 @@ func RegisterDefaults(r *tool.ToolRegistry, projectDir, homeDir string, tsQuery 
 }
 
 // RegisterLSP registers the LSP tool for code intelligence.
-func RegisterLSP(r *tool.ToolRegistry, projectDir string) error {
-	t, err := NewLSPTool(projectDir)
+func RegisterLSP(r *tool.ToolRegistry, projectDir string, lspServers map[string]lsp.ServerConfig, formatters map[string]lsp.FormatterConfig) error {
+	t, err := NewLSPTool(projectDir, lspServers, formatters)
 	if err != nil {
 		return err
 	}

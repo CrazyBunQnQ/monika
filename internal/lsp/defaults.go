@@ -2,13 +2,13 @@ package lsp
 
 // ServerConfig defines a language server configuration.
 type ServerConfig struct {
-	Command     string         `json:"command"`
-	Args        []string       `json:"args,omitempty"`
-	FileTypes   []string       `json:"fileTypes"`
-	RootMarkers []string       `json:"rootMarkers"`
-	InitOptions map[string]any `json:"initOptions,omitempty"`
-	Settings    map[string]any `json:"settings,omitempty"`
-	Disabled    bool           `json:"disabled,omitempty"`
+	Command     string         `yaml:"command" json:"command"`
+	Args        []string       `yaml:"args,omitempty" json:"args,omitempty"`
+	FileTypes   []string       `yaml:"fileTypes" json:"fileTypes"`
+	RootMarkers []string       `yaml:"rootMarkers" json:"rootMarkers"`
+	InitOptions map[string]any `yaml:"initOptions,omitempty" json:"initOptions,omitempty"`
+	Settings    map[string]any `yaml:"settings,omitempty" json:"settings,omitempty"`
+	Disabled    bool           `yaml:"disabled,omitempty" json:"disabled,omitempty"`
 }
 
 // DefaultServers is the built-in language server registry, ported from
@@ -24,15 +24,15 @@ var DefaultServers = map[string]ServerConfig{
 		},
 	},
 	"typescript-language-server": {
-		Command:   "typescript-language-server",
-		Args:      []string{"--stdio"},
-		FileTypes: []string{".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"},
+		Command:     "typescript-language-server",
+		Args:        []string{"--stdio"},
+		FileTypes:   []string{".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"},
 		RootMarkers: []string{"package.json", "tsconfig.json", "jsconfig.json"},
 		InitOptions: map[string]any{
 			"hostInfo": "monika",
 			"preferences": map[string]any{
-				"includeInlayParameterNameHints":       "all",
-				"includeInlayVariableTypeHints":        true,
+				"includeInlayParameterNameHints":         "all",
+				"includeInlayVariableTypeHints":          true,
 				"includeInlayFunctionParameterTypeHints": true,
 			},
 		},
@@ -46,9 +46,9 @@ var DefaultServers = map[string]ServerConfig{
 		},
 	},
 	"clangd": {
-		Command:   "clangd",
-		Args:      []string{"--background-index", "--clang-tidy", "--header-insertion=iwyu"},
-		FileTypes: []string{".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hxx", ".m", ".mm"},
+		Command:     "clangd",
+		Args:        []string{"--background-index", "--clang-tidy", "--header-insertion=iwyu"},
+		FileTypes:   []string{".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hxx", ".m", ".mm"},
 		RootMarkers: []string{"compile_commands.json", "CMakeLists.txt", ".clangd", ".clang-format", "Makefile"},
 	},
 	"pyright": {
@@ -104,9 +104,9 @@ var DefaultServers = map[string]ServerConfig{
 		RootMarkers: []string{"build.gradle", "build.gradle.kts", "pom.xml", "settings.gradle", "settings.gradle.kts"},
 	},
 	"omnisharp": {
-		Command:   "omnisharp",
-		Args:      []string{"-z", "--hostPID", "$PID", "--encoding", "utf-8", "--languageserver"},
-		FileTypes: []string{".cs", ".csx"},
+		Command:     "omnisharp",
+		Args:        []string{"-z", "--hostPID", "$PID", "--encoding", "utf-8", "--languageserver"},
+		FileTypes:   []string{".cs", ".csx"},
 		RootMarkers: []string{"*.sln", "*.csproj", "omnisharp.json", ".git"},
 	},
 	"sourcekit-lsp": {
@@ -206,9 +206,9 @@ var DefaultServers = map[string]ServerConfig{
 		InitOptions: map[string]any{"provideFormatter": true},
 	},
 	"tailwindcss": {
-		Command:   "tailwindcss-language-server",
-		Args:      []string{"--stdio"},
-		FileTypes: []string{".html", ".css", ".scss", ".js", ".jsx", ".ts", ".tsx", ".vue", ".svelte"},
+		Command:     "tailwindcss-language-server",
+		Args:        []string{"--stdio"},
+		FileTypes:   []string{".html", ".css", ".scss", ".js", ".jsx", ".ts", ".tsx", ".vue", ".svelte"},
 		RootMarkers: []string{"tailwind.config.js", "tailwind.config.ts", "tailwind.config.mjs", "tailwind.config.cjs"},
 	},
 	"svelte": {
@@ -235,9 +235,9 @@ var DefaultServers = map[string]ServerConfig{
 		RootMarkers: []string{".luarc.json", ".luarc.jsonc", ".luacheckrc", ".stylua.toml", "stylua.toml"},
 		Settings: map[string]any{
 			"Lua": map[string]any{
-				"runtime":     map[string]any{"version": "LuaJIT"},
-				"workspace":   map[string]any{"checkThirdParty": false},
-				"telemetry":   map[string]any{"enable": false},
+				"runtime":   map[string]any{"version": "LuaJIT"},
+				"workspace": map[string]any{"checkThirdParty": false},
+				"telemetry": map[string]any{"enable": false},
 			},
 		},
 	},
@@ -335,14 +335,14 @@ var DefaultServers = map[string]ServerConfig{
 		FileTypes:   []string{".vim", ".vimrc"},
 		RootMarkers: []string{".git"},
 		InitOptions: map[string]any{
-			"isNeovim": true,
+			"isNeovim":   true,
 			"diagnostic": map[string]any{"enable": true},
 		},
 	},
 	"emmet-language-server": {
-		Command:   "emmet-language-server",
-		Args:      []string{"--stdio"},
-		FileTypes: []string{".html", ".css", ".scss", ".less", ".jsx", ".tsx", ".vue", ".svelte"},
+		Command:     "emmet-language-server",
+		Args:        []string{"--stdio"},
+		FileTypes:   []string{".html", ".css", ".scss", ".less", ".jsx", ".tsx", ".vue", ".svelte"},
 		RootMarkers: []string{".git"},
 	},
 	"tlaplus": {
@@ -358,10 +358,10 @@ var DefaultServers = map[string]ServerConfig{
 		RootMarkers: []string{"biome.json", "biome.jsonc"},
 	},
 	"eslint": {
-		Command:   "vscode-eslint-language-server",
-		Args:      []string{"--stdio"},
-		FileTypes: []string{".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".vue", ".svelte"},
+		Command:     "vscode-eslint-language-server",
+		Args:        []string{"--stdio"},
+		FileTypes:   []string{".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".vue", ".svelte"},
 		RootMarkers: []string{".eslintrc", ".eslintrc.js", ".eslintrc.json", ".eslintrc.yml", "eslint.config.js", "eslint.config.mjs"},
-		Settings: map[string]any{"validate": "on", "run": "onType"},
+		Settings:    map[string]any{"validate": "on", "run": "onType"},
 	},
 }

@@ -148,7 +148,6 @@ func compactionSplit(conv *Conversation, contextLimit int64) int {
 		}
 	}
 
-
 	// Ensure tail always starts at or before a user message.
 	// An empty tail or tail starting with assistant/tool causes buildMessages
 	// to inject a synthetic "Continue." user message, which creates a loop.
@@ -195,6 +194,12 @@ func buildCompactionMessages(conv *Conversation, headEnd int) []engine.ChatMessa
 			continue
 		}
 		cp := m
+		if cp.Role == "shell" {
+			cp = engine.ChatMessage{
+				Role:    "user",
+				Content: cp.Content,
+			}
+		}
 		if cp.Role == "tool" {
 			cp.Content = truncateToolOutput(cp.Content, compactionToolOutputMaxChars)
 		}

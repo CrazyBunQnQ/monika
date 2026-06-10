@@ -141,6 +141,14 @@ export interface LSPServerStatus {
     running: boolean
 }
 
+export interface FormatterEntry {
+    command: string
+    args?: string[]
+    ref?: string  // "lsp" shorthand
+}
+
+export type SettingsScope = 'global' | 'project'
+
 export interface ProviderFull {
     id: string
     display_name: string
@@ -154,6 +162,7 @@ export interface ProviderFull {
 interface AppState {
     messages: Message[]
     generatingSessionIds: string[]
+    shellExecutingSessionIds: string[]
     sessionStatuses: Record<string, string>
     sessionErrors: Record<string, string>
     retryInfo: { attempt: number; max: number; message: string } | null
@@ -201,6 +210,9 @@ interface AppState {
     providerDetails: ProviderFull[]
     availableProvidersCatalog: AvailableProviderInfo[]
     settingsOpen: boolean
+    settingsScope: SettingsScope
+    lspConfigServers: Record<string, { command: string; args: string[]; fileTypes: string[]; rootMarkers?: string[]; initOptions?: Record<string, any>; settings?: Record<string, any>; disabled?: boolean }>
+    formatterConfig: Record<string, FormatterEntry>
     msgFilter: 'all' | 'chat' | 'user' | 'assistant'
     chatInputAppendPath: string | null
     selection: { mode: 'quote' | 'forward'; ids: string[] } | null
@@ -225,6 +237,8 @@ interface AppState {
     updateSessionToolInput: (id: string, toolId: string, input: string) => void
     addGeneratingSession: (sessionId: string) => void
     removeGeneratingSession: (sessionId: string) => void
+    addShellExecutingSession: (sessionId: string) => void
+    removeShellExecutingSession: (sessionId: string) => void
     setSessionStatus: (sessionId: string, status: string) => void
     setSessionError: (sessionId: string, error: string) => void
     setSelectedModel: (model: string) => void
@@ -302,6 +316,11 @@ interface AppState {
     saveProviderDetail: (cfg: ProviderFull) => Promise<void>
     deleteProviderDetail: (id: string) => Promise<void>
     resetProjectState: () => void
+    setSettingsScope: (scope: SettingsScope) => void
+    loadLSPConfig: (scope: SettingsScope) => Promise<void>
+    saveLSPConfig: (scope: SettingsScope, servers: Record<string, any>) => Promise<void>
+    loadFormatterConfig: (scope: SettingsScope) => Promise<void>
+    saveFormatterConfig: (scope: SettingsScope, formatters: Record<string, FormatterEntry>) => Promise<void>
     appendPathToInput: (path: string) => void
     toggleMessageSelection: (id: string) => void
     enterMultiSelect: (mode: 'quote' | 'forward', initialId: string) => void
@@ -319,6 +338,7 @@ const LOAD_MORE_COUNT = 20
 export const useStore = create<AppState>((set, get) => ({
     messages: [{ id: 'welcome', role: 'system', content: 'Welcome to Monika. Type /help for commands.' }],
     generatingSessionIds: [],
+    shellExecutingSessionIds: [],
     sessionStatuses: {},
     sessionErrors: {},
     retryInfo: null,
@@ -369,6 +389,9 @@ export const useStore = create<AppState>((set, get) => ({
     providerDetails: [],
     availableProvidersCatalog: [] as AvailableProviderInfo[],
     settingsOpen: false,
+    settingsScope: 'global' as SettingsScope,
+    lspConfigServers: {} as Record<string, any>,
+    formatterConfig: {} as Record<string, FormatterEntry>,
     msgFilter: 'all' as const,
     chatInputAppendPath: null as string | null,
     selection: null as { mode: 'quote' | 'forward'; ids: string[] } | null,
@@ -560,6 +583,14 @@ export const useStore = create<AppState>((set, get) => ({
     })),
     removeGeneratingSession: (sessionId) => set((s) => ({
         generatingSessionIds: s.generatingSessionIds.filter((id) => id !== sessionId),
+    })),
+    addShellExecutingSession: (sessionId) => set((s) => ({
+        shellExecutingSessionIds: s.shellExecutingSessionIds.includes(sessionId)
+            ? s.shellExecutingSessionIds
+            : [...s.shellExecutingSessionIds, sessionId],
+    })),
+    removeShellExecutingSession: (sessionId) => set((s) => ({
+        shellExecutingSessionIds: s.shellExecutingSessionIds.filter((id) => id !== sessionId),
     })),
     setSessionStatus: (sessionId, status) =>
         set((s) => ({ sessionStatuses: { ...s.sessionStatuses, [sessionId]: status } })),
@@ -1272,7 +1303,7 @@ export const useStore = create<AppState>((set, get) => ({
     },
 
     closeLspFile: (projectPath: string, filePath: string) => {
-        lspService.closeFile(projectPath, filePath).catch(() => {})
+        lspService.closeFile(projectPath, filePath).catch(() => { })
         set((state) => {
             const { [filePath]: _, ...rest } = state.lspReady
             return { lspReady: rest }
@@ -1360,10 +1391,53 @@ export const useStore = create<AppState>((set, get) => ({
         await get().loadProviderDetails()
     },
 
+    setSettingsScope: (scope) => set({ settingsScope: scope }),
+
+    loadLSPConfig: async (scope) => {
+        try {
+            const servers = await Call.ByName('monika/internal/api.App.GetLSPConfig', scope)
+            set({ lspConfigServers: servers || {} })
+        } catch { set({ lspConfigServers: {} }) }
+    },
+
+    saveLSPConfig: async (scope, servers) => {
+        await Call.ByName('monika/internal/api.App.SaveLSPConfig', scope, servers)
+        set({ lspConfigServers: servers })
+    },
+
+    loadFormatterConfig: async (scope) => {
+        try {
+            const formatters = await Call.ByName('monika/internal/api.App.GetFormatterConfig', scope)
+            const normalized: Record<string, FormatterEntry> = {}
+            for (const [lang, cfg] of Object.entries(formatters || {})) {
+                if (typeof cfg === 'string') {
+                    normalized[lang] = { command: '', ref: cfg }
+                } else {
+                    normalized[lang] = cfg as FormatterEntry
+                }
+            }
+            set({ formatterConfig: normalized })
+        } catch { set({ formatterConfig: {} }) }
+    },
+
+    saveFormatterConfig: async (scope, formatters) => {
+        const payload: Record<string, any> = {}
+        for (const [lang, cfg] of Object.entries(formatters)) {
+            if (cfg.ref) {
+                payload[lang] = cfg.ref
+            } else {
+                payload[lang] = cfg
+            }
+        }
+        await Call.ByName('monika/internal/api.App.SaveFormatterConfig', scope, payload)
+        set({ formatterConfig: formatters })
+    },
+
     resetProjectState: () => {
         set({
             messages: [{ id: 'welcome', role: 'system' as const, content: 'Welcome to Monika. Type /help for commands.' }],
             generatingSessionIds: [],
+            shellExecutingSessionIds: [],
             sessionStatuses: {},
             sessionErrors: {},
             retryInfo: null,
@@ -1404,6 +1478,9 @@ export const useStore = create<AppState>((set, get) => ({
             providerDetails: [],
 
             settingsOpen: false,
+            settingsScope: 'global',
+            lspConfigServers: {},
+            formatterConfig: {},
             fileTreeVersion: 0,
             sessionListVersion: 0,
             selection: null,
@@ -1480,6 +1557,9 @@ export function loadSessionMessages(raw: { role: string; content: string; reason
             i++
         } else if (m.role === 'system') {
             result.push({ id: crypto.randomUUID(), role: 'system', content: m.content || '' })
+            i++
+        } else if (m.role === 'shell') {
+            result.push({ id: crypto.randomUUID(), role: 'shell', content: m.content || '' })
             i++
         } else {
             i++
@@ -1723,6 +1803,90 @@ export function setupWailsEvents() {
                 break
 
 
+            case 'shell_output': {
+                const shellMsgs = store.sessionMessages[sid]
+                if (shellMsgs && shellMsgs.length > 0) {
+                    let found = false
+                    for (let i = shellMsgs.length - 1; i >= 0; i--) {
+                        if (shellMsgs[i].role === 'shell') {
+                            const existing = shellMsgs[i].content
+                            let newContent: string
+                            if (existing.includes('\u200B\u200B')) {
+                                newContent = existing.replace('\u200B\u200B', '') + (data.content || '')
+                            } else {
+                                newContent = existing + '\n' + (data.content || '')
+                            }
+                            shellMsgs[i] = { ...shellMsgs[i], content: newContent }
+                            found = true
+                            break
+                        }
+                    }
+                    if (!found) {
+                        shellMsgs.push({ id: crypto.randomUUID(), role: 'shell', content: data.content || '' })
+                    }
+                    useStore.setState({
+                        sessionMessages: { ...store.sessionMessages, [sid]: [...shellMsgs] },
+                        messages: store.activeSessionId === sid ? [...shellMsgs] : store.messages,
+                    })
+                }
+                break
+            }
+            case 'shell_done': {
+                try {
+                    const done = JSON.parse(data.content || '{}')
+                    const shellMsgs2 = store.sessionMessages[sid]
+                    if (shellMsgs2 && shellMsgs2.length > 0) {
+                        let found = false
+                        for (let i = shellMsgs2.length - 1; i >= 0; i--) {
+                            if (shellMsgs2[i].role === 'shell') {
+                                let content = shellMsgs2[i].content
+                                if (done.exitCode !== 0) {
+                                    content += `\n\nShell exited with code ${done.exitCode}`
+                                }
+                                shellMsgs2[i] = { ...shellMsgs2[i], content }
+                                found = true
+                                break
+                            }
+                        }
+                        if (!found) {
+                            shellMsgs2.push({ id: crypto.randomUUID(), role: 'shell', content: `Shell exited with code ${done.exitCode ?? 0}` })
+                        }
+                        useStore.setState({
+                            sessionMessages: { ...store.sessionMessages, [sid]: [...shellMsgs2] },
+                            messages: store.activeSessionId === sid ? [...shellMsgs2] : store.messages,
+                        })
+                    }
+                } catch { }
+                store.removeShellExecutingSession(sid)
+                break
+            }
+            case 'shell_error': {
+                const shellMsgs3 = store.sessionMessages[sid]
+                if (shellMsgs3 && shellMsgs3.length > 0) {
+                    let found = false
+                    for (let i = shellMsgs3.length - 1; i >= 0; i--) {
+                        if (shellMsgs3[i].role === 'shell') {
+                            let content = shellMsgs3[i].content
+                            if (content.includes('\u200B\u200B')) {
+                                content = content.replace('\u200B\u200B', '')
+                            }
+                            content += `\nError: ${data.content || 'Unknown error'}`
+                            shellMsgs3[i] = { ...shellMsgs3[i], content }
+                            found = true
+                            break
+                        }
+                    }
+                    if (!found) {
+                        shellMsgs3.push({ id: crypto.randomUUID(), role: 'shell', content: `Error: ${data.content || 'Unknown error'}` })
+                    }
+                    useStore.setState({
+                        sessionMessages: { ...store.sessionMessages, [sid]: [...shellMsgs3] },
+                        messages: store.activeSessionId === sid ? [...shellMsgs3] : store.messages,
+                    })
+                }
+                store.removeShellExecutingSession(sid)
+                break
+            }
             case 'compaction':
                 if (data.compaction) {
                     const c = data.compaction

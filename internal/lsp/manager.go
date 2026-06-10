@@ -39,13 +39,15 @@ type Manager struct {
 	mu          sync.Mutex
 	clientLocks map[string]*sync.Mutex // per-server lock for getOrStart
 	fileLocks   map[string]*sync.Mutex // per-file lock for open/close/change
+	formatters  map[string]FormatterConfig
 	cancel      context.CancelFunc
 }
 
-func NewManager(workdir string) *Manager {
+func NewManager(workdir string, lspServers map[string]ServerConfig, formatters map[string]FormatterConfig) *Manager {
 	return &Manager{
 		workdir:     workdir,
-		servers:     ResolveServers(workdir),
+		servers:     ResolveServersFromConfig(workdir, lspServers),
+		formatters:  formatters,
 		clients:     make(map[string]*managedClient),
 		openFiles:   make(map[string]*openFile),
 		clientLocks: make(map[string]*sync.Mutex),
@@ -585,11 +587,21 @@ func (m *Manager) WriteThrough(ctx context.Context, client *Client, filePath str
 
 	finalContent := content
 
-	// Step 2: Optional format
+	// Step 2: Optional format — try CLI formatter first, fallback to LSP
 	if opts.FormatOnWrite {
-		formatted, err := m.FormatContent(ctx, client, filePath)
+		var formatted string
+		var err error
+		cmd, cmdArgs, found := ResolveFormatter(m.formatters, filePath)
+		if found {
+			formatted, err = RunCLIFormatter(ctx, cmd, cmdArgs, filePath)
+			if err != nil {
+				lspLog("WriteThrough: CLI formatter failed: %v, falling back to LSP", err)
+				formatted, err = m.FormatContent(ctx, client, filePath)
+			}
+		} else {
+			formatted, err = m.FormatContent(ctx, client, filePath)
+		}
 		if err == nil && formatted != content {
-			// Content changed — re-sync with formatted content
 			finalContent = formatted
 			_ = m.SyncContentFromMemory(ctx, client, filePath, formatted, serverName)
 		}

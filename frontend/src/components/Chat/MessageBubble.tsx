@@ -507,16 +507,20 @@ const MessageBubble = React.memo(function MessageBubble({ message, isGenerating,
 
     if (role === 'shell') {
         return (
-            <div className="flex flex-col gap-1.5 mb-1.5">
-                <RoleLabel role="shell" />
-                <MsgBlock accent="var(--yellow)">
-                    <div
-                        className="text-[13px] text-[var(--text-primary)] whitespace-pre-wrap leading-[1.6]"
-                        style={{ fontFamily: 'var(--font-mono)' }}
-                    >
-                        {content}
-                    </div>
-                </MsgBlock>
+            <div className="group/bubble relative">
+                <div className="flex flex-col gap-1.5"
+                     style={{ borderLeft: isSelected ? '3px solid var(--accent)' : '3px solid transparent',
+                              paddingLeft: '12px', borderRadius: '0 4px 4px 0' }}>
+                    <RoleLabel role="shell" />
+                    <MsgBlock accent="var(--yellow)">
+                        <div
+                            className="text-[13px] text-[var(--text-primary)] whitespace-pre-wrap leading-[1.6]"
+                            style={{ fontFamily: 'var(--font-mono)' }}
+                        >
+                            {content}
+                        </div>
+                    </MsgBlock>
+                </div>
             </div>
         )
     }

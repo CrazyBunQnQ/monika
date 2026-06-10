@@ -63,6 +63,8 @@ const geminiToolUsage = `## Tool Usage
 - Prefer dedicated tools and MCP tools over bash commands
 - Use bash only for operations that have no dedicated tool available
 - Maximum execution time: 120 seconds
+- Each bash call must execute ONE command only. Do NOT chain commands with &&, ||, or ;
+- Do NOT use command substitution ($() or backticks). If you need output from one command, call it separately first
 - Use background processes (via '&' suffix) for commands unlikely to stop on their own
 - Try to avoid interactive shell commands. Use non-interactive versions when available
 

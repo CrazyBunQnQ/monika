@@ -1131,6 +1131,16 @@ func (a *AgentLoop) buildMessages(conv *Conversation) []engine.ChatMessage {
 		filteredMsgs = append(filteredMsgs, m)
 	}
 
+	// Convert shell messages to user role for LLM visibility.
+	for i, m := range filteredMsgs {
+		if m.Role == "shell" {
+			filteredMsgs[i] = engine.ChatMessage{
+				Role:    "user",
+				Content: m.Content,
+			}
+		}
+	}
+
 	if a.systemPrompt != "" || summaryContent != "" {
 		var parts []string
 		if a.systemPrompt != "" {

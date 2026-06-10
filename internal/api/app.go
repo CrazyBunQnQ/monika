@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -358,13 +359,16 @@ func (a *App) OpenProject(path string) (*ProjectInfo, error) {
 	a.writeRecentProject(info.Path, info.Name)
 	a.saveLastProjectPath(path)
 
+	// Reload config so LSP servers are read from the actual project directory.
+	a.reloadMergedConfig()
+
 	// Re-register the LSP tool with the correct project directory.
 	if t, ok := a.registry.Get("lsp"); ok {
 		if lt, ok := t.(interface{ Manager() *lsp.Manager }); ok {
 			lt.Manager().Stop()
 		}
 	}
-	_ = builtin.RegisterLSP(a.registry, path)
+	_ = builtin.RegisterLSP(a.registry, path, a.cfg.LSP.Servers, a.cfg.Formatters)
 	builtin.WireLSPHooks(a.registry)
 	a.saveLastProjectPath(path)
 
@@ -917,52 +921,183 @@ func stripANSI(s string) string {
 	return ansiRE.ReplaceAllString(s, "")
 }
 
-// RunShellCommand executes a shell command in the project directory and returns merged stdout+stderr.
-// Commands timeout after 120 seconds.
-func (a *App) RunShellCommand(projectPath, command string) (string, error) {
+// RunShellCommand executes a shell command in the project directory, streaming output via SSE.
+// Returns nil after launching the command; output is delivered through shell_output/shell_done events.
+func (a *App) RunShellCommand(projectPath, sessionID, command string) error {
 	shell, shellArg := resolveShellAPI()
 	if shell == "" {
-		return "", fmt.Errorf("no shell found on system")
+		return fmt.Errorf("no shell found on system")
 	}
 
-	timeoutCtx, cancel := context.WithTimeout(a.ctx, 120*time.Second)
-	defer cancel()
+	ctx, cancel := context.WithCancel(a.ctx)
+	a.cancelMu.Lock()
+	if _, exists := a.cancelFuncs[sessionID]; exists {
+		a.cancelMu.Unlock()
+		cancel()
+		return fmt.Errorf("session %s is busy", sessionID)
+	}
+	a.cancelFuncs[sessionID] = cancel
+	a.cancelMu.Unlock()
 
-	cmd := exec.CommandContext(timeoutCtx, shell, shellArg, command)
+	cmd := exec.CommandContext(ctx, shell, shellArg, command)
 	cmd.Dir = projectPath
 	hideWindow(cmd)
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	out := stdout.String()
-	if errStderr := stderr.String(); errStderr != "" {
-		if out != "" {
-			out += "\n"
-		}
-		out += errStderr
-	}
-
+	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			// Command ran but exited non-zero: include exit info in output, don't return error
-			if out != "" {
-				out += "\n"
-			}
-			out += fmt.Sprintf("exit code: %d", exitErr.ExitCode())
-			return strings.TrimSpace(stripANSI(out)), nil
-		}
-		// System error (timeout, etc.): propagate as error
-		if out == "" {
-			out = err.Error()
-		}
-		return strings.TrimSpace(stripANSI(out)), err
+		a.cancelMu.Lock()
+		delete(a.cancelFuncs, sessionID)
+		a.cancelMu.Unlock()
+		cancel()
+		return err
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		a.cancelMu.Lock()
+		delete(a.cancelFuncs, sessionID)
+		a.cancelMu.Unlock()
+		cancel()
+		return err
 	}
 
-	return strings.TrimSpace(stripANSI(out)), nil
+	if err := cmd.Start(); err != nil {
+		a.cancelMu.Lock()
+		delete(a.cancelFuncs, sessionID)
+		a.cancelMu.Unlock()
+		cancel()
+		return err
+	}
+
+	go func() {
+		defer func() {
+			a.cancelMu.Lock()
+			delete(a.cancelFuncs, sessionID)
+			a.cancelMu.Unlock()
+			cancel()
+		}()
+
+		lineCh := make(chan string, 128)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			scanner := bufio.NewScanner(stdoutPipe)
+			for scanner.Scan() {
+				lineCh <- stripANSI(scanner.Text())
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			scanner := bufio.NewScanner(stderrPipe)
+			for scanner.Scan() {
+				lineCh <- stripANSI(scanner.Text())
+			}
+		}()
+		go func() { wg.Wait(); close(lineCh) }()
+
+		var outputBuf strings.Builder
+		for line := range lineCh {
+			a.emitShellOutput(sessionID, line)
+			outputBuf.WriteString(line)
+			outputBuf.WriteByte('\n')
+		}
+
+		waitErr := cmd.Wait()
+		exitCode := 0
+		if waitErr != nil {
+			var exitErr *exec.ExitError
+			if errors.As(waitErr, &exitErr) {
+				exitCode = exitErr.ExitCode()
+			} else {
+				sm := a.getSessionManagerForSession(sessionID)
+				if sm != nil {
+					fullContent := formatShellContent(command, -1, outputBuf.String()) + "\n[cancelled]"
+					sm.AppendShellMessages(sessionID, []engine2.ChatMessage{
+						{Role: "shell", Content: fullContent},
+					})
+				}
+				a.emitShellError(sessionID, waitErr.Error())
+				return
+			}
+		}
+
+		a.emitShellDone(sessionID, exitCode, command)
+
+		sm := a.getSessionManagerForSession(sessionID)
+		if sm != nil {
+			fullContent := formatShellContent(command, exitCode, outputBuf.String())
+			sm.AppendShellMessages(sessionID, []engine2.ChatMessage{
+				{Role: "shell", Content: fullContent},
+			})
+		}
+	}()
+
+	return nil
+}
+
+func (a *App) emitShellOutput(sessionID, line string) {
+	se := StreamEvent{
+		SessionID: sessionID,
+		Type:      "shell_output",
+		Content:   line,
+		Seq:       a.eventSeq.Add(1),
+	}
+	a.eventBus.Emit(se)
+	application.Get().Event.Emit("stream", se)
+}
+
+func (a *App) emitShellDone(sessionID string, exitCode int, command string) {
+	content, _ := json.Marshal(map[string]any{"exitCode": exitCode, "command": command})
+	se := StreamEvent{
+		SessionID: sessionID,
+		Type:      "shell_done",
+		Content:   string(content),
+		Seq:       a.eventSeq.Add(1),
+	}
+	a.eventBus.Emit(se)
+	application.Get().Event.Emit("stream", se)
+}
+
+func (a *App) emitShellError(sessionID, errMsg string) {
+	se := StreamEvent{
+		SessionID: sessionID,
+		Type:      "shell_error",
+		Content:   errMsg,
+		Seq:       a.eventSeq.Add(1),
+	}
+	a.eventBus.Emit(se)
+	application.Get().Event.Emit("stream", se)
+}
+
+// CancelShellCommand cancels a running shell command for the given session.
+func (a *App) CancelShellCommand(sessionID string) {
+	a.cancelMu.Lock()
+	cancel, ok := a.cancelFuncs[sessionID]
+	a.cancelMu.Unlock()
+	if ok {
+		cancel()
+	}
+}
+
+func formatShellContent(command string, exitCode int, output string) string {
+	output = strings.TrimSpace(output)
+	var sb strings.Builder
+	sb.WriteString("$ ")
+	sb.WriteString(command)
+	if output != "" {
+		sb.WriteString("\n\n")
+		if exitCode != 0 {
+			sb.WriteString(fmt.Sprintf("Shell output (exit code %d):\n", exitCode))
+		} else {
+			sb.WriteString("Shell output:\n")
+		}
+		sb.WriteString("```\n")
+		sb.WriteString(output)
+		sb.WriteString("\n```")
+	} else if exitCode != 0 {
+		sb.WriteString(fmt.Sprintf("\n\nShell output (exit code %d): no output", exitCode))
+	}
+	return sb.String()
 }
 
 // ListSystemCommands searches PATH for executable files matching prefix.
@@ -3462,6 +3597,123 @@ func (a *App) LspExecuteCodeAction(projectPath string, action LspCodeAction) (*L
 		return action.Edit, nil
 	}
 	return nil, nil
+}
+
+func (a *App) configPathForScope(scope string) string {
+	if scope == "project" {
+		pp := a.projectPath()
+		if pp == "" {
+			return ""
+		}
+		return filepath.Join(pp, ".monika", "config.json")
+	}
+	return filepath.Join(a.home, ".monika", "config.json")
+}
+
+func (a *App) readConfigForScope(scope string) (config2.Config, error) {
+	configPath := a.configPathForScope(scope)
+	if configPath == "" {
+		return config2.Config{}, fmt.Errorf("no project path for scope %q", scope)
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return config2.Config{}, nil
+		}
+		return config2.Config{}, err
+	}
+	var cfg config2.Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return config2.Config{}, fmt.Errorf("%s: %w", configPath, err)
+	}
+	return cfg, nil
+}
+
+func (a *App) writeConfigForScope(scope string, updateFn func(*config2.Config)) error {
+	configPath := a.configPathForScope(scope)
+	if configPath == "" {
+		return fmt.Errorf("no project path for scope %q", scope)
+	}
+	cfg, err := a.readConfigForScope(scope)
+	if err != nil {
+		return err
+	}
+	updateFn(&cfg)
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		return err
+	}
+	tmp := configPath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, configPath)
+}
+
+func (a *App) GetLSPConfig(scope string) map[string]lsp.ServerConfig {
+	cfg, err := a.readConfigForScope(scope)
+	if err != nil {
+		return nil
+	}
+	if cfg.LSP.Servers == nil {
+		return map[string]lsp.ServerConfig{}
+	}
+	return cfg.LSP.Servers
+}
+
+func (a *App) SaveLSPConfig(scope string, servers map[string]lsp.ServerConfig) error {
+	if scope != "global" && scope != "project" {
+		return fmt.Errorf("invalid scope %q (must be \"global\" or \"project\")", scope)
+	}
+	if err := a.writeConfigForScope(scope, func(cfg *config2.Config) {
+		cfg.LSP.Servers = servers
+	}); err != nil {
+		return err
+	}
+	a.reloadMergedConfig()
+	return nil
+}
+
+func (a *App) GetFormatterConfig(scope string) map[string]lsp.FormatterConfig {
+	cfg, err := a.readConfigForScope(scope)
+	if err != nil {
+		return nil
+	}
+	if cfg.Formatters == nil {
+		return map[string]lsp.FormatterConfig{}
+	}
+	return cfg.Formatters
+}
+
+func (a *App) SaveFormatterConfig(scope string, formatters map[string]lsp.FormatterConfig) error {
+	if scope != "global" && scope != "project" {
+		return fmt.Errorf("invalid scope %q (must be \"global\" or \"project\")", scope)
+	}
+	if err := a.writeConfigForScope(scope, func(cfg *config2.Config) {
+		cfg.Formatters = formatters
+	}); err != nil {
+		return err
+	}
+	a.reloadMergedConfig()
+	return nil
+}
+
+func (a *App) reloadMergedConfig() {
+	var cfg config2.Config
+	if globalCfg, err := a.readConfigForScope("global"); err == nil {
+		cfg = globalCfg
+	}
+	if pp := a.projectPath(); pp != "" {
+		if projCfg, err := a.readConfigForScope("project"); err == nil {
+			config2.Merge(&cfg, projCfg)
+		}
+	}
+	a.mu.Lock()
+	a.cfg = cfg
+	a.mu.Unlock()
 }
 
 func (a *App) GetLSPStatus() []lsp.LSPServerStatus {

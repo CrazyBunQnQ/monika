@@ -48,7 +48,7 @@ const defaultToolUsage = `## Tool Usage
 - When output ends with "[N more lines below]", use the suggested offset to continue
 - Output has line-number and hash prefixes (e.g. "42│a1b2c3│ code") — copy 'a1b2c3:42' as anchor for file_edit
 - For large files (100+ lines), use 'summary' parameter to get structured AST summary instead
-- Never read an entire file blindly — grep for the specific symbols you need
+- Never read an entire file blindly — grep for the specific symbols you ne
 
 ### Parallel tool calls
 - When multiple INDEPENDENT tool calls are needed, invoke them in a single message
@@ -68,6 +68,8 @@ const defaultToolUsage = `## Tool Usage
 - Prefer dedicated tools (grep, glob, file_read, file_write, file_edit, patch) and MCP tools over bash commands
 - Use bash only for operations that have no dedicated tool or MCP tool available
 - Maximum execution time: 120 seconds
+- Each bash call must execute ONE command only. Do NOT chain commands with &&, ||, or ;
+- Do NOT use command substitution ($() or backticks). If you need output from one command, call it separately first
 
 ### LSP Usage
 **LSP tools provide the fastest, most accurate way to understand and modify code. Use them aggressively.**

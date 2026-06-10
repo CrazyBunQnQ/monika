@@ -1,11 +1,12 @@
 package config
 
 import (
-"os"
-"path/filepath"
-"strings"
-"testing"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
 )
+
 func TestLoadMergesModelProviderAndModel(t *testing.T) {
 	tmp := t.TempDir()
 	home := filepath.Join(tmp, "home")
@@ -376,6 +377,99 @@ func TestLoadAppendsAgents(t *testing.T) {
 	}
 }
 
+func TestLoadMergesLSPServers(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, "home")
+	project := filepath.Join(tmp, "project")
+	mustWrite(t, filepath.Join(home, ".monika", "config.json"), []byte(`{
+  "lsp": {
+    "servers": {
+      "gopls": { "command": "gopls", "fileTypes": [".go"], "disabled": true }
+    }
+  }
+}`))
+	mustWrite(t, filepath.Join(project, ".monika", "config.json"), []byte(`{
+  "lsp": {
+    "servers": {
+      "pyright": { "command": "pyright-langserver", "fileTypes": [".py"] }
+    }
+  }
+}`))
+	cfg, err := Load(Options{HomeDir: home, ProjectDir: project})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gopls, ok := cfg.LSP.Servers["gopls"]
+	if !ok {
+		t.Fatal("expected gopls in LSP servers")
+	}
+	if !gopls.Disabled {
+		t.Fatal("expected gopls to be disabled")
+	}
+	pyright, ok := cfg.LSP.Servers["pyright"]
+	if !ok {
+		t.Fatal("expected pyright in LSP servers")
+	}
+	if pyright.Command != "pyright-langserver" {
+		t.Fatalf("pyright command = %q", pyright.Command)
+	}
+}
+
+func TestLoadMergesFormatters(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, "home")
+	project := filepath.Join(tmp, "project")
+	mustWrite(t, filepath.Join(home, ".monika", "config.json"), []byte(`{
+  "formatters": { "go": "lsp" }
+}`))
+	mustWrite(t, filepath.Join(project, ".monika", "config.json"), []byte(`{
+  "formatters": { "python": { "command": "black", "args": [] } }
+}`))
+	cfg, err := Load(Options{HomeDir: home, ProjectDir: project})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Formatters) != 2 {
+		t.Fatalf("expected 2 formatters, got %d", len(cfg.Formatters))
+	}
+	goFmt, ok := cfg.Formatters["go"]
+	if !ok {
+		t.Fatal("expected go formatter")
+	}
+	if goFmt.Ref != "lsp" {
+		t.Fatalf("go ref = %q, want \"lsp\"", goFmt.Ref)
+	}
+	pyFmt, ok := cfg.Formatters["python"]
+	if !ok {
+		t.Fatal("expected python formatter")
+	}
+	if pyFmt.Command != "black" {
+		t.Fatalf("python command = %q", pyFmt.Command)
+	}
+}
+
+func TestLoadProjectFormattersOverrideGlobal(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, "home")
+	project := filepath.Join(tmp, "project")
+	mustWrite(t, filepath.Join(home, ".monika", "config.json"), []byte(`{
+  "formatters": { "go": "lsp", "python": { "command": "black" } }
+}`))
+	mustWrite(t, filepath.Join(project, ".monika", "config.json"), []byte(`{
+  "formatters": { "go": { "command": "gofmt", "args": ["-w"] } }
+}`))
+	cfg, err := Load(Options{HomeDir: home, ProjectDir: project})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Formatters) != 2 {
+		t.Fatalf("expected 2 formatters, got %d", len(cfg.Formatters))
+	}
+	goFmt := cfg.Formatters["go"]
+	if goFmt.Command != "gofmt" {
+		t.Fatalf("go command = %q, want \"gofmt\"", goFmt.Command)
+	}
+}
 func mustWrite(t *testing.T, path string, data []byte) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

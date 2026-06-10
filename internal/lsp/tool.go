@@ -16,13 +16,12 @@ type LSPTool struct {
 	manager *Manager
 }
 
-func NewLSPTool(projectDir string) (tool.Tool, error) {
-	m := NewManager(projectDir)
+func NewLSPTool(projectDir string, lspServers map[string]ServerConfig, formatters map[string]FormatterConfig) (tool.Tool, error) {
+	m := NewManager(projectDir, lspServers, formatters)
 	m.Start()
 
 	return &LSPTool{manager: m}, nil
 }
-
 func (t *LSPTool) Manager() *Manager { return t.manager }
 
 // NotifySavedForFile sends didSave to the LSP server for a file.

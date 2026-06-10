@@ -43,6 +43,10 @@ func (b *bashTool) SetBgManager(mgr BgManager) {
 	b.bgMgr = mgr
 }
 
+func ResolveShell() (string, string) {
+	return resolveShell()
+}
+
 func resolveShell() (string, string) {
 	if runtime.GOOS == "windows" {
 		if path, err := exec.LookPath("pwsh"); err == nil {
@@ -79,6 +83,9 @@ IMPORTANT: Do NOT use bash for file operations:
 
 When running multiple independent commands, make multiple bash calls in parallel.
 Commands timeout after 120 seconds by default. Use the "timeout" parameter (max 600 seconds) for long-running commands like npm install, docker build, etc. Output exceeding 30000 characters is truncated.
+
+CRITICAL: Execute ONE command per call. Do NOT use &&, ||, ; or command substitution ($()).
+If multiple commands are needed, issue separate bash calls.
 
 # Committing changes with git
 

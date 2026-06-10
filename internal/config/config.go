@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 
 	"gopkg.in/yaml.v3"
+
+	"monika/internal/lsp"
 )
 
 type Options struct {
@@ -16,13 +18,15 @@ type Options struct {
 }
 
 type Config struct {
-	ModelProvider  string                    `yaml:"model_provider" json:"model_provider"`
-	Model          string                    `yaml:"model" json:"model"`
-	ModelProviders map[string]ProviderConfig `yaml:"model_providers" json:"model_providers"`
-	Agents         []AgentEntry              `yaml:"agents" json:"agents"`
-	Skill          SkillConfig               `yaml:"skill" json:"skill"`
-	MCP            MCPConfig                 `yaml:"mcp" json:"mcp"`
-	Tools          ToolsConfig               `yaml:"tools" json:"tools"`
+	ModelProvider  string                         `yaml:"model_provider" json:"model_provider"`
+	Model          string                         `yaml:"model" json:"model"`
+	ModelProviders map[string]ProviderConfig      `yaml:"model_providers" json:"model_providers"`
+	Agents         []AgentEntry                   `yaml:"agents" json:"agents"`
+	Skill          SkillConfig                    `yaml:"skill" json:"skill"`
+	MCP            MCPConfig                      `yaml:"mcp" json:"mcp"`
+	Tools          ToolsConfig                    `yaml:"tools" json:"tools"`
+	LSP            LSPConfig                      `yaml:"lsp" json:"lsp"`
+	Formatters     map[string]lsp.FormatterConfig `yaml:"formatters" json:"formatters"`
 }
 
 // AgentEntry defines a configurable agent that can be referenced by name.
@@ -85,6 +89,10 @@ type ToolsConfig struct {
 	Rules    []RuleConfig `yaml:"rules" json:"rules"`
 }
 
+type LSPConfig struct {
+	Servers map[string]lsp.ServerConfig `yaml:"servers" json:"servers"`
+}
+
 func Load(opts Options) (Config, error) {
 	var cfg Config
 
@@ -116,6 +124,26 @@ func Load(opts Options) (Config, error) {
 			migrateToJSON(jsonPath, cfg)
 		}
 	}
+	if opts.ProjectDir != "" {
+		projectJSON := filepath.Join(opts.ProjectDir, ".monika", "config.json")
+		if err := migrateLSPJSON(opts.ProjectDir); err != nil {
+			fmt.Fprintf(os.Stderr, "[monika] lsp.json migration: %v\n", err)
+		} else if _, err := os.Stat(projectJSON); err == nil {
+			// Re-read migrated LSP servers into in-memory config
+			migratedData, err := os.ReadFile(projectJSON)
+			if err == nil {
+				var migratedCfg Config
+				if err := json.Unmarshal(migratedData, &migratedCfg); err == nil && len(migratedCfg.LSP.Servers) > 0 {
+					if cfg.LSP.Servers == nil {
+						cfg.LSP.Servers = make(map[string]lsp.ServerConfig)
+					}
+					for name, srv := range migratedCfg.LSP.Servers {
+						cfg.LSP.Servers[name] = srv
+					}
+				}
+			}
+		}
+	}
 	return cfg, nil
 }
 
@@ -132,7 +160,7 @@ func mergeFile(dst *Config, path string) error {
 	if err := yaml.Unmarshal(data, &src); err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
-	merge(dst, src)
+	Merge(dst, src)
 	return nil
 }
 
@@ -148,11 +176,11 @@ func mergeFileJSON(dst *Config, path string) error {
 	if err := json.Unmarshal(data, &src); err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
-	merge(dst, src)
+	Merge(dst, src)
 	return nil
 }
 
-func merge(dst *Config, src Config) {
+func Merge(dst *Config, src Config) {
 	if src.ModelProvider != "" {
 		dst.ModelProvider = src.ModelProvider
 	}
@@ -250,6 +278,22 @@ func merge(dst *Config, src Config) {
 			} else {
 				dst.Agents = append(dst.Agents, a)
 			}
+		}
+	}
+	if len(src.LSP.Servers) > 0 {
+		if dst.LSP.Servers == nil {
+			dst.LSP.Servers = make(map[string]lsp.ServerConfig, len(src.LSP.Servers))
+		}
+		for name, srv := range src.LSP.Servers {
+			dst.LSP.Servers[name] = srv
+		}
+	}
+	if len(src.Formatters) > 0 {
+		if dst.Formatters == nil {
+			dst.Formatters = make(map[string]lsp.FormatterConfig, len(src.Formatters))
+		}
+		for lang, fc := range src.Formatters {
+			dst.Formatters[lang] = fc
 		}
 	}
 }

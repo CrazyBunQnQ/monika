@@ -102,10 +102,7 @@ export default function AboutTab() {
 
       {/* App info */}
       <div className="mb-6 p-4 rounded-lg bg-[var(--bg-surface)] border border-[var(--border)]">
-        <div className="flex items-center gap-3 mb-3">
-          <div className="w-10 h-10 rounded-lg bg-[var(--accent)] flex items-center justify-center text-white font-bold text-lg">
-            M
-          </div>
+        <div className="mb-3">
           <div>
             <h3 className="text-[14px] font-semibold">Monika</h3>
             <p className="text-[12px] text-[var(--text-secondary)]">Agentic coding editor</p>

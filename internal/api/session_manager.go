@@ -129,6 +129,18 @@ func (sm *SessionManager) SetStatus(s *Session, status string) {
 	s.Status = status
 }
 
+func (sm *SessionManager) AppendShellMessages(sessionID string, msgs []engine.ChatMessage) error {
+	sm.Lock()
+	defer sm.Unlock()
+
+	s, err := sm.Load(sessionID)
+	if err != nil {
+		return err
+	}
+	s.Messages = append(s.Messages, msgs...)
+	return sm.Save(s)
+}
+
 func (sm *SessionManager) Delete(id string) error {
 	p := filepath.Join(sm.sessionsDir, id+".json")
 	return os.Remove(p)

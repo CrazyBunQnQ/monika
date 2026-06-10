@@ -53,21 +53,21 @@ func CloseLogFile() {
 }
 
 type Client struct {
-	name         string
-	transport    *Transport
-	cmd          *exec.Cmd
-	nextID       atomic.Int64
-	mu           sync.Mutex
-	pending      map[int64]chan *jsonRPCResponse
-	diags        map[string][]Diagnostic
-	diagSeq      map[string]int64
-	diagMu       sync.RWMutex
-	serverCaps   ServerCapabilities
-	settings     map[string]any
-	ready        bool
+	name              string
+	transport         *Transport
+	cmd               *exec.Cmd
+	nextID            atomic.Int64
+	mu                sync.Mutex
+	pending           map[int64]chan *jsonRPCResponse
+	diags             map[string][]Diagnostic
+	diagSeq           map[string]int64
+	diagMu            sync.RWMutex
+	serverCaps        ServerCapabilities
+	settings          map[string]any
+	ready             bool
 	shutdownRequested atomic.Bool
 	shutdownOnce      sync.Once
-	done         chan struct{}
+	done              chan struct{}
 
 	// $/progress tracking
 	activeProgressTokens map[any]struct{}
@@ -139,11 +139,11 @@ func (c *Client) Initialize(ctx context.Context, rootURI string, initOptions any
 					ResolveSupport: &CodeActionResolveSupport{Properties: []string{"edit"}},
 				},
 				PublishDiagnostics: &PublishDiagnosticsCapabilities{
-					RelatedInformation: true,
-					VersionSupport:     true,
+					RelatedInformation:     true,
+					VersionSupport:         true,
 					CodeDescriptionSupport: true,
-					DataSupport:        true,
-					TagSupport:         &PublishDiagnosticsTagSupport{ValueSet: []int{1, 2}},
+					DataSupport:            true,
+					TagSupport:             &PublishDiagnosticsTagSupport{ValueSet: []int{1, 2}},
 				},
 			},
 			Workspace: &WorkspaceClientCapabilities{
@@ -505,6 +505,7 @@ func (c *Client) readLoop() {
 			exitCode = c.cmd.ProcessState.ExitCode()
 		}
 		errMsg := fmt.Sprintf("lsp %s: connection closed (exit code %d)", c.name, exitCode)
+		lspLog("%s", errMsg)
 
 		c.mu.Lock()
 		pending := make(map[int64]chan *jsonRPCResponse, len(c.pending))
@@ -632,14 +633,35 @@ func (c *Client) handleServerNotification(method string, params json.RawMessage)
 			c.diagSeq[uri]++
 			c.diagMu.Unlock()
 		}
+	case "window/logMessage":
+		var msg struct {
+			Type    int    `json:"type"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(params, &msg) == nil {
+			lspLog("server %s logMessage [%d]: %s", c.name, msg.Type, msg.Message)
+		} else {
+			lspLog("server %s logMessage (raw): %s", c.name, string(params))
+		}
+	case "window/showMessage":
+		var msg struct {
+			Type    int    `json:"type"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(params, &msg) == nil {
+			lspLog("server %s showMessage [%d]: %s", c.name, msg.Type, msg.Message)
+		} else {
+			lspLog("server %s showMessage (raw): %s", c.name, string(params))
+		}
 	case "$/progress":
 		var progressParams struct {
-			Token any    `json:"token"`
+			Token any `json:"token"`
 			Value struct {
 				Kind string `json:"kind"`
 			} `json:"value"`
 		}
 		if json.Unmarshal(params, &progressParams) == nil {
+			lspLog("server %s progress: token=%v kind=%s", c.name, progressParams.Token, progressParams.Value.Kind)
 			c.progressMu.Lock()
 			switch progressParams.Value.Kind {
 			case "begin":
@@ -654,6 +676,8 @@ func (c *Client) handleServerNotification(method string, params json.RawMessage)
 			}
 			c.progressMu.Unlock()
 		}
+	default:
+		lspLog("server %s unhandled notification: method=%s params=%s", c.name, method, string(params))
 	}
 }
 
@@ -746,8 +770,8 @@ func parseLocations(raw json.RawMessage) ([]Location, error) {
 	}
 
 	var links []struct {
-		TargetURI string `json:"targetUri"`
-		TargetRange Range `json:"targetRange"`
+		TargetURI   string `json:"targetUri"`
+		TargetRange Range  `json:"targetRange"`
 	}
 	if err := json.Unmarshal(raw, &links); err == nil {
 		result := make([]Location, 0, len(links))
@@ -798,6 +822,7 @@ func fileToURI(path string) string {
 	u := &url.URL{Scheme: "file", Path: abs}
 	return u.String()
 }
+
 // normalizeURI ensures consistent URI formatting for map lookups.
 // TS server returns URIs with percent-encoded colons (e.g. d%3A),
 // while fileToURI produces unencoded colons (e.g. d:).
@@ -819,7 +844,6 @@ func normalizeURI(uri string) string {
 	}
 	return "file://" + path
 }
-
 
 func uriToPath(uri string) string {
 	u, err := url.Parse(uri)
