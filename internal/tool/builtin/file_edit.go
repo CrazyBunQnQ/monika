@@ -69,9 +69,6 @@ func (f *fileEdit) Execute(ctx context.Context, args json.RawMessage) (tool.Exec
 		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 	}
 
-	if params.NewString == "" {
-		return tool.ExecutionResult{Content: "new_string is required and must not be empty", IsError: true}, nil
-	}
 	if params.Anchor == "" {
 		return tool.ExecutionResult{Content: "anchor must not be empty", IsError: true}, nil
 	}
