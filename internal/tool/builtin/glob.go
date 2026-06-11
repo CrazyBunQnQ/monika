@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/bmatcuk/doublestar/v4"
+
 	"monika/internal/tool"
 )
 
@@ -18,7 +20,7 @@ func NewGlob(projectDir string) tool.Tool {
 	return &globTool{projectDir: projectDir}
 }
 
-func (g *globTool) Name() string        { return "glob" }
+func (g *globTool) Name() string { return "glob" }
 func (g *globTool) Description() string {
 	return "Find files matching a glob pattern. Use to discover project structure before targeting specific files with grep or file_read. Supports standard glob syntax (e.g., '**/*.go', 'src/**/*.tsx')."
 }
@@ -77,7 +79,7 @@ func (g *globTool) Execute(ctx context.Context, args json.RawMessage) (tool.Exec
 	}
 
 	fullPattern := filepath.Join(searchDir, params.Pattern)
-	matches, err := filepath.Glob(fullPattern)
+	matches, err := doublestar.FilepathGlob(fullPattern)
 	if err != nil {
 		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 	}

@@ -167,8 +167,20 @@ func TestGlob(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "c.txt"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	subDir := filepath.Join(dir, "sub")
+	if err := os.Mkdir(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "deep.tsx"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "deep.go"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	f := NewGlob(dir)
+
+	// test 1: simple *.go
 	args, _ := json.Marshal(map[string]any{"pattern": "*.go"})
 	result, err := f.Execute(context.Background(), args)
 	if err != nil {
@@ -176,6 +188,45 @@ func TestGlob(t *testing.T) {
 	}
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.Content)
+	}
+
+	// test 2: recursive **/*.go
+	args, _ = json.Marshal(map[string]any{"pattern": "**/*.go"})
+	result, err = f.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "sub"+string(filepath.Separator)+"deep.go") {
+		t.Fatalf("recursive glob should find deep.go, got: %s", result.Content)
+	}
+
+	// test 3: recursive **/*.tsx
+	args, _ = json.Marshal(map[string]any{"pattern": "**/*.tsx"})
+	result, err = f.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "sub"+string(filepath.Separator)+"deep.tsx") {
+		t.Fatalf("recursive glob should find deep.tsx, got: %s", result.Content)
+	}
+
+	// test 4: wildcard match containing pattern **/*deep*
+	args, _ = json.Marshal(map[string]any{"pattern": "**/*deep*"})
+	result, err = f.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "deep.tsx") || !strings.Contains(result.Content, "deep.go") {
+		t.Fatalf("wildcard glob should find both deep files, got: %s", result.Content)
 	}
 }
 
