@@ -1,13 +1,12 @@
 package builtin
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -15,27 +14,21 @@ import (
 )
 
 type BgManager interface {
-	Start(command, workdir, shell, shellArg string) (string, error)
+	Start(command, workdir string) (string, error)
 	Stop(taskID string) error
 	Logs(taskID string, lines int) ([]string, error)
 }
 
 type bashTool struct {
 	projectDir string
-	shell      string
-	shellArg   string
 	bgMgr      BgManager
+	engine     *ShellEngine
 }
 
 func NewBash(projectDir string) (tool.Tool, error) {
-	shell, shellArg := resolveShell()
-	if shell == "" {
-		return nil, fmt.Errorf("no shell found on system")
-	}
 	return &bashTool{
 		projectDir: projectDir,
-		shell:      shell,
-		shellArg:   shellArg,
+		engine:     NewShellEngine(),
 	}, nil
 }
 
@@ -43,28 +36,29 @@ func (b *bashTool) SetBgManager(mgr BgManager) {
 	b.bgMgr = mgr
 }
 
+// ResolveShell returns the system shell path and argument.
+// Kept for informational purposes (e.g. system prompt display).
+// The shell engine no longer depends on a system shell, but this
+// is still used to display the shell name in the system prompt.
 func ResolveShell() (string, string) {
 	return resolveShell()
 }
 
 func resolveShell() (string, string) {
-	if runtime.GOOS == "windows" {
-		if path, err := exec.LookPath("pwsh"); err == nil {
-			return path, "-Command"
-		}
-		if path, err := exec.LookPath("powershell"); err == nil {
-			return path, "-Command"
-		}
-		if path, err := exec.LookPath("cmd"); err == nil {
-			return path, "/C"
-		}
-		return "", ""
-	}
 	if path, err := exec.LookPath("sh"); err == nil {
 		return path, "-c"
 	}
 	if path, err := exec.LookPath("bash"); err == nil {
 		return path, "-c"
+	}
+	if path, err := exec.LookPath("pwsh"); err == nil {
+		return path, "-Command"
+	}
+	if path, err := exec.LookPath("powershell"); err == nil {
+		return path, "-Command"
+	}
+	if path, err := exec.LookPath("cmd"); err == nil {
+		return path, "/C"
 	}
 	return "", ""
 }
@@ -190,32 +184,11 @@ func (b *bashTool) Execute(ctx context.Context, args json.RawMessage) (tool.Exec
 		if b.bgMgr == nil {
 			return tool.ExecutionResult{Content: "background tasks not available", IsError: true}, nil
 		}
-		workdir := tool.ProjectDirOrDefault(ctx, b.projectDir)
-		if params.Workdir != "" {
-			if !filepath.IsAbs(params.Workdir) {
-				return tool.ExecutionResult{Content: "workdir must be absolute", IsError: true}, nil
-			}
-			absProject, err := filepath.Abs(tool.ProjectDirOrDefault(ctx, b.projectDir))
-			if err != nil {
-				return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
-			}
-			if real, err := filepath.EvalSymlinks(absProject); err == nil {
-				absProject = real
-			}
-			absWD, err := filepath.Abs(params.Workdir)
-			if err != nil {
-				return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
-			}
-			if real, err := filepath.EvalSymlinks(absWD); err == nil {
-				absWD = real
-			}
-			rel, err := filepath.Rel(absProject, absWD)
-			if err != nil || strings.HasPrefix(rel, "..") {
-				return tool.ExecutionResult{Content: "workdir is outside project directory", IsError: true}, nil
-			}
-			workdir = absWD
+		workdir, err := b.resolveWorkdir(ctx, params.Workdir)
+		if err != nil {
+			return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 		}
-		taskID, err := b.bgMgr.Start(params.Command, workdir, b.shell, b.shellArg)
+		taskID, err := b.bgMgr.Start(params.Command, workdir)
 		if err != nil {
 			return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 		}
@@ -227,30 +200,9 @@ func (b *bashTool) Execute(ctx context.Context, args json.RawMessage) (tool.Exec
 }
 
 func (b *bashTool) executeRun(ctx context.Context, command, workdirParam string, timeoutSec int) (tool.ExecutionResult, error) {
-	workdir := tool.ProjectDirOrDefault(ctx, b.projectDir)
-	if workdirParam != "" {
-		if !filepath.IsAbs(workdirParam) {
-			return tool.ExecutionResult{Content: "workdir must be absolute", IsError: true}, nil
-		}
-		absProject, err := filepath.Abs(tool.ProjectDirOrDefault(ctx, b.projectDir))
-		if err != nil {
-			return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
-		}
-		if real, err := filepath.EvalSymlinks(absProject); err == nil {
-			absProject = real
-		}
-		absWD, err := filepath.Abs(workdirParam)
-		if err != nil {
-			return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
-		}
-		if real, err := filepath.EvalSymlinks(absWD); err == nil {
-			absWD = real
-		}
-		rel, err := filepath.Rel(absProject, absWD)
-		if err != nil || strings.HasPrefix(rel, "..") {
-			return tool.ExecutionResult{Content: "workdir is outside project directory", IsError: true}, nil
-		}
-		workdir = absWD
+	workdir, err := b.resolveWorkdir(ctx, workdirParam)
+	if err != nil {
+		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 	}
 
 	const defaultTimeout = 120
@@ -267,27 +219,20 @@ func (b *bashTool) executeRun(ctx context.Context, command, workdirParam string,
 	timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(timeoutCtx, b.shell, b.shellArg, command)
-	cmd.Dir = workdir
-	hideWindow(cmd)
+	result := b.engine.Run(timeoutCtx, command, workdir, os.Environ())
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	out := stdout.String()
-	if errStderr := stderr.String(); errStderr != "" {
+	out := result.Stdout
+	if result.Stderr != "" {
 		if out != "" {
 			out += "\n"
 		}
-		out += errStderr
+		out += result.Stderr
 	}
-	if out == "" && err != nil {
-		out = err.Error()
+	if out == "" && result.ExitCode != 0 {
+		out = fmt.Sprintf("exit code %d", result.ExitCode)
 	}
 
-	isError := err != nil
+	isError := result.ExitCode != 0
 	out = strings.TrimSpace(out)
 
 	const maxOutputChars = 30000
@@ -301,4 +246,33 @@ func (b *bashTool) executeRun(ctx context.Context, command, workdirParam string,
 	}
 
 	return tool.ExecutionResult{Content: out, IsError: isError}, nil
+}
+
+func (b *bashTool) resolveWorkdir(ctx context.Context, workdirParam string) (string, error) {
+	workdir := tool.ProjectDirOrDefault(ctx, b.projectDir)
+	if workdirParam == "" {
+		return workdir, nil
+	}
+	if !filepath.IsAbs(workdirParam) {
+		return "", fmt.Errorf("workdir must be absolute")
+	}
+	absProject, err := filepath.Abs(tool.ProjectDirOrDefault(ctx, b.projectDir))
+	if err != nil {
+		return "", err
+	}
+	if real, err := filepath.EvalSymlinks(absProject); err == nil {
+		absProject = real
+	}
+	absWD, err := filepath.Abs(workdirParam)
+	if err != nil {
+		return "", err
+	}
+	if real, err := filepath.EvalSymlinks(absWD); err == nil {
+		absWD = real
+	}
+	rel, err := filepath.Rel(absProject, absWD)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("workdir is outside project directory")
+	}
+	return absWD, nil
 }

@@ -8,8 +8,17 @@ const ICON_SVG: Record<string, string> = {
 
 export function renderChipHTML(type: string, text: string): string {
     const svg = ICON_SVG[type] || ''
-    return `<span contenteditable="false" data-type="${type}" style="display:inline;background:var(--bg-elevated);box-shadow:0 0 0 1px var(--border-strong);color:var(--text-primary);border-radius:4px;padding:0 4px;white-space:nowrap;font-size:inherit;line-height:inherit;font-family:inherit;user-select:none">${svg}${escapeHTML(text)}</span>`
+    let display = escapeHTML(text)
+    if (type === 'file') {
+        // Hide @ and [] markers visually — the file icon already indicates reference type
+        display = display
+            .replace(/^@/, '<span style="display:none">@</span>')
+            .replace(/^\[/, '<span style="display:none">[</span>')
+            .replace(/\]$/, '<span style="display:none">]</span>')
+    }
+    return `<span contenteditable="false" data-type="${type}" style="display:inline;background:var(--bg-elevated);box-shadow:0 0 0 1px var(--border-strong);color:var(--text-primary);border-radius:4px;padding:0 4px;white-space:nowrap;font-size:inherit;line-height:inherit;font-family:inherit;user-select:none">${svg}${display}</span>`
 }
+
 
 function escapeHTML(s: string): string {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')

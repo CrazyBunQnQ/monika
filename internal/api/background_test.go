@@ -10,8 +10,7 @@ func TestBackgroundTaskManagerStartStop(t *testing.T) {
 	mgr := NewBackgroundTaskManager()
 	defer mgr.Cleanup()
 
-	shell, shellArg := "cmd", "/C"
-	id, err := mgr.Start("echo hello", ".", shell, shellArg)
+	id, err := mgr.Start("echo hello", ".")
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -58,8 +57,7 @@ func TestBackgroundTaskManagerStop(t *testing.T) {
 	defer mgr.Cleanup()
 
 	// Start a long-running process: ping with high count
-	shell, shellArg := "cmd", "/C"
-	id, err := mgr.Start("ping -n 30 127.0.0.1", ".", shell, shellArg)
+	id, err := mgr.Start("ping -n 30 127.0.0.1", ".")
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -141,8 +139,7 @@ func TestBackgroundTaskManagerSubscribe(t *testing.T) {
 
 	ch := mgr.Subscribe()
 
-	shell, shellArg := "cmd", "/C"
-	id, err := mgr.Start("echo test-subscribe", ".", shell, shellArg)
+	id, err := mgr.Start("echo test-subscribe", ".")
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}

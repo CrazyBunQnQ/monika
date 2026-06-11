@@ -5,13 +5,13 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os/exec"
-	"runtime"
+	"os"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/google/uuid"
+
+	"monika/internal/tool/builtin"
 )
 
 // BgTaskStatus represents the current state of a background task.
@@ -104,7 +104,6 @@ func (rb *ringBuffer) LastN(n int) []string {
 type bgTask struct {
 	info    BgTaskInfo
 	ringBuf *ringBuffer
-	cmd     *exec.Cmd
 	cancel  context.CancelFunc
 }
 
@@ -118,6 +117,7 @@ type BackgroundTaskManager struct {
 	mu          sync.Mutex
 	tasks       map[string]*bgTask
 	subscribers map[chan BgTaskEvent]struct{}
+	engine      *builtin.ShellEngine
 }
 
 // NewBackgroundTaskManager creates a new BackgroundTaskManager.
@@ -125,49 +125,46 @@ func NewBackgroundTaskManager() *BackgroundTaskManager {
 	return &BackgroundTaskManager{
 		tasks:       make(map[string]*bgTask),
 		subscribers: make(map[chan BgTaskEvent]struct{}),
+		engine:      builtin.NewShellEngine(),
 	}
 }
 
 // Start begins a background process and returns its task ID.
-func (m *BackgroundTaskManager) Start(command, workdir, shell, shellArg string) (string, error) {
+func (m *BackgroundTaskManager) Start(command, workdir string) (string, error) {
+	id := uuid.New().String()
+	ringBuf := newRingBuffer(defaultRingBufferSize)
+
 	ctx, cancel := context.WithCancel(context.Background())
 
-	cmd := exec.CommandContext(ctx, shell, shellArg, command)
-	cmd.Dir = workdir
-	hideWindow(cmd)
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		cancel()
-		return "", fmt.Errorf("stdout pipe: %w", err)
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		cancel()
-		stdout.Close()
-		return "", fmt.Errorf("stderr pipe: %w", err)
+	onLine := func(line string) {
+		line = stripANSI(line)
+		ringBuf.Write(line)
+		m.emit(BgTaskEvent{
+			Type:    BgEventLog,
+			TaskID:  id,
+			LogLine: line,
+		})
 	}
 
-	if err := cmd.Start(); err != nil {
+	bgCancel, exitCh, err := m.engine.StartBackground(ctx, command, workdir, os.Environ(), onLine)
+	if err != nil {
 		cancel()
-		stdout.Close()
-		stderr.Close()
 		return "", fmt.Errorf("start process: %w", err)
 	}
 
-	id := uuid.New().String()
 	task := &bgTask{
 		info: BgTaskInfo{
 			ID:        id,
 			Command:   command,
 			WorkDir:   workdir,
-			PID:       cmd.Process.Pid,
 			Status:    BgTaskRunning,
 			StartedAt: time.Now(),
 		},
-		ringBuf: newRingBuffer(defaultRingBufferSize),
-		cmd:     cmd,
-		cancel:  cancel,
+		ringBuf: ringBuf,
+		cancel: func() {
+			bgCancel()
+			cancel()
+		},
 	}
 
 	m.mu.Lock()
@@ -179,12 +176,10 @@ func (m *BackgroundTaskManager) Start(command, workdir, shell, shellArg string) 
 		TaskID:  id,
 		Command: command,
 		WorkDir: workdir,
-		PID:     cmd.Process.Pid,
 		Status:  BgTaskRunning,
 	})
 
-	go m.readLogs(id, stdout, stderr)
-	go m.waitExit(id)
+	go m.waitExit(id, exitCh)
 
 	return id, nil
 }
@@ -204,12 +199,8 @@ func (m *BackgroundTaskManager) Stop(taskID string) error {
 	task.info.Status = BgTaskStopped
 	m.mu.Unlock()
 
-	if runtime.GOOS == "windows" {
-		killCmd := exec.Command("taskkill", "/PID", fmt.Sprintf("%d", task.info.PID), "/T", "/F")
-		killCmd.Run()
-	} else {
-		task.cmd.Process.Signal(syscall.SIGINT)
-	}
+	// Cancel the context — mvdan/sh will propagate to child processes.
+	task.cancel()
 
 	task.cancel()
 
@@ -279,46 +270,16 @@ func (m *BackgroundTaskManager) Cleanup() {
 	m.mu.Unlock()
 }
 
-func (m *BackgroundTaskManager) readLogs(taskID string, stdout, stderr io.ReadCloser) {
-	readPipe := func(r io.Reader) {
-		scanner := bufio.NewScanner(r)
-		for scanner.Scan() {
-			line := stripANSI(scanner.Text())
-			m.mu.Lock()
-			task, ok := m.tasks[taskID]
-			m.mu.Unlock()
-			if !ok {
-				return
-			}
-			task.ringBuf.Write(line)
-			m.emit(BgTaskEvent{
-				Type:    BgEventLog,
-				TaskID:  taskID,
-				LogLine: line,
-			})
-		}
-	}
+func (m *BackgroundTaskManager) waitExit(taskID string, exitCh <-chan int) {
+	code := <-exitCh
 
-	go readPipe(stdout)
-	readPipe(stderr)
-}
-
-func (m *BackgroundTaskManager) waitExit(taskID string) {
 	m.mu.Lock()
 	task, ok := m.tasks[taskID]
-	m.mu.Unlock()
 	if !ok {
+		m.mu.Unlock()
 		return
 	}
-
-	err := task.cmd.Wait()
-
-	m.mu.Lock()
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			task.info.ExitCode = exitErr.ExitCode()
-		}
-	}
+	task.info.ExitCode = code
 	if task.info.Status == BgTaskRunning {
 		task.info.Status = BgTaskExited
 	}
@@ -343,3 +304,8 @@ func (m *BackgroundTaskManager) emit(ev BgTaskEvent) {
 		}
 	}
 }
+
+// unused: kept for reference — the old readLogs pattern is no longer needed
+// since mvdan/sh streams lines via the onLine callback.
+var _ = bufio.Scanner{}
+var _ = io.ReadCloser(nil)

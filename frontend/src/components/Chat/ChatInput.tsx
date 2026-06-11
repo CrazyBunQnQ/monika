@@ -167,7 +167,12 @@ function renderContentHTML(value: string, labels: LabelRegion[]): string {
         lastEnd = label.end
     }
     parts.push(escapeHTML(value.slice(lastEnd)))
-    return parts.join('')
+    const html = parts.join('')
+    // Ensure a text insertion point exists when content ends with a chip
+    if (labels.length > 0 && labels[labels.length - 1].end === value.length) {
+        return html + '<br>'
+    }
+    return html
 }
 
 function escapeHTML(s: string): string {
@@ -216,6 +221,7 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
     const pasteStoreRef = useRef<Map<string, string>>(new Map())
     const isComposingRef = useRef(false)
     const pendingCursorRef = useRef<number | null>(null)
+    const lastCursorRef = useRef(0)
 
     const skills = useStore((s) => s.skills)
     const skillNames = useMemo(() => new Set(skills.map((s) => s.name)), [skills])
@@ -253,9 +259,14 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
         isRenderingRef.current = true
         el.innerHTML = renderContentHTML(value, labels)
         isRenderingRef.current = false
+        // Force Chromium's contentEditable engine to reinitialize after innerHTML replacement.
+        // Prevents input becoming unresponsive when restoring focus after re-render.
+        el.contentEditable = 'false'
+        el.contentEditable = 'true'
         if (cursor !== null && hadFocus) {
             pendingCursorRef.current = null
             setCaretAtOffset(el, Math.min(cursor, value.length))
+            el.focus()
         }
     }, [labels])
 
@@ -307,7 +318,7 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
         if (!el) return
         el.style.height = 'auto'
         const h = el.scrollHeight
-        if (h > 0) el.style.height = `${Math.min(h, 400)}px`
+        if (h > 0) el.style.height = `${Math.min(h, 600)}px`
     }, [value])
 
     // Clean up paste markers
@@ -325,13 +336,18 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
         if (!appendPath || !projectPath) return
         const el = editorRef.current
         if (!el) return
-        const cursor = getTextOffset(el)
+        // If editor no longer has selection (user clicked FileTree), use last known cursor position
+        const sel = window.getSelection()
+        const cursor = (sel && sel.rangeCount && el.contains(sel.anchorNode))
+            ? getTextOffset(el)
+            : lastCursorRef.current
         const prefix = value.slice(0, cursor).endsWith('@') ? '' : '@'
         const insertion = `${prefix}${appendPath} `
         const newValue = value.slice(0, cursor) + insertion + value.slice(cursor)
         setValue(newValue)
         appendPathToInput('')
         pendingCursorRef.current = cursor + insertion.length
+        lastCursorRef.current = cursor + insertion.length
     }, [appendPath])
 
     // Initial focus
@@ -341,7 +357,7 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
             if (!el) return
             el.style.height = 'auto'
             const h = el.scrollHeight
-            el.style.height = h > 0 ? `${Math.min(h, 400)}px` : ''
+            el.style.height = h > 0 ? `${Math.min(h, 600)}px` : ''
             if (!disabled) el.focus()
         })
         return () => cancelAnimationFrame(timer)
@@ -355,7 +371,9 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
         if (text === valueRef.current) return
         setValue(text)
         // getTextOffset can return bogus values when chips contain SVG (e.g. <br> adds '\n')
-        pendingCursorRef.current = Math.min(getTextOffset(el), text.length)
+        const cursor = Math.min(getTextOffset(el), text.length)
+        pendingCursorRef.current = cursor
+        lastCursorRef.current = cursor
     }, [])
 
     const handleCompositionStart = useCallback(() => {
@@ -369,7 +387,9 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
         const text = extractText(el)
         if (text === valueRef.current) return
         setValue(text)
-        pendingCursorRef.current = Math.min(getTextOffset(el), text.length)
+        const cursor = Math.min(getTextOffset(el), text.length)
+        pendingCursorRef.current = cursor
+        lastCursorRef.current = cursor
     }, [])
 
     const handlePaste = useCallback((e: React.ClipboardEvent) => {
@@ -547,7 +567,7 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
         setAc({ open: false, items: [], selectedIdx: 0, prefix: '' })
         pendingCursorRef.current = replaceStart + item.insert.length
     }
-    
+
     const closeAutocomplete = useCallback(() => {
         setAc(s => ({ ...s, open: false }))
     }, [])
@@ -715,7 +735,7 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
                     onCompositionEnd={handleCompositionEnd}
                     onPaste={handlePaste}
                     onKeyDown={handleKeyDown}
-                    className="text-[13px] text-[var(--text-primary)] outline-none px-[14px] pt-[12px] pb-[6px] resize-none w-full bg-transparent overflow-hidden whitespace-pre-wrap break-words border-0 min-h-[80px]"
+                    className="text-[13px] text-[var(--text-primary)] outline-none px-[14px] pt-[12px] pb-[6px] resize-none w-full bg-transparent overflow-hidden whitespace-pre-wrap break-words border-0 min-h-[160px]"
                     style={{
                         fontFamily: 'inherit',
                         letterSpacing: 'inherit',

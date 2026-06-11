@@ -169,6 +169,10 @@ func main() {
 	ps := agent.PromptForModel(pr.Model)
 	shellPath, _ := builtin.ResolveShell()
 	shellName := filepath.Base(shellPath)
+	if shellName == "" {
+		shellName = "sh"
+	}
+	shellName += " (mvdan/sh)"
 	systemParts := []string{
 		fmt.Sprintf("Current date: %s\nOS Version: %s\nWorking directory: {{WorkingDirectory}}\nShell: %s", time.Now().Format("2006-01-02"), runtime.GOOS, shellName),
 		ps.Identity,
