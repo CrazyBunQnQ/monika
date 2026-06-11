@@ -327,8 +327,12 @@ func (m *DBManager) markConnFailed(name string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if mc, ok := m.conns[name]; ok {
+		if mc.dbConn != nil {
+			old := mc.dbConn
+			mc.dbConn = nil
+			go old.Close()
+		}
 		mc.ready = false
-		mc.dbConn = nil
 	}
 }
 

@@ -15,7 +15,7 @@ var readOnlyCommands = map[string]bool{
 	"HGET": true, "HGETALL": true, "LRANGE": true, "SMEMBERS": true,
 	"ZCARD": true, "ZSCORE": true, "ZRANGE": true, "SCARD": true,
 	"SISMEMBER": true, "EXISTS": true, "TTL": true, "STRLEN": true,
-	"INFO": true, "DBSIZE": true,
+	"INFO": true, "DBSIZE": true, "PING": true,
 }
 
 func init() {

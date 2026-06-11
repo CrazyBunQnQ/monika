@@ -119,7 +119,7 @@ function isReadOnlyCTE(query) {
   return false;
 }
 
-const REDIS_READONLY = /^(GET|MGET|TYPE|SCAN|HGET|HGETALL|LRANGE|SMEMBERS|ZCARD|ZSCORE|ZRANGE|SCARD|SISMEMBER|EXISTS|TTL|STRLEN)\b/i;
+const REDIS_READONLY = /^(GET|MGET|TYPE|SCAN|HGET|HGETALL|LRANGE|SMEMBERS|ZCARD|ZSCORE|ZRANGE|SCARD|SISMEMBER|EXISTS|TTL|STRLEN|INFO|DBSIZE)\b/i;
 
 function validateMongoFilter(obj) {
     if (typeof obj !== "object" || obj === null) return;
