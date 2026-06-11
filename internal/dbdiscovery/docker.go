@@ -182,22 +182,21 @@ func buildDockerDSN(driver string, env map[string]string, port string) string {
 				pass = rootPass
 			}
 		}
-		if pass != "" {
-			pass = url.QueryEscape(pass)
+		u := &url.URL{
+			Scheme: "mysql",
+			Host:   fmt.Sprintf("%s:%s", host, port),
 		}
-		dsn := ""
 		if user != "" {
-			dsn += user
 			if pass != "" {
-				dsn += ":" + pass
+				u.User = url.UserPassword(user, pass)
+			} else {
+				u.User = url.User(user)
 			}
-			dsn += "@"
 		}
-		dsn += fmt.Sprintf("tcp(%s:%s)", host, port)
 		if db != "" {
-			dsn += "/" + db
+			u.Path = "/" + db
 		}
-		return dsn
+		return u.String()
 	case "redis":
 		return fmt.Sprintf("redis://%s:%s", host, port)
 	case "mongo":
@@ -208,7 +207,7 @@ func buildDockerDSN(driver string, env map[string]string, port string) string {
 			dbName = "admin"
 		}
 		if user != "" && pass != "" {
-			return fmt.Sprintf("mongodb://%s:%s@%s:%s/%s", user, pass, host, port, dbName)
+			return fmt.Sprintf("mongodb://%s:%s@%s:%s/%s", url.QueryEscape(user), url.QueryEscape(pass), host, port, dbName)
 		}
 		return fmt.Sprintf("mongodb://%s:%s/%s", host, port, dbName)
 	}

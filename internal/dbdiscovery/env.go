@@ -2,7 +2,6 @@ package dbdiscovery
 
 import (
 	"bufio"
-	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -151,22 +150,7 @@ func parseDatabaseURL(raw, source, name string) *DiscoveredDB {
 }
 
 func mysqlURLToDSN(rawURL string) string {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return ""
-	}
-	host := u.Hostname()
-	port := u.Port()
-	if port == "" {
-		port = "3306"
-	}
-	user := u.User.Username()
-	pass, _ := u.User.Password()
-	db := strings.TrimPrefix(u.Path, "/")
-	if pass != "" {
-		return fmt.Sprintf("%s:%s@tcp(%s:%s)/%s", user, pass, host, port, db)
-	}
-	return fmt.Sprintf("%s@tcp(%s:%s)/%s", user, host, port, db)
+	return rawURL
 }
 
 func quoteDSNValue(val string) string {
@@ -195,23 +179,24 @@ func buildDSN(driver, host, port, user, pass, dbname string) string {
 		dsn += " sslmode=prefer"
 		return dsn
 	case "mysql":
-		dsn := ""
-		if user != "" {
-			dsn += user
-			if pass != "" {
-				dsn += ":" + pass
-			}
-			dsn += "@"
+		u := &url.URL{
+			Scheme: "mysql",
+			Host:   host,
 		}
-		dsn += "tcp(" + host
 		if port != "" {
-			dsn += ":" + port
+			u.Host = host + ":" + port
 		}
-		dsn += ")"
+		if user != "" {
+			if pass != "" {
+				u.User = url.UserPassword(user, pass)
+			} else {
+				u.User = url.User(user)
+			}
+		}
 		if dbname != "" {
-			dsn += "/" + dbname
+			u.Path = "/" + dbname
 		}
-		return dsn
+		return u.String()
 	default:
 		return host
 	}

@@ -21,8 +21,9 @@ type DBManager struct {
 	bridge     *dbbridge.BridgeManager
 	runtime    string
 
-	schemaCache string
-	schemaMu    sync.RWMutex
+	schemaCache  string
+	schemaMu     sync.RWMutex
+	schemaCancel context.CancelFunc
 }
 
 type managedConn struct {
@@ -123,7 +124,11 @@ func (m *DBManager) Query(ctx context.Context, connName, query string) (*dbdrive
 	if mc.useBridge {
 		return m.queryBridge(connName, mc, query)
 	}
-	return mc.dbConn.Query(ctx, query)
+	result, err := mc.dbConn.Query(ctx, query)
+	if err != nil {
+		m.markConnFailed(connName)
+	}
+	return result, err
 }
 
 func (m *DBManager) Schema(ctx context.Context, connName, filter string) (*dbdriver.SchemaResult, error) {
@@ -135,7 +140,11 @@ func (m *DBManager) Schema(ctx context.Context, connName, filter string) (*dbdri
 	if mc.useBridge {
 		return m.schemaBridge(connName, mc, filter)
 	}
-	return mc.dbConn.Schema(ctx, filter)
+	result, err := mc.dbConn.Schema(ctx, filter)
+	if err != nil {
+		m.markConnFailed(connName)
+	}
+	return result, err
 }
 
 func (m *DBManager) SchemaSummary() string {
@@ -145,15 +154,23 @@ func (m *DBManager) SchemaSummary() string {
 }
 
 func (m *DBManager) StartSchemaBackground() {
+	ctx, cancel := context.WithCancel(context.Background())
+	m.mu.Lock()
+	if m.schemaCancel != nil {
+		m.schemaCancel()
+	}
+	m.schemaCancel = cancel
+	m.mu.Unlock()
+
 	go func() {
-		summary := m.computeSchemaSummary()
+		summary := m.computeSchemaSummary(ctx)
 		m.schemaMu.Lock()
 		m.schemaCache = summary
 		m.schemaMu.Unlock()
 	}()
 }
 
-func (m *DBManager) computeSchemaSummary() string {
+func (m *DBManager) computeSchemaSummary(ctx context.Context) string {
 	m.mu.RLock()
 	names := make([]string, 0, len(m.conns))
 	for name := range m.conns {
@@ -167,9 +184,15 @@ func (m *DBManager) computeSchemaSummary() string {
 
 	var summary strings.Builder
 	for _, name := range names {
+		select {
+		case <-ctx.Done():
+			return summary.String()
+		default:
+		}
+
 		mc := conns[name]
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		sr, err := m.Schema(ctx, name, "")
+		schemaCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		sr, err := m.Schema(schemaCtx, name, "")
 		cancel()
 		if err != nil {
 			fmt.Fprintf(&summary, "## %s (%s)\n  Schema unavailable\n\n", name, mc.info.Driver)
@@ -300,9 +323,23 @@ func (m *DBManager) resetConnectionStates() {
 	m.schemaMu.Unlock()
 }
 
+func (m *DBManager) markConnFailed(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if mc, ok := m.conns[name]; ok {
+		mc.ready = false
+		mc.dbConn = nil
+	}
+}
+
 func (m *DBManager) CloseAll() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if m.schemaCancel != nil {
+		m.schemaCancel()
+		m.schemaCancel = nil
+	}
 
 	for name, mc := range m.conns {
 		if mc.dbConn != nil {
@@ -482,4 +519,5 @@ func (m *DBManager) Reset(cache *dbdiscovery.CacheFile) {
 	m.mu.Unlock()
 
 	m.Init(cache)
+	m.StartSchemaBackground()
 }

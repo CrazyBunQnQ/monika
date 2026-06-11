@@ -1,6 +1,14 @@
 "use strict";
 const readline = require("readline");
 
+function mysqlGoToUrl(dsn) {
+  const tcpMatch = dsn.match(/^([^@]*)@tcp\(([^)]+)\)\/?(.*)$/);
+  if (tcpMatch) {
+    return "mysql://" + tcpMatch[1] + "@" + tcpMatch[2] + "/" + tcpMatch[3];
+  }
+  return dsn;
+}
+
 function quoteId(name) {
   return '"' + name.replace(/"/g, '""') + '"';
 }
@@ -53,7 +61,7 @@ async function doOpen(req) {
     }
     case "mysql": {
       const mysql = require("mysql2/promise");
-      client = await mysql.createConnection(dsn);
+      client = await mysql.createConnection(mysqlGoToUrl(dsn));
       break;
     }
     case "sqlite": {
@@ -113,6 +121,17 @@ function isReadOnlyCTE(query) {
 
 const REDIS_READONLY = /^(GET|MGET|TYPE|SCAN|HGET|HGETALL|LRANGE|SMEMBERS|ZCARD|ZSCORE|ZRANGE|SCARD|SISMEMBER|EXISTS|TTL|STRLEN)\b/i;
 
+function validateMongoFilter(obj) {
+    if (typeof obj !== "object" || obj === null) return;
+    const forbidden = ["$where", "$function", "$accumulator"];
+    for (const key of Object.keys(obj)) {
+        if (forbidden.includes(key)) {
+            throw new Error("Forbidden MongoDB operator: " + key);
+        }
+        validateMongoFilter(obj[key]);
+    }
+}
+
 async function doQuery(req) {
   const { driver, client } = getConn(req);
   const q = req.query;
@@ -148,6 +167,7 @@ async function doQuery(req) {
     const collection = queryObj.collection || "unknown";
     const filter = queryObj.filter || {};
     const limit = queryObj.limit || 100;
+    validateMongoFilter(filter);
     const db = client.db();
     const docs = await db.collection(collection).find(filter).limit(limit).toArray();
     if (docs.length === 0) return { columns: [], rows: [], tag: "FIND" };

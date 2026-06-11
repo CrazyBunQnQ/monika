@@ -1,7 +1,7 @@
 import sys
 import json
 import re
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 
 conns = {}
 
@@ -89,6 +89,7 @@ def do_open(req):
                 user, password = user_pass.split(":", 1)
             else:
                 user, password = user_pass, ""
+            password = unquote(password)
             paren_close = rest.index(")")
             host_port = rest[:paren_close]
             after = rest[paren_close + 1 :]
@@ -112,7 +113,7 @@ def do_open(req):
                 host=result.hostname or "localhost",
                 port=result.port or 3306,
                 user=result.username or "",
-                password=result.password or "",
+                password=unquote(result.password or ""),
                 database=result.path.lstrip("/") if result.path else "",
                 autocommit=True,
             )
@@ -134,6 +135,18 @@ def do_open(req):
 
     conns[conn_name] = {"driver": driver, "client": client}
     return {"conn": conn_name}
+
+
+def _validate_mongo_filter(obj):
+    forbidden = {"$where", "$function", "$accumulator"}
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k in forbidden:
+                raise Exception(f"Forbidden MongoDB operator: {k}")
+            _validate_mongo_filter(v)
+    elif isinstance(obj, list):
+        for item in obj:
+            _validate_mongo_filter(item)
 
 
 def do_query(req):
@@ -183,6 +196,7 @@ def do_query(req):
         collection_name = query_obj.get("collection", "unknown")
         filt = query_obj.get("filter", {})
         limit = query_obj.get("limit", 100)
+        _validate_mongo_filter(filt)
         db = client.get_default_database() or client.get_database()
         docs = list(db[collection_name].find(filt).limit(limit))
         if not docs:
