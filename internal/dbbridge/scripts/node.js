@@ -139,10 +139,17 @@ async function doQuery(req) {
   }
 
   if (driver === "mongo") {
-    const filter = req.filter ? JSON.parse(req.filter) : {};
+    let queryObj;
+    try {
+      queryObj = JSON.parse(q);
+    } catch {
+      queryObj = { collection: q, filter: {} };
+    }
+    const collection = queryObj.collection || "unknown";
+    const filter = queryObj.filter || {};
+    const limit = queryObj.limit || 100;
     const db = client.db();
-    const collection = db.collection(q);
-    const docs = await collection.find(filter).limit(100).toArray();
+    const docs = await db.collection(collection).find(filter).limit(limit).toArray();
     if (docs.length === 0) return { columns: [], rows: [], tag: "FIND" };
     const columns = Object.keys(docs[0]);
     return { columns, rows: docs.map((d) => columns.map((c) => d[c])), tag: "FIND" };
@@ -192,7 +199,17 @@ async function doSchema(req) {
     const keys = new Set();
     let stream = client.scanStream({ count: 100 });
     await new Promise((resolve, reject) => {
-      stream.on("data", (r) => r.forEach((k) => keys.add(k)));
+      let keyCount = 0;
+      stream.on("data", (r) => {
+        for (const k of r) {
+          keys.add(k);
+          keyCount++;
+          if (keyCount >= 200) {
+            stream.stop();
+            break;
+          }
+        }
+      });
       stream.on("end", resolve);
       stream.on("error", reject);
     });

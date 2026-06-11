@@ -2,6 +2,7 @@ package dbdiscovery
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -181,6 +182,9 @@ func buildDockerDSN(driver string, env map[string]string, port string) string {
 				pass = rootPass
 			}
 		}
+		if pass != "" {
+			pass = url.QueryEscape(pass)
+		}
 		dsn := ""
 		if user != "" {
 			dsn += user
@@ -199,10 +203,14 @@ func buildDockerDSN(driver string, env map[string]string, port string) string {
 	case "mongo":
 		user := env["MONGO_INITDB_ROOT_USERNAME"]
 		pass := env["MONGO_INITDB_ROOT_PASSWORD"]
-		if user != "" && pass != "" {
-			return fmt.Sprintf("mongodb://%s:%s@%s:%s", user, pass, host, port)
+		dbName := env["MONGO_INITDB_DATABASE"]
+		if dbName == "" {
+			dbName = "admin"
 		}
-		return fmt.Sprintf("mongodb://%s:%s", host, port)
+		if user != "" && pass != "" {
+			return fmt.Sprintf("mongodb://%s:%s@%s:%s/%s", user, pass, host, port, dbName)
+		}
+		return fmt.Sprintf("mongodb://%s:%s/%s", host, port, dbName)
 	}
 	return ""
 }

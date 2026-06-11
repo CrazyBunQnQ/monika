@@ -121,7 +121,7 @@ func (m *DBManager) Query(ctx context.Context, connName, query string) (*dbdrive
 	}
 
 	if mc.useBridge {
-		return m.queryBridge(mc, query)
+		return m.queryBridge(connName, mc, query)
 	}
 	return mc.dbConn.Query(ctx, query)
 }
@@ -133,27 +133,27 @@ func (m *DBManager) Schema(ctx context.Context, connName, filter string) (*dbdri
 	}
 
 	if mc.useBridge {
-		return m.schemaBridge(mc, filter)
+		return m.schemaBridge(connName, mc, filter)
 	}
 	return mc.dbConn.Schema(ctx, filter)
 }
 
 func (m *DBManager) SchemaSummary() string {
 	m.schemaMu.RLock()
-	if m.schemaCache != "" {
-		m.schemaMu.RUnlock()
-		return m.schemaCache
-	}
-	m.schemaMu.RUnlock()
+	defer m.schemaMu.RUnlock()
+	return m.schemaCache
+}
 
-	var summary strings.Builder
-	m.schemaMu.Lock()
-	if m.schemaCache != "" {
+func (m *DBManager) StartSchemaBackground() {
+	go func() {
+		summary := m.computeSchemaSummary()
+		m.schemaMu.Lock()
+		m.schemaCache = summary
 		m.schemaMu.Unlock()
-		return m.schemaCache
-	}
-	m.schemaMu.Unlock()
+	}()
+}
 
+func (m *DBManager) computeSchemaSummary() string {
 	m.mu.RLock()
 	names := make([]string, 0, len(m.conns))
 	for name := range m.conns {
@@ -165,13 +165,14 @@ func (m *DBManager) SchemaSummary() string {
 	}
 	m.mu.RUnlock()
 
+	var summary strings.Builder
 	for _, name := range names {
 		mc := conns[name]
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		sr, err := m.Schema(ctx, name, "")
 		cancel()
 		if err != nil {
-			fmt.Fprintf(&summary, "## %s (%s)\n  Error: %v\n\n", name, mc.info.Driver, err)
+			fmt.Fprintf(&summary, "## %s (%s)\n  Schema unavailable\n\n", name, mc.info.Driver)
 			continue
 		}
 
@@ -193,13 +194,7 @@ func (m *DBManager) SchemaSummary() string {
 		summary.WriteString("\n")
 	}
 
-	result := summary.String()
-
-	m.schemaMu.Lock()
-	m.schemaCache = result
-	m.schemaMu.Unlock()
-
-	return result
+	return summary.String()
 }
 
 func (m *DBManager) ListConnections() []ConnectionInfo {
@@ -242,7 +237,12 @@ func (m *DBManager) TestConnection(ctx context.Context, connName string) error {
 		if m.bridge == nil || !m.bridge.IsRunning() {
 			return fmt.Errorf("dbmanager: bridge not running for connection %q", connName)
 		}
-		return nil
+		_, err := m.bridge.Send(dbbridge.Request{
+			ID:     m.bridge.NextID(),
+			Action: "ping",
+			Conn:   connName,
+		})
+		return err
 	}
 	if mc.dbConn == nil {
 		return fmt.Errorf("dbmanager: connection %q has no underlying connection", connName)
@@ -388,15 +388,20 @@ func (m *DBManager) getConnection(ctx context.Context, connName string) (*manage
 	return mc, nil
 }
 
-func (m *DBManager) queryBridge(mc *managedConn, query string) (*dbdriver.QueryResult, error) {
+func (m *DBManager) queryBridge(connName string, mc *managedConn, query string) (*dbdriver.QueryResult, error) {
 	if m.bridge == nil {
 		return nil, fmt.Errorf("dbmanager: bridge not initialized")
+	}
+
+	conn := mc.info.Name
+	if conn == "" {
+		conn = connName
 	}
 
 	resp, err := m.bridge.Send(dbbridge.Request{
 		ID:     m.bridge.NextID(),
 		Action: "query",
-		Conn:   mc.info.Name,
+		Conn:   conn,
 		Query:  query,
 	})
 	if err != nil {
@@ -413,15 +418,20 @@ func (m *DBManager) queryBridge(mc *managedConn, query string) (*dbdriver.QueryR
 	}, nil
 }
 
-func (m *DBManager) schemaBridge(mc *managedConn, filter string) (*dbdriver.SchemaResult, error) {
+func (m *DBManager) schemaBridge(connName string, mc *managedConn, filter string) (*dbdriver.SchemaResult, error) {
 	if m.bridge == nil {
 		return nil, fmt.Errorf("dbmanager: bridge not initialized")
+	}
+
+	conn := mc.info.Name
+	if conn == "" {
+		conn = connName
 	}
 
 	resp, err := m.bridge.Send(dbbridge.Request{
 		ID:     m.bridge.NextID(),
 		Action: "schema",
-		Conn:   mc.info.Name,
+		Conn:   conn,
 		Filter: filter,
 	})
 	if err != nil {

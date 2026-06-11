@@ -101,6 +101,7 @@ func main() {
 	if cache != nil && len(cache.Connections) > 0 {
 		dbMgr = api.NewDBManager(cwd)
 		dbMgr.Init(cache)
+		dbMgr.StartSchemaBackground()
 		builtin.RegisterDatabase(registry, dbMgr)
 	}
 
@@ -220,6 +221,8 @@ Once you identify the right skill or tool, load it with **skill** or call the MC
 	if dbMgr != nil {
 		if summary := dbMgr.SchemaSummary(); summary != "" {
 			systemParts = append(systemParts, summary)
+		} else {
+			systemParts = append(systemParts, "## Database Schema\nDatabase schema is loading in background and will be available in subsequent queries.")
 		}
 	}
 

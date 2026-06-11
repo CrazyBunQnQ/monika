@@ -176,13 +176,18 @@ def do_query(req):
     if driver == "mongo":
         import pymongo
 
-        filt = json.loads(req.get("filter", "{}"))
+        try:
+            query_obj = json.loads(q)
+        except (json.JSONDecodeError, TypeError):
+            query_obj = {"collection": q, "filter": {}}
+        collection_name = query_obj.get("collection", "unknown")
+        filt = query_obj.get("filter", {})
+        limit = query_obj.get("limit", 100)
         db = client.get_default_database() or client.get_database()
-        docs = list(db[q].find(filt).limit(100))
+        docs = list(db[collection_name].find(filt).limit(limit))
         if not docs:
             return {"columns": [], "rows": [], "tag": "FIND"}
         columns = list(docs[0].keys())
-        rows = [doc.get(c) for doc in docs for c in [columns]]
         rows = [[doc.get(c) for c in columns] for doc in docs]
         return {"columns": columns, "rows": rows, "tag": "FIND"}
 
@@ -278,9 +283,12 @@ def do_schema(req):
     if driver == "redis":
         keys = set()
         cursor = 0
-        while True:
+        while len(keys) < 200:
             cursor, batch = client.scan(cursor, count=100)
-            keys.update(batch)
+            for k in batch:
+                keys.add(k)
+                if len(keys) >= 200:
+                    break
             if cursor == 0:
                 break
         sample = list(keys)[:200]

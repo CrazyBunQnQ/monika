@@ -2,6 +2,7 @@ package dbdiscovery
 
 import (
 	"bufio"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -134,12 +135,38 @@ func parseDatabaseURL(raw, source, name string) *DiscoveredDB {
 		return nil
 	}
 
+	dsn := raw
+	if driver == "mysql" {
+		if converted := mysqlURLToDSN(raw); converted != "" {
+			dsn = converted
+		}
+	}
+
 	return &DiscoveredDB{
 		Name:   name,
 		Driver: driver,
-		DSN:    raw,
+		DSN:    dsn,
 		Source: source,
 	}
+}
+
+func mysqlURLToDSN(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	host := u.Hostname()
+	port := u.Port()
+	if port == "" {
+		port = "3306"
+	}
+	user := u.User.Username()
+	pass, _ := u.User.Password()
+	db := strings.TrimPrefix(u.Path, "/")
+	if pass != "" {
+		return fmt.Sprintf("%s:%s@tcp(%s:%s)/%s", user, pass, host, port, db)
+	}
+	return fmt.Sprintf("%s@tcp(%s:%s)/%s", user, host, port, db)
 }
 
 func quoteDSNValue(val string) string {

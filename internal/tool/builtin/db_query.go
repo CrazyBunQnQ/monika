@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"monika/internal/tool"
 )
@@ -81,22 +82,24 @@ func (d *dbQuery) Execute(ctx context.Context, args json.RawMessage) (tool.Execu
 
 	colWidths := make([]int, len(qr.Columns))
 	for i, col := range qr.Columns {
-		colWidths[i] = len(col)
+		colWidths[i] = utf8.RuneCountInString(col)
 	}
 	for _, row := range qr.Rows {
 		for i, val := range row {
 			s := fmt.Sprintf("%v", val)
-			if len(s) > colWidths[i] {
-				colWidths[i] = len(s)
+			w := utf8.RuneCountInString(s)
+			if w > colWidths[i] {
+				colWidths[i] = w
 			}
 		}
 	}
 
 	pad := func(s string, w int) string {
-		if len(s) >= w {
+		rw := utf8.RuneCountInString(s)
+		if rw >= w {
 			return s
 		}
-		return s + strings.Repeat(" ", w-len(s))
+		return s + strings.Repeat(" ", w-rw)
 	}
 
 	var buf strings.Builder
