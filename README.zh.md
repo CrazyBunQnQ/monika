@@ -120,6 +120,8 @@ Agent 可以直接操作你的项目：
 | `grep` | 正则搜索文件内容 |
 | `bash` | 执行 Shell 命令（跨平台） |
 | `lsp` | Language Server Protocol — 诊断、跳转定义、查找引用、重命名等 ([文档](docs/lsp.zh.md)) |
+| `db_schema` | 浏览数据库架构（表、列、外键） |
+| `db_query` | 执行只读 SQL/Redis 查询（SELECT, SHOW, EXPLAIN） |
 
 ### Git 集成
 
@@ -165,10 +167,13 @@ monika/
 │   ├── api/               # Wails 服务: App, SessionManager, FileService, EventBus
 │   ├── bootstrap/         # Provider 初始化
 │   ├── config/            # YAML/JSON 配置加载 (~/.monika/ + .monika/)
+│   ├── dbbridge/          # Node.js/Python 数据库驱动桥接脚本
+│   ├── dbdiscovery/       # 从 .env、docker-compose 自动发现数据库
 │   ├── engines/           # Provider 适配器 + Skill + MCP 引擎
 │   ├── permission/        # 工具权限管线
 │   └── tool/              # 工具接口 + 注册表 + 内置工具
 └── pkg/
+    ├── dbdriver/          # 数据库驱动接口 + 5 个原生驱动 (PostgreSQL, MySQL, SQLite, Redis, MongoDB)
     ├── engine/            # 公共 Engine 接口 + 注册表
     ├── openai/            # OpenAI 兼容 SSE 流式客户端
     ├── modelsdev/         # models.dev 模型目录获取

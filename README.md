@@ -120,6 +120,8 @@ The agent can manipulate your project directly:
 | `grep` | Regex search across files |
 | `bash` | Execute shell commands (cross-platform) |
 | `lsp` | Language Server Protocol — diagnostics, go-to-definition, references, rename, etc. ([docs](docs/lsp.md)) |
+| `db_schema` | Browse database schema (tables, columns, foreign keys) |
+| `db_query` | Execute read-only SQL/Redis queries (SELECT, SHOW, EXPLAIN) |
 
 ### Git Integration
 
@@ -165,10 +167,13 @@ monika/
 │   ├── api/               # Wails services: App, SessionManager, FileService, EventBus
 │   ├── bootstrap/         # Provider initialization
 │   ├── config/            # YAML/JSON config loader (~/.monika/ + .monika/)
+│   ├── dbbridge/          # Bridge scripts for Node.js/Python database drivers
+│   ├── dbdiscovery/       # Database auto-discovery from .env, docker-compose
 │   ├── engines/           # Provider adapters + Skill + MCP engines
 │   ├── permission/        # Tool permission pipeline
 │   └── tool/              # Tool interface + registry + builtin tools
 └── pkg/
+    ├── dbdriver/          # Database driver interface + 5 native drivers (PostgreSQL, MySQL, SQLite, Redis, MongoDB)
     ├── engine/            # Public Engine interface + registry
     ├── openai/            # OpenAI-compatible SSE streaming client
     ├── modelsdev/         # models.dev catalog fetcher
