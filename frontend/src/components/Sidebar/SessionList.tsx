@@ -5,6 +5,8 @@ import { useStore } from '../../store'
 import { IconTrash, IconPlus, IconPin, IconInbox } from '../Icons'
 import { logger } from '../../lib/logger'
 import ConfirmModal from '../Chat/ConfirmModal'
+import SessionContextMenu from '../Chat/SessionContextMenu'
+import WorktreeManager from '../Chat/WorktreeManager'
 
 export function deriveStatus(sessionId: string, s: SessionInfo, generatingIds: string[], sessionStatuses: Record<string, string>): string {
     if (generatingIds.includes(sessionId)) return 'generating'
@@ -22,6 +24,8 @@ function SessionList(props: IDockviewPanelProps) {
     const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
     const [editingId, setEditingId] = useState<string | null>(null)
     const [editTitle, setEditTitle] = useState('')
+    const [contextMenu, setContextMenu] = useState<{ sessionId: string; x: number; y: number } | null>(null)
+    const [worktreeManagerSessionId, setWorktreeManagerSessionId] = useState<string | null>(null)
     const projectPath = useStore((s) => s.projectPath)
     const sessionListVersion = useStore((s) => s.sessionListVersion)
     const sessionStatuses = useStore((s) => s.sessionStatuses)
@@ -292,6 +296,10 @@ function SessionList(props: IDockviewPanelProps) {
                                             }}
                                             onMouseEnter={() => setHoveredId(s.id)}
                                             onMouseLeave={() => setHoveredId(null)}
+                                            onContextMenu={(e) => {
+                                                e.preventDefault()
+                                                setContextMenu({ sessionId: s.id, x: e.clientX, y: e.clientY })
+                                            }}
                                         >
                                             <span className="flex items-center gap-1.5 truncate min-w-0">
                                                 <span
@@ -361,6 +369,21 @@ function SessionList(props: IDockviewPanelProps) {
                     message={`Delete "${sessionToDelete.title || 'Untitled'}"? This cannot be undone.`}
                     onConfirm={handleDeleteConfirm}
                     onCancel={handleDeleteCancel}
+                />
+            )}
+            {contextMenu && (
+                <SessionContextMenu
+                    sessionId={contextMenu.sessionId}
+                    x={contextMenu.x}
+                    y={contextMenu.y}
+                    onClose={() => setContextMenu(null)}
+                    onManageWorktree={() => setWorktreeManagerSessionId(contextMenu.sessionId)}
+                />
+            )}
+            {worktreeManagerSessionId && (
+                <WorktreeManager
+                    sessionId={worktreeManagerSessionId}
+                    onClose={() => setWorktreeManagerSessionId(null)}
                 />
             )}
         </div>

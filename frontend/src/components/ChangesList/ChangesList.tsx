@@ -1,13 +1,34 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { IDockviewPanelProps } from 'dockview'
 import { App as MonikaApp } from '../../../bindings/monika'
 import type { ChangeStat, CommitInfo } from '../../../bindings/monika'
 import { useStore } from '../../store'
 import { IconFile } from '../Icons'
+import { GitBranch } from 'lucide-react'
+
+function useEffectiveChangesPath() {
+    const projectPath = useStore((s) => s.projectPath)
+    const activeSessionId = useStore((s) => s.activeSessionId)
+    const sessionWorktrees = useStore((s) => s.sessionWorktrees)
+    return useMemo(() => {
+        const wt = activeSessionId ? sessionWorktrees[activeSessionId] : undefined
+        return wt || projectPath
+    }, [activeSessionId, sessionWorktrees, projectPath])
+}
 
 function ChangesList(_props: IDockviewPanelProps) {
     const [activeTab, setActiveTab] = useState<'changes' | 'history'>('changes')
+    const effectivePath = useEffectiveChangesPath()
+    const projectPath = useStore((s) => s.projectPath)
+    const isWorktree = effectivePath !== projectPath
+
+    // Extract branch name from worktree path
+    const branchDisplay = useMemo(() => {
+        if (!isWorktree) return null
+        const parts = effectivePath.replace(/\\/g, '/').split('/')
+        return parts[parts.length - 1]
+    }, [effectivePath, isWorktree])
 
     return (
         <div
@@ -31,13 +52,28 @@ function ChangesList(_props: IDockviewPanelProps) {
                 />
             </div>
 
+            {/* Worktree path bar */}
+            <div
+                className="flex items-center gap-1.5 text-[12px] select-none shrink-0 border-b border-[var(--border)]"
+                style={{ fontFamily: 'var(--font-sans)', padding: '4px 10px', background: 'var(--bg-sidebar)' }}
+            >
+                <GitBranch size={12} style={{ flexShrink: 0, color: isWorktree ? 'var(--accent)' : 'var(--text-dim)' }} />
+                <span
+                    className="truncate"
+                    style={{ color: isWorktree ? 'var(--text-primary)' : 'var(--text-dim)', fontSize: '11px' }}
+                    title={isWorktree ? effectivePath : projectPath}
+                >
+                    {isWorktree ? branchDisplay : 'Main'}
+                </span>
+            </div>
+
             {/* Tab content */}
             {/* Tab content — always mount both so background tab stays alive */}
             <div style={{ display: activeTab === 'changes' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
-                <ChangesTab />
+                <ChangesTab effectivePath={effectivePath} />
             </div>
             <div style={{ display: activeTab === 'history' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
-                <HistoryTab active={activeTab === 'history'} />
+                <HistoryTab active={activeTab === 'history'} effectivePath={effectivePath} />
             </div>
         </div>
     )
@@ -64,8 +100,7 @@ function TabButton({ label, active, onClick }: { label: string; active: boolean;
     )
 }
 
-function ChangesTab() {
-    const projectPath = useStore((s) => s.projectPath)
+function ChangesTab({ effectivePath }: { effectivePath: string }) {
     const changes = useStore((s) => s.changeStats)
     const setPreviewDiff = useStore((s) => s.setPreviewDiff)
     const setPreviewFile = useStore((s) => s.setPreviewFile)
@@ -91,7 +126,7 @@ function ChangesTab() {
 
     const handleClick = async (stat: ChangeStat) => {
         try {
-            const result = await MonikaApp.GetFileDiff(projectPath, stat.path)
+            const result = await MonikaApp.GetFileDiff(effectivePath, stat.path)
             const fileName = stat.path.split('/').pop() || stat.path
             if (result && result.lines) {
                 setPreviewDiff(stat.path, fileName, result.lines)
@@ -104,7 +139,7 @@ function ChangesTab() {
     const handleViewSource = async (path: string) => {
         try {
             const fileName = path.split('/').pop() || path
-            const result = await MonikaApp.ReadFile(projectPath, path)
+            const result = await MonikaApp.ReadFile(effectivePath, path)
             setPreviewFile(path, fileName, result?.content || '')
             setRevealFilePath(path)
         } catch {
@@ -207,17 +242,17 @@ function ChangesTab() {
     )
 }
 
-function HistoryTab({ active }: { active: boolean }) {
+function HistoryTab({ active, effectivePath }: { active: boolean; effectivePath: string }) {
     const commitHistory = useStore((s) => s.commitHistory)
     const loadCommitHistory = useStore((s) => s.loadCommitHistory)
 
     // Load immediately on activation, and poll every second while active
     useEffect(() => {
-        loadCommitHistory()
+        loadCommitHistory(effectivePath)
         if (!active) return
-        const id = setInterval(() => loadCommitHistory(), 1000)
+        const id = setInterval(() => loadCommitHistory(effectivePath), 1000)
         return () => clearInterval(id)
-    }, [active]) // eslint-disable-line react-hooks/exhaustive-deps
+    }, [active, effectivePath]) // eslint-disable-line react-hooks/exhaustive-deps
 
     if (commitHistory.loading && commitHistory.commits.length === 0) {
         return (

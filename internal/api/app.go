@@ -314,23 +314,10 @@ func (a *App) OpenProject(path string) (*ProjectInfo, error) {
 	if branch == "" {
 		branch = "—"
 	}
-	var worktrees []WorktreeInfo
-	cmd2 := command("git", "worktree", "list", "--porcelain")
-	cmd2.Dir = path
-	out2, err2 := cmd2.Output()
-	if err2 == nil {
-		lines := strings.Split(strings.TrimSpace(string(out2)), "\n")
-		var wt WorktreeInfo
-		for _, line := range lines {
-			if strings.HasPrefix(line, "branch ") {
-				wt.Branch = strings.TrimSpace(strings.TrimPrefix(line, "branch refs/heads/"))
-			}
-			if strings.HasPrefix(line, "worktree ") {
-				wt.Path = strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
-				worktrees = append(worktrees, wt)
-				wt = WorktreeInfo{}
-			}
-		}
+	worktrees, err := listGitWorktrees(path)
+	if err != nil {
+		// Silently continue — worktrees list is best-effort
+		worktrees = nil
 	}
 	// Get initial commit hash for change detection
 	lastCommitHash := ""
@@ -682,7 +669,7 @@ func (a *App) SendMessage(projectPath, sessionID, text, providerID, model string
 
 	opts := append([]agent2.LoopOption{}, a.loopOpts...)
 	opts = append(opts,
-		agent2.WithProjectDir(projectPath),
+		agent2.WithProjectDir(a.resolveWorkingDir(sessionID)),
 		agent2.WithProvider(providerID),
 		agent2.WithModel(model),
 		agent2.WithSessionID(sessionID),
@@ -940,7 +927,7 @@ func (a *App) RunShellCommand(projectPath, sessionID, command string) error {
 	a.cancelMu.Unlock()
 
 	cmd := exec.CommandContext(ctx, shell, shellArg, command)
-	cmd.Dir = projectPath
+	cmd.Dir = a.resolveWorkingDir(sessionID)
 	hideWindow(cmd)
 
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -1522,6 +1509,25 @@ func (a *App) getSessionManagerForSession(sessionID string) *SessionManager {
 		}
 	}
 	return nil
+}
+
+// resolveWorkingDir returns the effective working directory for a session.
+// If the session has a valid WorktreePath, it returns that. Otherwise falls back to projectPath().
+func (a *App) resolveWorkingDir(sessionID string) string {
+	sm := a.getSessionManagerForSession(sessionID)
+	if sm == nil {
+		return a.projectPath()
+	}
+	s, err := sm.Load(sessionID)
+	if err != nil || s.WorktreePath == "" {
+		return a.projectPath()
+	}
+	if _, err := os.Stat(s.WorktreePath); err == nil {
+		return s.WorktreePath
+	}
+	// Worktree was deleted; fall back silently.
+	// Frontend shows the banner via VerifyWorktree on session switch.
+	return a.projectPath()
 }
 
 func (a *App) getFileService(projectPath string) *FileService {

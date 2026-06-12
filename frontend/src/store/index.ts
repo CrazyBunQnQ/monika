@@ -217,6 +217,8 @@ interface AppState {
     chatInputAppendPath: string | null
     selection: { mode: 'quote' | 'forward'; ids: string[] } | null
 
+    // Worktree binding: sessionId → worktreePath
+    sessionWorktrees: Record<string, string>
     bgTasks: BgTaskInfo[]
     selectedBgTaskId: string | null
     bgTaskLogs: Record<string, string[]>
@@ -281,7 +283,7 @@ interface AppState {
     setSelectedProvider: (providerId: string) => Promise<void>
     loadModelsForProvider: (providerId: string) => Promise<void>
     setChangeStats: (st: Partial<{ stats: ChangeStat[]; loading: boolean; error: string }>) => void
-    loadCommitHistory: () => void
+    loadCommitHistory: (path?: string) => void
     respondPermission: (resp: { requestId: string; decision: string; rulePattern?: string }) => Promise<void>
     respondAskUser: (resp: { requestId: string; answer: string }) => Promise<void>
     loadPermissionRules: () => Promise<void>
@@ -325,6 +327,9 @@ interface AppState {
     toggleMessageSelection: (id: string) => void
     enterMultiSelect: (mode: 'quote' | 'forward', initialId: string) => void
     clearSelection: () => void
+
+    // Worktree binding actions
+    setSessionWorktree: (sessionId: string, path: string) => void
 
     selectBgTask: (id: string | null) => void
     updateBgTask: (info: BgTaskInfo) => void
@@ -395,6 +400,8 @@ export const useStore = create<AppState>((set, get) => ({
     msgFilter: 'all' as const,
     chatInputAppendPath: null as string | null,
     selection: null as { mode: 'quote' | 'forward'; ids: string[] } | null,
+
+    sessionWorktrees: {} as Record<string, string>,
 
     bgTasks: [] as BgTaskInfo[],
     selectedBgTaskId: null as string | null,
@@ -641,6 +648,10 @@ export const useStore = create<AppState>((set, get) => ({
         selection: null,
     }),
 
+    setSessionWorktree: (sessionId, path) =>
+        set((state) => ({
+            sessionWorktrees: { ...state.sessionWorktrees, [sessionId]: path },
+        })),
     selectBgTask: (id) => set({ selectedBgTaskId: id, preview: { mode: 'task', filePath: null, fileName: null, fileContent: null, diffLines: null } }),
     updateBgTask: (info) => set((state) => {
         const idx = state.bgTasks.findIndex(t => t.id === info.id)
@@ -795,6 +806,7 @@ export const useStore = create<AppState>((set, get) => ({
                     return {
                         sessionMessages: { ...s.sessionMessages, [id]: merged },
                         sessionTokens: { ...s.sessionTokens, [id]: tokData },
+                        ...(session?.worktree_path ? { sessionWorktrees: { ...s.sessionWorktrees, [id]: session.worktree_path } } : {}),
                     }
                 }
                 return {
@@ -803,6 +815,7 @@ export const useStore = create<AppState>((set, get) => ({
                     sessionTokens: { ...s.sessionTokens, [id]: tokData },
                     tokenCount: tokData.count,
                     tokenMax: tokData.max,
+                    ...(session?.worktree_path ? { sessionWorktrees: { ...s.sessionWorktrees, [id]: session.worktree_path } } : {}),
                 }
             })
         } catch {
@@ -941,6 +954,7 @@ export const useStore = create<AppState>((set, get) => ({
             set((s) => ({
                 sessionMessages: { ...s.sessionMessages, [subagentId]: msgs },
                 sessionTokens: { ...s.sessionTokens, [subagentId]: tokData },
+                ...(session?.worktree_path ? { sessionWorktrees: { ...s.sessionWorktrees, [subagentId]: session.worktree_path } } : {}),
             }))
         } catch {
             set((s) => ({
@@ -981,6 +995,7 @@ export const useStore = create<AppState>((set, get) => ({
                     openSessions: s.openSessions.map((sess) =>
                         sess.id === tab.id && session?.title ? { ...sess, title: session.title } : sess
                     ),
+                    ...(session?.worktree_path ? { sessionWorktrees: { ...s.sessionWorktrees, [tab.id]: session.worktree_path } } : {}),
                 }))
             } catch {
                 set((s) => ({
@@ -1038,6 +1053,7 @@ export const useStore = create<AppState>((set, get) => ({
                         openSessions: prev.openSessions.map((sess) =>
                             sess.id === s.id && session?.title ? { ...sess, title: session.title } : sess
                         ),
+                        ...(session?.worktree_path ? { sessionWorktrees: { ...prev.sessionWorktrees, [s.id]: session.worktree_path } } : {}),
                     }))
                 } catch {
                     set((prev) => ({
@@ -1160,12 +1176,12 @@ export const useStore = create<AppState>((set, get) => ({
     setChangeStats: (st) => set((s) => ({ changeStats: { ...s.changeStats, ...st } })),
 
 
-    loadCommitHistory: async () => {
-        const { projectPath } = get()
-        if (!projectPath) return
+    loadCommitHistory: async (path?: string) => {
+        const gitPath = path || get().projectPath
+        if (!gitPath) return
         set((s) => ({ commitHistory: { ...s.commitHistory, loading: true, error: '' } }))
         try {
-            const result = await App.GitLog(projectPath)
+            const result = await App.GitLog(gitPath)
             const commits = Array.isArray(result) ? result : []
             set({ commitHistory: { commits, loading: false, error: '' } })
         } catch {

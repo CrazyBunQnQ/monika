@@ -2,6 +2,8 @@ import { useState, KeyboardEvent, useEffect, useRef, useCallback, useMemo } from
 import { useStore } from '../../store'
 import { formatTokens } from '../../lib/format'
 import ModelPicker from './ModelPicker'
+import WorktreeChip from './WorktreeChip'
+import WorktreeManager from './WorktreeManager'
 import PermissionModePicker from './PermissionModePicker'
 import AutocompleteDropdown, { AcItem, AcState } from './AutocompleteDropdown'
 import { findLabels, LabelRegion, renderChipHTML } from './LabelChip'
@@ -33,14 +35,25 @@ function flattenFiles(nodes: FileEntry[]): FileEntry[] {
     return result
 }
 
-function loadHistory(): string[] {
+function loadHistory(sessionId: string): string[] {
     try {
-        const stored = localStorage.getItem('monika-cmd-history')
-        return stored ? (JSON.parse(stored) as string[]) : []
+        const key = `monika-cmd-history-${sessionId}`
+        const stored = localStorage.getItem(key)
+        if (stored) return JSON.parse(stored) as string[]
+        // Fallback: migrate from global key on first use per session
+        const global = localStorage.getItem('monika-cmd-history')
+        if (global) {
+            const parsed = JSON.parse(global) as string[]
+            localStorage.setItem(key, global)
+            return parsed
+        }
+        return []
     } catch { return [] }
 }
 
-const INITIAL_HISTORY = loadHistory()
+function saveHistory(sessionId: string, history: string[]) {
+    try { localStorage.setItem(`monika-cmd-history-${sessionId}`, JSON.stringify(history)) } catch { /* ignore */ }
+}
 
 // ── Cursor helpers for contentEditable ──
 
@@ -141,19 +154,6 @@ function isCursorOnFirstLine(root: HTMLElement): boolean {
     return (cursorTop - editorTop) < lh * 1.5
 }
 
-/** Check if selection is on the last visual line of the editor */
-function isCursorOnLastLine(root: HTMLElement): boolean {
-    const sel = window.getSelection()
-    if (!sel || !sel.rangeCount) return true
-    const range = sel.getRangeAt(0)
-    if (!range.collapsed) return false
-    const rects = range.getClientRects()
-    if (rects.length === 0) return true
-    const cursorTop = rects[0].top
-    const editorBottom = root.getBoundingClientRect().bottom
-    const lh = parseFloat(getComputedStyle(root).lineHeight) || 20
-    return (editorBottom - cursorTop) < lh * 1.5
-}
 
 // ── Render content as HTML with chips ──
 
@@ -236,17 +236,23 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
     const tokenMax = tokens.max
 
     const [ac, setAc] = useState<AcState>({ open: false, items: [], selectedIdx: 0, prefix: '' })
+    const [worktreeManagerOpen, setWorktreeManagerOpen] = useState(false)
     const acDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
     const projectPath = useStore((s) => s.projectPath)
     const selectedProvider = useStore((s) => s.selectedProvider)
     const selectedModel = useStore((s) => s.selectedModel)
-    const historyRef = useRef<string[]>(INITIAL_HISTORY)
+    const historyRef = useRef<string[]>(loadHistory(activeSessionId))
     const historyIndexRef = useRef(-1)
     const navigatingHistoryRef = useRef(false)
     const sessionIdRef = useRef(activeSessionId)
     sessionIdRef.current = activeSessionId
     const valueRef = useRef(value)
     valueRef.current = value
+
+    // Reload shell history when switching sessions
+    useEffect(() => {
+        historyRef.current = loadHistory(activeSessionId)
+    }, [activeSessionId])
 
     // Render content into editor only when chip regions change (preserves undo)
     const isRenderingRef = useRef(false)
@@ -588,7 +594,7 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
             const h = historyRef.current.filter(c => c !== command)
             const updated = [command, ...h].slice(0, 50)
             historyRef.current = updated
-            try { localStorage.setItem('monika-cmd-history', JSON.stringify(updated)) } catch { /* ignore */ }
+            saveHistory(sessionIdRef.current, updated)
             onRunShell(command)
             setValue('')
             return
@@ -673,31 +679,34 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
 
         // History navigation
         if (!disabled && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
-            const userMsgs = useStore.getState().sessionMessages[sessionIdRef.current]?.filter(m => m.role === 'user').map(m => m.content) || []
+            const isShellMode = valueRef.current.startsWith('$')
+            const histSrc = isShellMode
+                ? historyRef.current.map(c => `$${c}`)
+                : useStore.getState().sessionMessages[sessionIdRef.current]?.filter(m => m.role === 'user').map(m => m.content) || []
 
-            if (e.key === 'ArrowUp' && historyIndexRef.current < userMsgs.length - 1 && isCursorOnFirstLine(el!)) {
+            if (e.key === 'ArrowUp' && historyIndexRef.current <= histSrc.length - 1 && (isShellMode || historyIndexRef.current !== -1 || isCursorOnFirstLine(el!))) {
                 e.preventDefault()
                 const nextIdx = historyIndexRef.current === -1
-                    ? userMsgs.length - 1
+                    ? histSrc.length - 1
                     : Math.max(historyIndexRef.current - 1, 0)
                 if (nextIdx !== historyIndexRef.current) {
                     historyIndexRef.current = nextIdx
                     navigatingHistoryRef.current = true
-                    setValue(userMsgs[nextIdx])
-                    pendingCursorRef.current = userMsgs[nextIdx].length
+                    setValue(histSrc[nextIdx])
+                    pendingCursorRef.current = histSrc[nextIdx].length
                 }
             }
-            if (e.key === 'ArrowDown' && historyIndexRef.current !== -1 && isCursorOnLastLine(el!)) {
+            if (e.key === 'ArrowDown' && historyIndexRef.current !== -1) {
                 e.preventDefault()
-                if (historyIndexRef.current < userMsgs.length - 1) {
+                if (historyIndexRef.current < histSrc.length - 1) {
                     historyIndexRef.current += 1
                     navigatingHistoryRef.current = true
-                    setValue(userMsgs[historyIndexRef.current])
-                    pendingCursorRef.current = userMsgs[historyIndexRef.current].length
+                    setValue(histSrc[historyIndexRef.current])
+                    pendingCursorRef.current = histSrc[historyIndexRef.current].length
                 } else {
                     historyIndexRef.current = -1
                     navigatingHistoryRef.current = true
-                    setValue('')
+                    setValue(isShellMode ? '$ ' : '')
                 }
             }
         }
@@ -749,6 +758,16 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
                 >
                     <PermissionModePicker />
                     <ModelPicker />
+                    <WorktreeChip
+                        sessionId={activeSessionId}
+                        onClick={() => setWorktreeManagerOpen(true)}
+                    />
+                    {worktreeManagerOpen && (
+                        <WorktreeManager
+                            sessionId={activeSessionId}
+                            onClose={() => setWorktreeManagerOpen(false)}
+                        />
+                    )}
 
                     <span className="text-[11px] text-[var(--text-dim)] select-none" style={{ fontFeatureSettings: '"tnum"' }}>
                         tok: {tokenText}

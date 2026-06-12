@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useMemo } from 'react'
 import { DockviewReact, type DockviewApi, IDockviewPanelProps } from 'dockview'
 import TitleBar from './components/TitleBar/TitleBar'
 import SessionList from './components/Sidebar/SessionList'
@@ -40,11 +40,18 @@ function App() {
     const settingsOpen = useStore((s) => s.settingsOpen)
     const toggleSettings = useStore((s) => s.toggleSettings)
     const loadSkills = useStore((s) => s.loadSkills)
+    const activeSessionId = useStore((s) => s.activeSessionId)
+    const sessionWorktrees = useStore((s) => s.sessionWorktrees)
+
+    const effectiveChangesPath = useMemo(() => {
+        const wt = activeSessionId ? sessionWorktrees[activeSessionId] : undefined
+        return wt || projectPath
+    }, [activeSessionId, sessionWorktrees, projectPath])
 
     // Load skills on startup so / command autocomplete works
     useEffect(() => { loadSkills() }, [loadSkills])
 
-    useChangeWatcher(projectPath, fileTreeVersion)
+    useChangeWatcher(effectiveChangesPath, fileTreeVersion)
     useLayoutPersistence(dockviewApi, projectPath)
 
     // Sync dockview active panel changes to store (so session list highlights correctly)

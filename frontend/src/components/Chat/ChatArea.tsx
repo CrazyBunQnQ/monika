@@ -5,6 +5,8 @@ import { useStore } from '../../store'
 import { formatTokens } from '../../lib/format'
 import MessageBubble from './MessageBubble'
 import ChatInput from './ChatInput'
+import WorktreeBanner from './WorktreeBanner'
+import WorktreeManager from './WorktreeManager'
 import ConfirmBar from './ConfirmBar'
 import AskUserBar from './AskUserBar'
 import SubagentFooter from './SubagentFooter'
@@ -91,8 +93,24 @@ function ChatArea(props: IDockviewPanelProps) {
     const [editingTabId, setEditingTabId] = useState<string | null>(null)
     const [editTabTitle, setEditTabTitle] = useState('')
     const [quotePreviewMessages, setQuotePreviewMessages] = useState<{ id: string; role: string; content: string }[]>([])
+    const [verifyResult, setVerifyResult] = useState<{ sessionId: string; path: string; showManager?: boolean } | null>(null)
     const [sessionPickerOpen, setSessionPickerOpen] = useState(false)
     const [forwardedQuotes, setForwardedQuotes] = useState<Record<string, { id: string; role: string; content: string }[]>>({})
+    // Verify worktree on mount and session switch
+    useEffect(() => {
+        const check = async () => {
+            if (!sessionId || isDefaultChat || isOverlay) return
+            try {
+                const result = await App.VerifyWorktree(sessionId) as { deleted: boolean; path: string } | null
+                if (result?.deleted) {
+                    setVerifyResult({ sessionId, path: result.path })
+                } else {
+                    setVerifyResult(null)
+                }
+            } catch { /* ignore */ }
+        }
+        check()
+    }, [sessionId, isDefaultChat, isOverlay])
     const forwardedQuotesRef = useRef(forwardedQuotes)
     forwardedQuotesRef.current = forwardedQuotes
 
@@ -445,6 +463,20 @@ function ChatArea(props: IDockviewPanelProps) {
                     </div>
                     <MessageFilter value={msgFilter} onChange={setMsgFilter} disabled={isGenerating} />
                 </div>
+            )}
+            {verifyResult && (
+                <WorktreeBanner
+                    sessionId={verifyResult.sessionId}
+                    deletedPath={verifyResult.path}
+                    onClose={() => setVerifyResult(null)}
+                    onManageWorktree={() => setVerifyResult(v => v ? { sessionId: v.sessionId, path: v.path, showManager: true } : null)}
+                />
+            )}
+            {verifyResult?.showManager && (
+                <WorktreeManager
+                    sessionId={verifyResult.sessionId}
+                    onClose={() => setVerifyResult(v => v ? { sessionId: v.sessionId, path: v.path, showManager: false } : null)}
+                />
             )}
             <div ref={scrollRef} className={`flex-1 overflow-y-auto py-4 pr-4 ${selection ? 'pl-10' : 'pl-4'}`}>
                 {rawMessages.length > 0 && msgFilter !== 'all' && (

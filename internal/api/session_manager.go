@@ -41,6 +41,7 @@ type Session struct {
 	LastViewedAt    *time.Time           `json:"last_viewed_at,omitempty"`
 	CreatedAt       time.Time            `json:"created_at"`
 	UpdatedAt       time.Time            `json:"updated_at"`
+	WorktreePath    string               `json:"worktree_path,omitempty"`
 }
 
 type SessionManager struct {
@@ -168,22 +169,29 @@ func (sm *SessionManager) List() ([]SessionInfo, error) {
 			s.Status = StatusArchived
 			sm.Save(s)
 		}
-		// Lazy archival: pending + viewed > 1h ago → archived
+		// Lazy archival: pending + viewed > 1h ago → archiveded
 		if s.Status == StatusPending && s.LastViewedAt != nil {
 			if time.Since(*s.LastViewedAt) > time.Hour {
 				s.Status = StatusArchived
 				sm.Save(s)
 			}
 		}
-		infos = append(infos, SessionInfo{
-			ID:         s.ID,
-			Title:      s.Title,
-			Status:     s.Status,
-			Pinned:     s.Pinned,
-			UpdatedAt:  s.UpdatedAt.Format(time.RFC3339),
-			TokenCount: s.TokenCount,
-			TokenMax:   s.TokenMax,
-		})
+		info := SessionInfo{
+			ID:           s.ID,
+			Title:        s.Title,
+			Status:       s.Status,
+			Pinned:       s.Pinned,
+			UpdatedAt:    s.UpdatedAt.Format(time.RFC3339),
+			TokenCount:   s.TokenCount,
+			TokenMax:     s.TokenMax,
+			WorktreePath: s.WorktreePath,
+		}
+		// Resolve branch name from WorktreePath if set
+		if s.WorktreePath != "" {
+			base := filepath.Base(s.WorktreePath)
+			info.WorktreeBranch = base
+		}
+		infos = append(infos, info)
 	}
 	return infos, nil
 }

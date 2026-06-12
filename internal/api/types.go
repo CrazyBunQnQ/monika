@@ -50,8 +50,20 @@ type ProjectInfo struct {
 }
 
 type WorktreeInfo struct {
-	Branch string `json:"branch"`
-	Path   string `json:"path"`
+	Branch        string       `json:"branch"`
+	Path          string       `json:"path"`
+	BoundSessions []SessionRef `json:"bound_sessions,omitempty"`
+}
+
+// SessionRef is a lightweight reference to a session for display purposes.
+type SessionRef struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+}
+
+type WorktreeVerifyResult struct {
+	Deleted bool   `json:"deleted"`
+	Path    string `json:"path"`
 }
 
 // RecentProject represents a recently opened project.
@@ -68,13 +80,15 @@ type BranchInfo struct {
 }
 
 type SessionInfo struct {
-	ID         string `json:"id"`
-	Title      string `json:"title"`
-	Status     string `json:"status"`
-	Pinned     bool   `json:"pinned"`
-	UpdatedAt  string `json:"updated_at"`
-	TokenCount int64  `json:"token_count,omitempty"`
-	TokenMax   int64  `json:"token_max,omitempty"`
+	ID             string `json:"id"`
+	Title          string `json:"title"`
+	Status         string `json:"status"`
+	Pinned         bool   `json:"pinned"`
+	UpdatedAt      string `json:"updated_at"`
+	TokenCount     int64  `json:"token_count,omitempty"`
+	TokenMax       int64  `json:"token_max,omitempty"`
+	WorktreePath   string `json:"worktree_path,omitempty"`
+	WorktreeBranch string `json:"worktree_branch,omitempty"`
 }
 
 type FileContent struct {
@@ -174,14 +188,14 @@ type LspHoverResult struct {
 
 // LspSymbol is a document symbol with a tree of children.
 type LspSymbol struct {
-	Name      string       `json:"name"`
-	Kind      int          `json:"kind"`
-	Path      string       `json:"path"`
-	StartLine int          `json:"startLine"`
-	StartCol  int          `json:"startCol"`
-	EndLine   int          `json:"endLine"`
-	EndCol    int          `json:"endCol"`
-	Children  []LspSymbol  `json:"children,omitempty"`
+	Name      string      `json:"name"`
+	Kind      int         `json:"kind"`
+	Path      string      `json:"path"`
+	StartLine int         `json:"startLine"`
+	StartCol  int         `json:"startCol"`
+	EndLine   int         `json:"endLine"`
+	EndCol    int         `json:"endCol"`
+	Children  []LspSymbol `json:"children,omitempty"`
 }
 
 // LspDiagnostic is a diagnostic with severity/range/message.
@@ -218,7 +232,7 @@ type LspWorkspaceEdit struct {
 
 // LspCodeAction represents a code action with optional workspace edit.
 type LspCodeAction struct {
-	Title string             `json:"title"`
-	Kind  string             `json:"kind"`
-	Edit  *LspWorkspaceEdit  `json:"edit,omitempty"`
+	Title string            `json:"title"`
+	Kind  string            `json:"kind"`
+	Edit  *LspWorkspaceEdit `json:"edit,omitempty"`
 }

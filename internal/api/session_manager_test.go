@@ -140,3 +140,54 @@ func TestSessionManagerSetTitle(t *testing.T) {
 		t.Errorf("expected empty title when no user messages, got %q", s3.Title)
 	}
 }
+
+// --- WorktreePath serialization tests ---
+
+func TestSessionWorktreePathRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	sm := NewSessionManager(dir, "/tmp/test-project")
+	s, err := sm.New("gpt-4", "openai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.WorktreePath = "/tmp/test-project/.worktrees/feature-x"
+	if err := sm.Save(s); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := sm.Load(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.WorktreePath != "/tmp/test-project/.worktrees/feature-x" {
+		t.Errorf("expected worktree path %q, got %q", "/tmp/test-project/.worktrees/feature-x", loaded.WorktreePath)
+	}
+}
+
+func TestSessionInfoIncludesWorktree(t *testing.T) {
+	dir := t.TempDir()
+	sm := NewSessionManager(dir, "/tmp/test-project")
+	s, err := sm.New("gpt-4", "openai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.WorktreePath = "/tmp/test-project/.worktrees/feature-x"
+	sm.Save(s)
+
+	infos, err := sm.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, info := range infos {
+		if info.ID == s.ID {
+			found = true
+			if info.WorktreePath != s.WorktreePath {
+				t.Errorf("expected WorktreePath %q, got %q", s.WorktreePath, info.WorktreePath)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatal("session not found in List()")
+	}
+}
