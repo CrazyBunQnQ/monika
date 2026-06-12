@@ -41,6 +41,29 @@ type SessionInfo struct {
 }
 ```
 
+### API Types Extension
+
+```go
+// internal/api/types.go — extended WorktreeInfo + new types
+type WorktreeInfo struct {
+    Branch        string       `json:"branch"`
+    Path          string       `json:"path"`
+    BoundSessions []SessionRef `json:"bound_sessions,omitempty"`
+}
+
+type SessionRef struct {
+    ID    string `json:"id"`
+    Title string `json:"title"`
+}
+
+type WorktreeVerifyResult struct {
+    Deleted bool   `json:"deleted"`
+    Path    string `json:"path"`
+}
+```
+
+`SessionRef` provides minimal identifying info for the WorktreeManager binding status column. `BoundSessions` is populated by `ListWorktrees()` via a scan of all session `WorktreePath` values.
+
 ### Frontend Store Extension
 
 ```typescript
@@ -123,7 +146,7 @@ CreateWorktree(sessionID string) (worktreePath string, error)
 ```
 
 1. Load session, read `ProjectDir`.
-2. Resolve source branch: `git -C <projectDir> rev-parse --abbrev-ref HEAD`.
+2. Resolve source branch from the source session's working context: `git -C <resolveWorkingDir(sessionID)> rev-parse --abbrev-ref HEAD`.
 3. Generate worktree name: `<branch>-<sessionID[:8]>`.
 4. Run: `git -C <projectDir> worktree add .worktrees/<name> <branch>`.
    - If the branch doesn't exist yet, create it first: `git -C <projectDir> branch <branch> HEAD`.
@@ -167,7 +190,7 @@ DeleteWorktree(worktreePath string) error
 ListWorktrees() ([]WorktreeInfo, error)
 ```
 
-Delegates to the existing `git worktree list --porcelain` parsing in `OpenProject()`. Extracts that parsing into a shared helper.
+Delegates to the existing `git worktree list --porcelain` parsing in `OpenProject()`. Extracts that parsing into a shared helper. Also populates binding status for each worktree by scanning sessions for matching `WorktreePath` values. The returned `WorktreeInfo` is extended with a `BoundSessions []SessionRef` field (where `SessionRef = { ID, Title }`) so the WorktreeManager can display "Bound to <session name>" or "This session" labels.
 
 ### RebuildWorktree
 
@@ -277,7 +300,7 @@ Displayed at the top of the chat message area in `ChatArea.tsx`, above the messa
 | File | Change |
 |------|--------|
 | `internal/api/session_manager.go` | Add `WorktreePath` field to `Session` struct |
-| `internal/api/types.go` | Add `WorktreePath`, `WorktreeBranch` to `SessionInfo`; add `WorktreeVerifyResult` type |
+| `internal/api/types.go` | Add `WorktreePath`, `WorktreeBranch` to `SessionInfo`; add `WorktreeVerifyResult` type; add `BoundSessions` to `WorktreeInfo` |
 | `internal/api/worktree.go` | New: `CreateWorktree`, `AttachWorktree`, `DetachWorktree`, `DeleteWorktree`, `ListWorktrees`, `RebuildWorktree`, `VerifyWorktree` |
 | `internal/api/app.go` | Add `resolveWorkingDir()` helper; update `SendMessage()`, file operations to use it; wire worktree API methods; extract shared `git worktree list` parsing |
 | `frontend/src/store/index.ts` | Add `sessionWorktrees`, `worktreeBanner` state and actions |
