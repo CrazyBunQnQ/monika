@@ -14,12 +14,13 @@ import { lspService, LspSymbol, LspDiagnostic } from '../../lib/lspService'
 import { lspDiagnosticField, updateLspDiagnostics } from '../../lib/lspDecorations'
 import { LspSymbolSidebar } from './LspSymbolSidebar'
 
-import { IconEdit, IconEye, IconSidebar, IconFolder, IconMaximize, IconRestore } from '../Icons'
+import { IconEdit, IconEye, IconSidebar, IconFolder, IconMaximize, IconRestore, IconSearch, IconClose } from '../Icons'
 import { CodeMinimap } from './CodeMinimap'
 import MarkdownPreview from './MarkdownPreview'
-const ANSI_RE = /\x1b\[[0-9;]*[a-zA-Z]/g
+import { AnsiText } from '../../lib/ansi'
+const ANSI_STRIP_RE = /\x1b\][^\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b./g
+function stripAnsi(s: string): string { return s.replace(ANSI_STRIP_RE, '') }
 const MAX_FILE_LINES = 5000
-function stripAnsi(s: string | undefined) { return (s || '').replace(ANSI_RE, '') }
 function escapeHtml(s: string): string {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
@@ -380,6 +381,9 @@ function PreviewPanel(props: IDockviewPanelProps) {
     const versionRef = useRef(0)
     const prevFilePathRef = useRef<string | null>(null)
     const diagTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
+    const bgLogRef = useRef<HTMLDivElement>(null)
+    const [bgSearchOpen, setBgSearchOpen] = useState(false)
+    const [bgSearchQuery, setBgSearchQuery] = useState('')
     const [lspEnabled, setLspEnabled] = useState(true)
     const [peekPanel, setPeekPanel] = useState<{
         title: string
@@ -640,6 +644,28 @@ function PreviewPanel(props: IDockviewPanelProps) {
     editModeRef.current = editMode
     const lspEnabledRef = useRef(lspEnabled)
     lspEnabledRef.current = lspEnabled
+
+    // Auto-scroll background task logs to bottom when new output arrives
+    const bgLogsLen = bgLogs.length
+    const bgTaskStatus = bgTask?.status
+    useEffect(() => {
+        const el = bgLogRef.current
+        if (!el || !showTask) return
+        el.scrollTop = el.scrollHeight
+    }, [bgLogsLen, bgTaskStatus, showTask, selectedBgTaskId])
+
+    // Ctrl+F toggles search in task mode
+    useEffect(() => {
+        if (!showTask) return
+        const handler = (e: KeyboardEvent) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+                e.preventDefault()
+                setBgSearchOpen(true)
+            }
+        }
+        window.addEventListener('keydown', handler)
+        return () => window.removeEventListener('keydown', handler)
+    }, [showTask])
 
     const hoverProvider = hoverTooltip(async (view, pos) => {
         if (!lspEnabledRef.current) { console.log('[preview] hover skipped: lspEnabled=false'); return null }
@@ -1006,12 +1032,42 @@ function PreviewPanel(props: IDockviewPanelProps) {
                                     className="text-[11px] px-2 py-0.5 rounded bg-red-600/80 text-white hover:bg-red-600 transition-colors duration-100"
                                 >Stop</button>
                             )}
+                            <button
+                                onClick={() => { setBgSearchOpen(v => !v); if (bgSearchOpen) setBgSearchQuery('') }}
+                                className="flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text)] transition-colors"
+                                style={{ width: 22, height: 22, borderRadius: 4, flexShrink: 0 }}
+                                title="Search (Ctrl+F)"
+                            ><IconSearch size={13} /></button>
                         </div>
                     </div>
                 </div>
+                {/* Search bar */}
+                {bgSearchOpen && (
+                    <div className="flex items-center gap-2 px-3 py-1.5 border-b border-[var(--border)] bg-[var(--bg-sidebar)]">
+                        <IconSearch size={12} />
+                        <input
+                            autoFocus
+                            value={bgSearchQuery}
+                            onChange={e => setBgSearchQuery(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Escape') { setBgSearchOpen(false); setBgSearchQuery('') } }}
+                            placeholder="Filter logs..."
+                            className="flex-1 bg-transparent text-xs text-[var(--text)] outline-none font-mono placeholder:text-[var(--text-dim)]"
+                        />
+                        {bgSearchQuery && (
+                            <span className="text-[11px] text-[var(--text-muted)] font-mono flex-shrink-0">
+                                {bgLogs.filter(l => stripAnsi(l).toLowerCase().includes(bgSearchQuery.toLowerCase())).length} / {bgLogs.length}
+                            </span>
+                        )}
+                        <button
+                            onClick={() => { setBgSearchOpen(false); setBgSearchQuery('') }}
+                            className="text-[var(--text-muted)] hover:text-[var(--text)] flex-shrink-0"
+                            style={{ flexShrink: 0 }}
+                        ><IconClose size={12} /></button>
+                    </div>
+                )}
                 {/* Log output — terminal area */}
-                <div className="flex-1 overflow-auto" style={{ background: '#080a0e' }}>
-                    <pre className="p-4 text-xs font-mono text-[#abb2bf] whitespace-pre-wrap leading-relaxed">{bgLogs.map(l => stripAnsi(l)).join('\n')}</pre>
+                <div ref={bgLogRef} className="flex-1 overflow-auto" style={{ background: '#080a0e' }}>
+                    <pre className="p-4 text-xs font-mono text-[#abb2bf] whitespace-pre-wrap leading-relaxed"><AnsiText text={(bgSearchQuery ? bgLogs.filter(l => stripAnsi(l).toLowerCase().includes(bgSearchQuery.toLowerCase())) : bgLogs).join('\n')} /></pre>
                 </div>
                 {/* Bottom status bar */}
                 <div className="px-4 py-1.5 border-t border-[var(--border)] text-[11px] text-[var(--text-dim)] bg-[var(--bg-sidebar)] flex items-center gap-3">

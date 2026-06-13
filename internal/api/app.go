@@ -30,6 +30,7 @@ import (
 	engine2 "monika/pkg/engine"
 	"monika/pkg/modelsdev"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"gopkg.in/yaml.v3"
 )
@@ -82,6 +83,11 @@ type App struct {
 	tsBridge  *tsBridge
 	bgTaskMgr *BackgroundTaskManager
 
+	headWatcher    *fsnotify.Watcher
+	watchedGitDirs map[string]string // gitDir → projectPath
+	headDebounce   map[string]func() // gitDir → debounced refresh
+	refsDebounce   map[string]func() // gitDir → debounced commit-history-changed
+
 	eventSeq atomic.Int64
 }
 
@@ -107,6 +113,9 @@ func NewApp(home, cwd string, cfg config2.Config, providers map[string]engine2.P
 		mcpRegistry:       mcpRegistry,
 		checker:           update.NewChecker(),
 		bgTaskMgr:         NewBackgroundTaskManager(),
+		watchedGitDirs:    make(map[string]string),
+		headDebounce:      make(map[string]func()),
+		refsDebounce:      make(map[string]func()),
 	}
 }
 
@@ -217,6 +226,13 @@ func (a *App) isPendingChild(sessionID string) bool {
 func (a *App) ServiceStartup(ctx context.Context, options application.ServiceOptions) error {
 	a.ctx = ctx
 
+	if w, err := fsnotify.NewWatcher(); err == nil {
+		a.headWatcher = w
+		go a.headWatchLoop()
+	} else {
+		fmt.Fprintf(os.Stderr, "[monika] head watcher init failed: %v\n", err)
+	}
+
 	// Restore the last opened project if one was saved.
 	if lastPath := a.loadLastProjectPath(); lastPath != "" {
 		if stat, err := os.Stat(lastPath); err == nil && stat.IsDir() {
@@ -275,6 +291,9 @@ func (a *App) ServiceShutdown() error {
 	a.cancelMu.Unlock()
 	a.bgTaskMgr.Cleanup()
 	a.eventBus.Close()
+	if a.headWatcher != nil {
+		a.headWatcher.Close()
+	}
 	return nil
 }
 func (a *App) ListBgTasks() []BgTaskInfo {
@@ -283,6 +302,10 @@ func (a *App) ListBgTasks() []BgTaskInfo {
 
 func (a *App) StopBgTask(taskID string) error {
 	return a.bgTaskMgr.Stop(taskID)
+}
+
+func (a *App) StartBgTask(command string) (string, error) {
+	return a.bgTaskMgr.Start(command, a.projectPath())
 }
 
 func (a *App) GetBgTaskLogs(taskID string) ([]string, error) {
@@ -358,6 +381,7 @@ func (a *App) OpenProject(path string) (*ProjectInfo, error) {
 	_ = builtin.RegisterLSP(a.registry, path, a.cfg.LSP.Servers, a.cfg.Formatters)
 	builtin.WireLSPHooks(a.registry)
 	a.saveLastProjectPath(path)
+	a.watchProjectHead(path)
 
 	return info, nil
 }
@@ -902,7 +926,12 @@ func resolveShellAPI() (string, string) {
 	return "", ""
 }
 
-var ansiRE = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+// ansiRE matches ANSI/VT escape sequences: OSC (title etc.), CSI (colors,
+// cursor, private modes), and simple two-byte escapes (ESC 7, ESC =, ...).
+var ansiRE = regexp.MustCompile(
+	`\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)` + // OSC: ESC ] ... BEL or ST(ESC \)
+		`|\x1b\[[0-?]*[ -/]*[@-~]` + // CSI: ESC [ params... final byte
+		`|\x1b[NOMDX78=>]`) // Other simple 2-byte escapes
 
 func stripANSI(s string) string {
 	return ansiRE.ReplaceAllString(s, "")
@@ -969,15 +998,17 @@ func (a *App) RunShellCommand(projectPath, sessionID, command string) error {
 		go func() {
 			defer wg.Done()
 			scanner := bufio.NewScanner(stdoutPipe)
+			scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 			for scanner.Scan() {
-				lineCh <- stripANSI(scanner.Text())
+				lineCh <- scanner.Text()
 			}
 		}()
 		go func() {
 			defer wg.Done()
 			scanner := bufio.NewScanner(stderrPipe)
+			scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 			for scanner.Scan() {
-				lineCh <- stripANSI(scanner.Text())
+				lineCh <- scanner.Text()
 			}
 		}()
 		go func() { wg.Wait(); close(lineCh) }()
@@ -1305,9 +1336,7 @@ func (a *App) handleAgentEvent(sessionID, model string, ev agent2.Event) {
 	case agent2.EventToolDone:
 		se.Type = "tool_done"
 		se.Tool = ev.Tool
-		// After bash execution, check if the git branch changed and notify the frontend.
 		if ev.Tool != nil && ev.Tool.Name == "bash" {
-			a.emitBranchChangeIfChanged()
 			a.emitCommitHistoryChangedIfChanged()
 		}
 	case agent2.EventUsage:
@@ -1994,6 +2023,196 @@ func (a *App) RefreshBranch(projectPath string) string {
 	}
 	a.setProjectBranch(projectPath, branch)
 	return branch
+}
+
+// headWatchLoop processes fsnotify events for .git/HEAD and .git/refs changes.
+func (a *App) headWatchLoop() {
+	for {
+		select {
+		case event, ok := <-a.headWatcher.Events:
+			if !ok {
+				return
+			}
+			if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) || event.Has(fsnotify.Rename) {
+				dir := filepath.Dir(event.Name)
+				base := filepath.Base(event.Name)
+				if base == "HEAD" {
+					if fn, ok := a.headDebounce[dir]; ok {
+						fn()
+					}
+				}
+				// COMMIT_EDITMSG is written on every successful commit — use as
+				// reliable signal on Windows where ref file events may be lost.
+				// Also detect direct ref file changes and packed-refs as fallback.
+				if base == "COMMIT_EDITMSG" || strings.Contains(filepath.ToSlash(event.Name), "/refs/") || base == "packed-refs" {
+					a.mu.RLock()
+					for gitDir, fn := range a.refsDebounce {
+						if strings.HasPrefix(event.Name, gitDir) {
+							fn()
+							break
+						}
+					}
+					a.mu.RUnlock()
+				}
+			}
+		case err, ok := <-a.headWatcher.Errors:
+			if !ok {
+				return
+			}
+			fmt.Fprintf(os.Stderr, "[monika] head watcher error: %v\n", err)
+		}
+	}
+}
+
+// watchProjectHead resolves the .git directory for a project and starts
+// watching its HEAD file for changes.
+func (a *App) watchProjectHead(projectPath string) {
+	if a.headWatcher == nil {
+		return
+	}
+
+	gitDir := filepath.Join(projectPath, ".git")
+
+	// Handle worktrees where .git is a file pointing to the actual git dir.
+	if info, err := os.Stat(gitDir); err == nil && !info.IsDir() {
+		data, err := os.ReadFile(gitDir)
+		if err != nil {
+			return
+		}
+		line := strings.TrimSpace(string(data))
+		if strings.HasPrefix(line, "gitdir: ") {
+			gitDir = line[len("gitdir: "):]
+		}
+	}
+
+	headPath := filepath.Join(gitDir, "HEAD")
+	if _, err := os.Stat(headPath); err != nil {
+		return
+	}
+
+	if err := a.headWatcher.Add(gitDir); err != nil {
+		fmt.Fprintf(os.Stderr, "[monika] watch git dir %s failed: %v\n", gitDir, err)
+		return
+	}
+
+	a.mu.Lock()
+	a.watchedGitDirs[gitDir] = projectPath
+	a.mu.Unlock()
+
+	// Debounce HEAD changes: 100ms to coalesce rapid writes (e.g. during rebase).
+	var headTimer *time.Timer
+	a.headDebounce[gitDir] = func() {
+		if headTimer != nil {
+			headTimer.Stop()
+		}
+		headTimer = time.AfterFunc(100*time.Millisecond, func() {
+			a.onHeadChange(gitDir)
+		})
+	}
+
+	// Debounce ref changes: 200ms to coalesce rapid writes (e.g. during push/fetch).
+	var refsTimer *time.Timer
+	a.refsDebounce[gitDir] = func() {
+		if refsTimer != nil {
+			refsTimer.Stop()
+		}
+		refsTimer = time.AfterFunc(200*time.Millisecond, func() {
+			a.onRefsChange(gitDir)
+		})
+	}
+}
+
+// onHeadChange is called when .git/HEAD is modified. It reads the file
+// directly and emits a branch-changed event if the branch differs from
+// the cached value.
+func (a *App) onHeadChange(gitDir string) {
+	a.mu.RLock()
+	projectPath, ok := a.watchedGitDirs[gitDir]
+	if !ok {
+		a.mu.RUnlock()
+		return
+	}
+	storedBranch := ""
+	if info, ok := a.projects[projectPath]; ok {
+		storedBranch = info.Branch
+	}
+	a.mu.RUnlock()
+
+	branch := readBranchFromHead(filepath.Join(gitDir, "HEAD"))
+	if branch == "" || branch == storedBranch {
+		return
+	}
+
+	a.setProjectBranch(projectPath, branch)
+	application.Get().Event.Emit("branch-changed", branch)
+}
+
+// onRefsChange is called when .git/refs/ or .git/packed-refs changes.
+// It reads HEAD directly to get the current commit hash and emits
+// commit-history-changed if it differs from the cached value.
+func (a *App) onRefsChange(gitDir string) {
+	projectPath := ""
+	a.mu.RLock()
+	projectPath, ok := a.watchedGitDirs[gitDir]
+	if !ok {
+		a.mu.RUnlock()
+		return
+	}
+	storedHash := ""
+	if info, ok := a.projects[projectPath]; ok {
+		storedHash = info.LastCommitHash
+	}
+	a.mu.RUnlock()
+
+	// Read the commit hash HEAD points to without spawning git.
+	// .git/HEAD is either "ref: refs/heads/<branch>" or a raw hash.
+	headData, err := os.ReadFile(filepath.Join(gitDir, "HEAD"))
+	if err != nil {
+		return
+	}
+	line := strings.TrimSpace(string(headData))
+	const refPrefix = "ref: "
+	var currentHash string
+	if strings.HasPrefix(line, refPrefix) {
+		refPath := filepath.Join(gitDir, line[len(refPrefix):])
+		data, err := os.ReadFile(refPath)
+		if err != nil {
+			return
+		}
+		currentHash = strings.TrimSpace(string(data))
+	} else {
+		currentHash = line
+	}
+
+	if currentHash == "" || currentHash == storedHash {
+		return
+	}
+
+	a.setProjectLastCommitHash(projectPath, currentHash)
+	application.Get().Event.Emit("commit-history-changed", currentHash)
+}
+
+// readBranchFromHead parses the branch name directly from the .git/HEAD
+// file without spawning a subprocess.
+//
+// Format: "ref: refs/heads/<branch>\n" → returns <branch>
+//
+//	Detached: "<sha>\n"                  → returns "<sha>" (short)
+func readBranchFromHead(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	line := strings.TrimSpace(string(data))
+	const prefix = "ref: refs/heads/"
+	if strings.HasPrefix(line, prefix) {
+		return line[len(prefix):]
+	}
+	// Detached HEAD — return short hash.
+	if len(line) > 7 {
+		return line[:7]
+	}
+	return line
 }
 
 // CreateBranch creates and checks out a new branch from the given base branch.

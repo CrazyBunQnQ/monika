@@ -228,6 +228,9 @@ function SessionList(props: IDockviewPanelProps) {
         if (!projectPath) return
         try {
             await App.ArchiveSession(projectPath, s.id)
+            const state = useStore.getState()
+            state.setSessionStatus(s.id, 'archived')
+            state.removeGeneratingSession(s.id)
             bumpSessionListVersion()
         } catch (err) {
             logger.error('Failed to archive session:', err)

@@ -491,6 +491,7 @@ function FileTree(_props: IDockviewPanelProps) {
     const bgTasks = useStore((s) => s.bgTasks)
     const selectedBgTaskId = useStore((s) => s.selectedBgTaskId)
     const selectBgTask = useStore((s) => s.selectBgTask)
+    const startBgTask = useStore((s) => s.startBgTask)
 
     return (
         <div className="flex flex-col h-full" style={{ background: 'var(--bg-sidebar)' }}>
@@ -623,6 +624,16 @@ function FileTree(_props: IDockviewPanelProps) {
 
             {/* TASKS tab content */}
             <div style={{ display: activeTab === 'tasks' ? 'flex' : 'none', flex: 1, overflow: 'hidden', flexDirection: 'column' }}>
+                <input
+                    className="mx-2 mt-2 bg-[var(--bg-input)] text-[var(--text)] text-xs px-2 py-1 rounded outline-none border border-[var(--border)] placeholder:text-[var(--text-muted)]"
+                    placeholder="Run command..."
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter' && e.currentTarget.value.trim()) {
+                            startBgTask(e.currentTarget.value.trim())
+                            e.currentTarget.value = ''
+                        }
+                    }}
+                />
                 <div className="flex-1 overflow-auto">
                     {bgTasks.length === 0 && (
                         <div className="px-3 py-8 text-xs text-center text-[var(--text-muted)]">No background tasks</div>

@@ -14,13 +14,12 @@ import (
 	"monika/internal/tool/builtin"
 )
 
-// BgTaskStatus represents the current state of a background task.
-type BgTaskStatus string
+type BgTaskStatus = builtin.BgTaskStatus
 
 const (
-	BgTaskRunning BgTaskStatus = "running"
-	BgTaskStopped BgTaskStatus = "stopped"
-	BgTaskExited  BgTaskStatus = "exited"
+	BgTaskRunning = builtin.BgTaskRunning
+	BgTaskStopped = builtin.BgTaskStopped
+	BgTaskExited  = builtin.BgTaskExited
 )
 
 // BgTaskEventType represents the type of a background task event.
@@ -46,15 +45,8 @@ type BgTaskEvent struct {
 }
 
 // BgTaskInfo is a snapshot of a background task's current state.
-type BgTaskInfo struct {
-	ID        string       `json:"id"`
-	Command   string       `json:"command"`
-	WorkDir   string       `json:"work_dir"`
-	PID       int          `json:"pid"`
-	Status    BgTaskStatus `json:"status"`
-	ExitCode  int          `json:"exit_code,omitempty"`
-	StartedAt time.Time    `json:"started_at"`
-}
+// BgTaskInfo is a snapshot of a background task's current state.
+type BgTaskInfo = builtin.BgTaskInfo
 
 // ringBuffer is a fixed-size circular buffer for log lines.
 type ringBuffer struct {

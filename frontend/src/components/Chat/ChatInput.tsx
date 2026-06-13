@@ -5,6 +5,7 @@ import ModelPicker from './ModelPicker'
 import WorktreeChip from './WorktreeChip'
 import WorktreeManager from './WorktreeManager'
 import PermissionModePicker from './PermissionModePicker'
+import InputModePicker from './InputModePicker'
 import AutocompleteDropdown, { AcItem, AcState } from './AutocompleteDropdown'
 import { findLabels, LabelRegion, renderChipHTML } from './LabelChip'
 import { App } from '../../../bindings/monika'
@@ -228,6 +229,7 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
     const labels = useMemo(() => findLabels(value, skillNames), [value, skillNames])
 
     const activeSessionId = useStore((s) => s.activeSessionId)
+    const inputMode = useStore((s) => s.inputModes[activeSessionId] || 'normal')
     const shellExecutingSessionIds = useStore((s) => s.shellExecutingSessionIds)
     const isShellExecuting = shellExecutingSessionIds.includes(activeSessionId)
     const sessionTokens = useStore((s) => s.sessionTokens)
@@ -246,6 +248,8 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
     const navigatingHistoryRef = useRef(false)
     const sessionIdRef = useRef(activeSessionId)
     sessionIdRef.current = activeSessionId
+    const tabCycleRef = useRef<{ wordStart: number; matches: string[]; index: number } | null>(null)
+    const tabCompletingRef = useRef(false)
     const valueRef = useRef(value)
     valueRef.current = value
 
@@ -289,7 +293,16 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
         historyIndexRef.current = -1
     }, [activeSessionId])
 
+    // Reset tab cycle state when user edits text
+    useEffect(() => {
+        if (!tabCompletingRef.current) {
+            tabCycleRef.current = null
+        }
+        tabCompletingRef.current = false
+    }, [value])
+
     const onStopRef = useRef(onStop)
+
     onStopRef.current = onStop
 
     const prevDisabledRef = useRef(disabled)
@@ -544,11 +557,16 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
             setAc(s => s.open ? { ...s, open: false } : s)
             return
         }
+        // In shell mode, skip / command autocomplete
+        if (inputMode === 'shell' && match.prefix === '/') {
+            setAc(s => s.open ? { ...s, open: false } : s)
+            return
+        }
         if (acDebounceRef.current) clearTimeout(acDebounceRef.current)
         acDebounceRef.current = setTimeout(() => {
             fetchAutocomplete(match.prefix, match.query)
         }, 300)
-    }, [value, fetchAutocomplete])
+    }, [value, fetchAutocomplete, inputMode])
 
     useEffect(() => {
         updateAutocomplete()
@@ -588,6 +606,21 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
             resolved = resolved.split(marker).join(original)
         }
 
+        // Shell mode: submit directly as shell command
+        if (inputMode === 'shell') {
+            let cmd = resolved
+            if (cmd.startsWith('$')) {
+                cmd = cmd.slice(1).trim()
+            }
+            if (!cmd) { onSend(resolved); setValue(''); return }
+            const h = historyRef.current.filter(c => c !== cmd)
+            const updated = [cmd, ...h].slice(0, 50)
+            historyRef.current = updated
+            saveHistory(sessionIdRef.current, updated)
+            onRunShell(cmd)
+            setValue('')
+            return
+        }
         if (resolved.startsWith('$')) {
             const command = resolved.slice(1).trim()
             if (!command) { onSend(resolved); setValue(''); return }
@@ -644,6 +677,52 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
         setValue('')
     }
 
+    const handleTabComplete = useCallback(() => {
+        if (!projectPath) return
+        const el = editorRef.current
+        if (!el) return
+        const v = valueRef.current
+        const cursor = getTextOffset(el)
+        const textBefore = v.slice(0, cursor)
+        // Find last whitespace before cursor to extract current word
+        const lastSpace = Math.max(textBefore.lastIndexOf(' '), textBefore.lastIndexOf('\n'), textBefore.lastIndexOf('\t'))
+        const wordStart = lastSpace + 1
+        const fragment = textBefore.slice(wordStart)
+        if (!fragment) return
+
+        // If cycling through existing matches at the same position
+        const cycle = tabCycleRef.current
+        if (cycle && cycle.wordStart === wordStart && cycle.matches.length > 0) {
+            const nextIdx = (cycle.index + 1) % cycle.matches.length
+            tabCycleRef.current = { ...cycle, index: nextIdx }
+            const replaceText = cycle.matches[nextIdx]
+            const newValue = v.slice(0, wordStart) + replaceText + v.slice(cursor)
+            tabCompletingRef.current = true
+            setValue(newValue)
+            pendingCursorRef.current = wordStart + replaceText.length
+            return
+        }
+
+        // Fetch file list for matching (non-recursive, top level only for performance)
+        App.ListFileTree(projectPath, false)
+            .then((r: FileEntry[]) => {
+                const files = flattenFiles(r as FileEntry[])
+                const matches = files
+                    .filter(f => f.path.startsWith(fragment))
+                    .map(f => f.is_dir ? f.path + '/' : f.path)
+                    .slice(0, 20)
+                if (matches.length === 0) return
+                tabCycleRef.current = { wordStart, matches, index: 0 }
+                // Use ref to avoid stale closure if user edited while fetching
+                const curr = valueRef.current
+                const newValue = curr.slice(0, wordStart) + matches[0] + curr.slice(cursor)
+                tabCompletingRef.current = true
+                setValue(newValue)
+                pendingCursorRef.current = wordStart + matches[0].length
+            })
+            .catch(() => { /* ignore */ })
+    }, [projectPath])
+
     const handleKeyDown = (e: KeyboardEvent) => {
         const el = editorRef.current
         if (!el) return
@@ -672,6 +751,13 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
             }
         }
 
+        // Shell mode: Tab for inline path completion
+        if (inputMode === 'shell' && e.key === 'Tab' && !ac.open) {
+            e.preventDefault()
+            handleTabComplete()
+            return
+        }
+
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault()
             handleSubmit()
@@ -679,9 +765,9 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
 
         // History navigation
         if (!disabled && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
-            const isShellMode = valueRef.current.startsWith('$')
+            const isShellMode = inputMode === 'shell'
             const histSrc = isShellMode
-                ? historyRef.current.map(c => `$${c}`)
+                ? historyRef.current
                 : useStore.getState().sessionMessages[sessionIdRef.current]?.filter(m => m.role === 'user').map(m => m.content) || []
 
             if (e.key === 'ArrowUp' && historyIndexRef.current <= histSrc.length - 1 && (isShellMode || historyIndexRef.current !== -1 || isCursorOnFirstLine(el!))) {
@@ -706,7 +792,7 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
                 } else {
                     historyIndexRef.current = -1
                     navigatingHistoryRef.current = true
-                    setValue(isShellMode ? '$ ' : '')
+                    setValue('')
                 }
             }
         }
@@ -749,13 +835,14 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
                         fontFamily: 'inherit',
                         letterSpacing: 'inherit',
                     }}
-                    data-placeholder={disabled ? 'Generating...' : 'Send a message... (Enter to submit, Shift+Enter for newline)'}
+                    data-placeholder={disabled ? 'Generating...' : inputMode === 'shell' ? 'Run a shell command... (each command runs independently)' : 'Send a message... (Enter to submit, Shift+Enter for newline)'}
                 />
 
                 <div
                     className="flex items-center gap-2 px-[10px] pb-[8px]"
                     style={{ background: 'transparent' }}
                 >
+                    <InputModePicker />
                     <PermissionModePicker />
                     <ModelPicker />
                     <WorktreeChip

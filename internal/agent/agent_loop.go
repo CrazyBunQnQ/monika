@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -14,6 +15,8 @@ import (
 	"monika/pkg/engine"
 	"monika/pkg/tokenizer"
 )
+
+var shellAnsiRE = regexp.MustCompile(`\x1b\][^\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b.`)
 
 // CompactionPrompt is the system prompt used by the compaction agent.
 const CompactionPrompt = `You are an anchored context summarization assistant for coding sessions.
@@ -1136,7 +1139,7 @@ func (a *AgentLoop) buildMessages(conv *Conversation) []engine.ChatMessage {
 		if m.Role == "shell" {
 			filteredMsgs[i] = engine.ChatMessage{
 				Role:    "user",
-				Content: m.Content,
+				Content: shellAnsiRE.ReplaceAllString(m.Content, ""),
 			}
 		}
 	}

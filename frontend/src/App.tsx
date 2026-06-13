@@ -10,7 +10,6 @@ import SettingsPage from './components/Settings/SettingsPage'
 import { ChatTab } from './components/Panel/ChatTab'
 import { SessionTab } from './components/Panel/SessionTab'
 import ChangesList from './components/ChangesList/ChangesList'
-import TasksPanel from './components/Tasks/TasksPanel'
 import { DefaultTab } from './components/Panel/DefaultTab'
 import { useLayoutPersistence } from './components/Panel/useLayoutPersistence'
 import { useChangeWatcher } from './hooks/useChangeWatcher'
@@ -22,7 +21,6 @@ const components: Record<string, React.FunctionComponent<IDockviewPanelProps>> =
     preview: PreviewPanel,
     files: FileTree,
     changes: ChangesList,
-    tasks: TasksPanel,
     session: SessionList,
 }
 

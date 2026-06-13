@@ -291,7 +291,7 @@ func TestRegisterDefaultsAll(t *testing.T) {
 	if err := RegisterDefaults(r, t.TempDir(), "", nil); err != nil {
 		t.Fatal(err)
 	}
-	expected := []string{"file_read", "file_write", "file_edit", "file_list", "glob", "grep", "bash"}
+	expected := []string{"file_read", "file_write", "file_edit", "file_list", "glob", "grep", "bash", "background_task"}
 	for _, name := range expected {
 		if _, ok := r.Get(name); !ok {
 			t.Fatalf("tool %q not registered", name)

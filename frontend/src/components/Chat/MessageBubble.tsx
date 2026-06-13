@@ -4,6 +4,7 @@ import MarkdownBlock from './MarkdownBlock'
 import { IconChevronDown } from '../Icons'
 import SpawnBlock from './SpawnBlock'
 import { formatTokens } from '../../lib/format'
+import { AnsiText } from '../../lib/ansi'
 
 interface ToolCall {
     id?: string
@@ -489,7 +490,18 @@ function CompactionCard({ message }: { message: Message }) {
     )
 }
 
-/* ---- message bubble (router) ---- */
+/* ---- shell content normalisation ---- */
+
+// Persisted shell content is wrapped in markdown fences + a "Shell output:" header
+// for LLM readability. At render time we strip that wrapper so the bubble shows a
+// clean "$ command\noutput" layout. Live streaming content (no fences) passes through.
+function normalizeShellContent(content: string): { command: string; output: string } {
+    const m = content.match(/^\$ [^\n]*/);
+    const command = m ? m[0] : '';
+    let rest = m ? content.slice(m[0].length) : content;
+    rest = rest.replace(/^\n+Shell output[^\n]*\n```[ \t]*\n/, '').replace(/\n```[ \t]*$/, '');
+    return { command, output: rest.replace(/^\n+/, '') };
+}
 
 interface MessageBubbleProps {
     message: Message
@@ -509,16 +521,27 @@ const MessageBubble = React.memo(function MessageBubble({ message, isGenerating,
         return (
             <div className="group/bubble relative">
                 <div className="flex flex-col gap-1.5"
-                     style={{ borderLeft: isSelected ? '3px solid var(--accent)' : '3px solid transparent',
-                              paddingLeft: '12px', borderRadius: '0 4px 4px 0' }}>
+                    style={{
+                        borderLeft: isSelected ? '3px solid var(--accent)' : '3px solid transparent',
+                        paddingLeft: '12px', borderRadius: '0 4px 4px 0'
+                    }}>
                     <RoleLabel role="shell" />
                     <MsgBlock accent="var(--yellow)">
-                        <div
-                            className="text-[13px] text-[var(--text-primary)] whitespace-pre-wrap leading-[1.6]"
-                            style={{ fontFamily: 'var(--font-mono)' }}
-                        >
-                            {content}
-                        </div>
+                        {(() => {
+                            const { command, output } = normalizeShellContent(content)
+                            return (
+                                <div
+                                    className="text-[13px] text-[var(--text-primary)] whitespace-pre-wrap leading-[1.6]"
+                                    style={{ fontFamily: 'var(--font-mono)' }}
+                                >
+                                    {command && (
+                                        <span style={{ color: 'var(--yellow)', fontWeight: 600 }}>{command}</span>
+                                    )}
+                                    {command && output && '\n'}
+                                    {output && <AnsiText text={output} />}
+                                </div>
+                            )
+                        })()}
                     </MsgBlock>
                 </div>
             </div>

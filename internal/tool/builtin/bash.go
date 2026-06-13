@@ -16,7 +16,26 @@ import (
 type BgManager interface {
 	Start(command, workdir string) (string, error)
 	Stop(taskID string) error
+	List() []BgTaskInfo
 	Logs(taskID string, lines int) ([]string, error)
+}
+
+type BgTaskStatus string
+
+const (
+	BgTaskRunning BgTaskStatus = "running"
+	BgTaskStopped BgTaskStatus = "stopped"
+	BgTaskExited  BgTaskStatus = "exited"
+)
+
+type BgTaskInfo struct {
+	ID        string       `json:"id"`
+	Command   string       `json:"command"`
+	WorkDir   string       `json:"work_dir"`
+	PID       int          `json:"pid"`
+	Status    BgTaskStatus `json:"status"`
+	ExitCode  int          `json:"exit_code,omitempty"`
+	StartedAt time.Time    `json:"started_at"`
 }
 
 type bashTool struct {
@@ -107,7 +126,7 @@ Do NOT use git commands with -i flag (requires interactive input).
 
 # Background Tasks
 
-When a command is expected to run for a long time (dev servers, watchers, file watchers, build watchers, etc.), use action='background' instead of blocking. The command runs in the background and you get a task_id back. You can check logs with action='logs' and stop with action='stop'. Do NOT block waiting for long-running commands.`
+When a command is expected to run for a long time (dev servers, watchers, file watchers, build watchers, etc.), use action='background' instead of blocking. The command runs in the background and you get a task_id back. Use the 'background_task' tool to list, check logs, or stop background tasks. Do NOT block waiting for long-running commands.`
 }
 
 func (b *bashTool) Parameters() map[string]any {
@@ -124,12 +143,8 @@ func (b *bashTool) Parameters() map[string]any {
 			},
 			"action": map[string]any{
 				"type":        "string",
-				"enum":        []string{"run", "background", "stop", "logs"},
-				"description": "Action mode: 'run' (default, wait for completion), 'background' (run in background, return task_id), 'stop' (stop a background task), 'logs' (get recent logs of a background task).",
-			},
-			"task_id": map[string]any{
-				"type":        "string",
-				"description": "Background task ID. Required when action is 'stop' or 'logs'.",
+				"enum":        []string{"run", "background"},
+				"description": "Action mode: 'run' (default, wait for completion), 'background' (run in background, return task_id).",
 			},
 			"timeout": map[string]any{
 				"type":        "integer",
@@ -145,7 +160,6 @@ func (b *bashTool) Execute(ctx context.Context, args json.RawMessage) (tool.Exec
 		Command string `json:"command"`
 		Workdir string `json:"workdir"`
 		Action  string `json:"action"`
-		TaskID  string `json:"task_id"`
 		Timeout int    `json:"timeout"`
 	}
 
@@ -154,32 +168,6 @@ func (b *bashTool) Execute(ctx context.Context, args json.RawMessage) (tool.Exec
 	}
 
 	switch params.Action {
-	case "stop":
-		if b.bgMgr == nil {
-			return tool.ExecutionResult{Content: "background tasks not available", IsError: true}, nil
-		}
-		if params.TaskID == "" {
-			return tool.ExecutionResult{Content: "task_id is required for stop action", IsError: true}, nil
-		}
-		if err := b.bgMgr.Stop(params.TaskID); err != nil {
-			return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
-		}
-		return tool.ExecutionResult{Content: "stopped task " + params.TaskID}, nil
-
-	case "logs":
-		if b.bgMgr == nil {
-			return tool.ExecutionResult{Content: "background tasks not available", IsError: true}, nil
-		}
-		if params.TaskID == "" {
-			return tool.ExecutionResult{Content: "task_id is required for logs action", IsError: true}, nil
-		}
-		lines, err := b.bgMgr.Logs(params.TaskID, 50)
-		if err != nil {
-			return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
-		}
-		out := strings.Join(lines, "\n")
-		return tool.ExecutionResult{Content: out}, nil
-
 	case "background":
 		if b.bgMgr == nil {
 			return tool.ExecutionResult{Content: "background tasks not available", IsError: true}, nil

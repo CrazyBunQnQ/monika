@@ -197,6 +197,7 @@ interface AppState {
     pendingPermission: PermissionRequiredEvent | null
     pendingAskUser: AskUserEvent | null
     permissionMode: 'auto' | 'manual'
+    inputModes: Record<string, 'normal' | 'shell'>
     permissionRules: { tool: string; pattern: string; decision: string; source: string; createdAt: string }[]
     agents: AgentInfo[]
     skills: SkillInfo[]
@@ -225,6 +226,7 @@ interface AppState {
 
     addMessage: (msg: Message) => void
     setPermissionMode: (mode: 'auto' | 'manual') => void
+    setInputMode: (sessionId: string, mode: 'normal' | 'shell') => void
     setMsgFilter: (filter: 'all' | 'chat' | 'user' | 'assistant') => void
     toggleSettings: () => void
     appendToSession: (sessionId: string, msgs: Message[]) => void
@@ -335,6 +337,7 @@ interface AppState {
     updateBgTask: (info: BgTaskInfo) => void
     appendBgTaskLog: (taskId: string, line: string) => void
     stopBgTask: (taskId: string) => Promise<void>
+    startBgTask: (command: string) => Promise<void>
 }
 
 const INITIAL_DISPLAY_COUNT = 15
@@ -381,6 +384,7 @@ export const useStore = create<AppState>((set, get) => ({
     pendingPermission: null as PermissionRequiredEvent | null,
     pendingAskUser: null as AskUserEvent | null,
     permissionMode: 'auto',
+    inputModes: {},
     permissionRules: [],
     agents: [],
     skills: [],
@@ -628,6 +632,9 @@ export const useStore = create<AppState>((set, get) => ({
             // RPC may not be registered yet (happens during store init)
         })
     },
+    setInputMode: (sessionId, mode) => set((s) => ({
+        inputModes: { ...s.inputModes, [sessionId]: mode },
+    })),
     toggleSettings: () => set((s) => ({ settingsOpen: !s.settingsOpen })),
     setMsgFilter: (filter) => set({ msgFilter: filter }),
     appendPathToInput: (path) => set({ chatInputAppendPath: path }),
@@ -672,6 +679,14 @@ export const useStore = create<AppState>((set, get) => ({
             console.error('[monika] failed to stop bg task:', e)
         }
     },
+    startBgTask: async (command: string) => {
+        try {
+            await Call.ByName('monika/internal/api.App.StartBgTask', command)
+        } catch (e) {
+            console.error('[monika] failed to start bg task:', e)
+        }
+    },
+
 
     setLastAssistantMeta: (sessionId, meta) => {
         set((s) => {
@@ -1481,6 +1496,7 @@ export const useStore = create<AppState>((set, get) => ({
             pendingPermission: null,
             pendingAskUser: null,
             permissionMode: 'auto',
+            inputModes: {},
             permissionRules: [],
             agents: [],
             skills: [],

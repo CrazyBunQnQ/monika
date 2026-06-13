@@ -246,12 +246,10 @@ function HistoryTab({ active, effectivePath }: { active: boolean; effectivePath:
     const commitHistory = useStore((s) => s.commitHistory)
     const loadCommitHistory = useStore((s) => s.loadCommitHistory)
 
-    // Load immediately on activation, and poll every second while active
+    // Load immediately on activation
     useEffect(() => {
-        loadCommitHistory(effectivePath)
         if (!active) return
-        const id = setInterval(() => loadCommitHistory(effectivePath), 1000)
-        return () => clearInterval(id)
+        loadCommitHistory(effectivePath)
     }, [active, effectivePath]) // eslint-disable-line react-hooks/exhaustive-deps
 
     if (commitHistory.loading && commitHistory.commits.length === 0) {

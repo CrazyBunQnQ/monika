@@ -23,15 +23,6 @@ func computeDiff(filePath string, old, new string) []string {
 	oldLines := strings.Split(old, "\n")
 	newLines := strings.Split(new, "\n")
 
-	const maxDiffLines = 2000
-	if len(oldLines) > maxDiffLines || len(newLines) > maxDiffLines {
-		return []string{
-			"--- a/" + filePath,
-			"+++ b/" + filePath,
-			"diff too large (" + itoa(len(oldLines)) + " vs " + itoa(len(newLines)) + " lines), skipping",
-		}
-	}
-
 	if len(oldLines) > 0 && oldLines[len(oldLines)-1] == "" {
 		oldLines = oldLines[:len(oldLines)-1]
 	}

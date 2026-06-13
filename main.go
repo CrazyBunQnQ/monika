@@ -307,10 +307,12 @@ Once you identify the right skill or tool, load it with **skill** or call the MC
 	appService.InitTSBridge(tsBridge)
 	appGetProjectPath = appService.GetProjectPath
 
-	// Wire background task manager to bash tool
-	if bashTool, ok := registry.Get("bash"); ok {
-		if setter, ok := bashTool.(interface{ SetBgManager(builtin.BgManager) }); ok {
-			setter.SetBgManager(appService.BgTaskManager())
+	// Wire background task manager to bash and background_task tools
+	for _, name := range []string{"bash", "background_task"} {
+		if t, ok := registry.Get(name); ok {
+			if setter, ok := t.(interface{ SetBgManager(builtin.BgManager) }); ok {
+				setter.SetBgManager(appService.BgTaskManager())
+			}
 		}
 	}
 

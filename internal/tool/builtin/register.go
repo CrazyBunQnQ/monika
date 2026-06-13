@@ -31,7 +31,13 @@ func RegisterDefaults(r *tool.ToolRegistry, projectDir, homeDir string, tsQuery 
 		return err
 	}
 	r.Register(sh)
+	bt, err := NewBackgroundTask()
+	if err != nil {
+		return err
+	}
+	r.Register(bt)
 	return nil
+
 }
 
 // RegisterLSP registers the LSP tool for code intelligence.
