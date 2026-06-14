@@ -30,12 +30,15 @@ type Event struct {
 }
 
 type ToolEvent struct {
-	ID        string   `json:"id"`
-	Name      string   `json:"name"`
-	Input     string   `json:"input"`
-	Output    string   `json:"output"`
-	Status    string   `json:"status"`
-	DiffLines []string `json:"diffLines,omitempty"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Input       string   `json:"input"`
+	Output      string   `json:"output"`
+	Status      string   `json:"status"`
+	DiffLines   []string `json:"diffLines,omitempty"`
+	Conflict    bool     `json:"conflict,omitempty"`    // user has unsaved edits
+	DiskContent string   `json:"diskContent,omitempty"` // file on disk (with user edits)
+	AiContent   string   `json:"aiContent,omitempty"`   // what AI wants to write
 }
 
 type UsageEvent struct {

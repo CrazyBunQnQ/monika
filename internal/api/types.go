@@ -186,6 +186,23 @@ type LspHoverResult struct {
 	Contents string `json:"contents"`
 }
 
+// LspCompletionItem is a single completion suggestion.
+type LspCompletionItem struct {
+	Label         string `json:"label"`
+	Kind          int    `json:"kind,omitempty"`
+	Detail        string `json:"detail,omitempty"`
+	Documentation string `json:"documentation,omitempty"`
+	InsertText    string `json:"insertText,omitempty"`
+}
+
+// LspCompletionResult is the list of completion items.
+type LspCompletionResult struct {
+	IsIncomplete bool                `json:"isIncomplete"`
+	Items        []LspCompletionItem `json:"items"`
+}
+
+// LspSymbol is a document symbol with a tree of children.
+
 // LspSymbol is a document symbol with a tree of children.
 type LspSymbol struct {
 	Name      string      `json:"name"`

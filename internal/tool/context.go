@@ -1,6 +1,9 @@
 package tool
 
-import "context"
+import (
+	"context"
+	"sync"
+)
 
 type projectDirKeyType struct{}
 type sessionIDKeyType struct{}
@@ -180,4 +183,31 @@ func WithMessageContent(ctx context.Context, content string) context.Context {
 func MessageContentFromContext(ctx context.Context) string {
 	s, _ := ctx.Value(messageContentKey).(string)
 	return s
+}
+
+// dirtyFiles tracks which files have unsaved user edits.
+// Key: absolute file path, Value: bool.
+var dirtyFiles sync.Map
+
+// IsFileDirty returns true if the file has unsaved user edits.
+func IsFileDirty(path string) bool {
+	v, ok := dirtyFiles.Load(path)
+	return ok && v.(bool)
+}
+
+// SetFileDirty marks a file as having (or not having) unsaved user edits.
+func SetFileDirty(path string, dirty bool) {
+	if dirty {
+		dirtyFiles.Store(path, true)
+	} else {
+		dirtyFiles.Delete(path)
+	}
+}
+
+// ClearSessionDirty removes all dirty flags (called on session end).
+func ClearSessionDirty() {
+	dirtyFiles.Range(func(key, _ any) bool {
+		dirtyFiles.Delete(key)
+		return true
+	})
 }

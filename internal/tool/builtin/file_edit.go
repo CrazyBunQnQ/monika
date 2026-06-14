@@ -86,6 +86,23 @@ func (f *fileEdit) Execute(ctx context.Context, args json.RawMessage) (tool.Exec
 		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 	}
 
+	if tool.IsFileDirty(safePath) {
+		diskData, _ := os.ReadFile(safePath)
+		diskContent := string(diskData)
+		aiContent, applyErr := applyEditToContent(diskContent, params.Anchor, params.NewString, lineCount)
+		if applyErr != nil {
+			return tool.ExecutionResult{Content: applyErr.Error(), IsError: true}, nil
+		}
+		diff := computeDiff(safePath, diskContent, aiContent)
+		return tool.ExecutionResult{
+			Content:     fmt.Sprintf("⚠ %s has unsaved user edits. Choose Accept AI or Keep Mine in preview.", safePath),
+			Conflict:    true,
+			DiskContent: diskContent,
+			AiContent:   aiContent,
+			DiffLines:   diff,
+		}, nil
+	}
+
 	result, err := f.editFile(safePath, params.Anchor, params.NewString, lineCount)
 	if err != nil {
 		return result, err
@@ -121,7 +138,6 @@ func (f *fileEdit) editFile(path, anchor, newString string, lineCount int) (tool
 		}, nil
 	}
 
-	hadCRLF := strings.Contains(rawContent, "\r\n")
 	content := strings.ReplaceAll(rawContent, "\r\n", "\n")
 	newString = strings.ReplaceAll(newString, "\r\n", "\n")
 
@@ -167,32 +183,10 @@ func (f *fileEdit) editFile(path, anchor, newString string, lineCount int) (tool
 	}
 
 	rawBefore := content
-
-	var result []string
-	if lineCount == 0 {
-		// Insert mode: insert new_string after anchor line
-		before := lines[:lineNum]
-		after := lines[lineNum:]
-		insertLines := splitLines(newString)
-		result = make([]string, 0, len(before)+len(insertLines)+len(after))
-		result = append(result, before...)
-		result = append(result, insertLines...)
-		result = append(result, after...)
-	} else {
-		// Replace mode: replace lineNum..lineNum+lineCount-1 with new_string
-		before := lines[:lineNum-1]
-		after := lines[lineNum+lineCount-1:]
-		replacementLines := splitLines(newString)
-		result = make([]string, 0, len(before)+len(replacementLines)+len(after))
-		result = append(result, before...)
-		result = append(result, replacementLines...)
-		result = append(result, after...)
-	}
-
-	content = strings.Join(result, "\n")
-
-	if hadCRLF {
-		content = strings.ReplaceAll(content, "\n", "\r\n")
+	var applyErr error
+	content, applyErr = applyEditToContent(rawContent, anchor, newString, lineCount)
+	if applyErr != nil {
+		return tool.ExecutionResult{Content: applyErr.Error(), IsError: true}, nil
 	}
 	if err := os.WriteFile(path, []byte(content), info.Mode()); err != nil {
 		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
@@ -206,10 +200,13 @@ func (f *fileEdit) editFile(path, anchor, newString string, lineCount int) (tool
 		action = "Inserted after"
 		detail = fmt.Sprintf("line %d", lineNum)
 	}
-	balanceWarn := checkBracketBalance(newString)
+	balanceWarn := checkBracketBalanceDelta(rawBefore, content)
 	resultText := fmt.Sprintf("%s %s in %s", action, detail, path)
 	if balanceWarn != "" {
 		resultText += "\n⚠ " + balanceWarn
+	}
+	if len(diffLines) > 0 {
+		resultText += "\n" + strings.Join(diffLines, "\n")
 	}
 	return tool.ExecutionResult{
 		Content:   resultText,
@@ -217,47 +214,99 @@ func (f *fileEdit) editFile(path, anchor, newString string, lineCount int) (tool
 	}, nil
 }
 
-// checkBracketBalance counts braces/parens/brackets and warns about mismatches.
-func checkBracketBalance(s string) string {
-	var openParens, closeParens int
-	var openBraces, closeBraces int
-	var openBrackets, closeBrackets int
-	for _, ch := range s {
-		switch ch {
-		case '(':
-			openParens++
-		case ')':
-			closeParens++
-		case '{':
-			openBraces++
-		case '}':
-			closeBraces++
-		case '[':
-			openBrackets++
-		case ']':
-			closeBrackets++
-		}
+// applyEditToContent applies a line-based edit to the given content string
+// and returns the new content. It does NOT write to disk.
+func applyEditToContent(content, anchor, newString string, lineCount int) (string, error) {
+	hadCRLF := strings.Contains(content, "\r\n")
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	newString = strings.ReplaceAll(newString, "\r\n", "\n")
+
+	colonIdx := strings.LastIndex(anchor, ":")
+	if colonIdx < 0 {
+		return "", fmt.Errorf("invalid anchor format")
 	}
+	lineNum, err := strconv.Atoi(anchor[colonIdx+1:])
+	if err != nil || lineNum < 1 {
+		return "", fmt.Errorf("invalid anchor line number")
+	}
+
+	lines := strings.Split(content, "\n")
+	if lineNum > len(lines) {
+		return "", fmt.Errorf("anchor line beyond file length")
+	}
+
+	var result []string
+	if lineCount == 0 {
+		before := lines[:lineNum]
+		after := lines[lineNum:]
+		insertLines := splitLines(newString)
+		result = make([]string, 0, len(before)+len(insertLines)+len(after))
+		result = append(result, before...)
+		result = append(result, insertLines...)
+		result = append(result, after...)
+	} else {
+		before := lines[:lineNum-1]
+		after := lines[lineNum+lineCount-1:]
+		replacementLines := splitLines(newString)
+		result = make([]string, 0, len(before)+len(replacementLines)+len(after))
+		result = append(result, before...)
+		result = append(result, replacementLines...)
+		result = append(result, after...)
+	}
+
+	content = strings.Join(result, "\n")
+	if hadCRLF {
+		content = strings.ReplaceAll(content, "\n", "\r\n")
+	}
+	return content, nil
+}
+
+// checkBracketBalanceDelta detects whether an edit changed the bracket
+// balance of the entire file. Unlike checking new_string in isolation
+// (which false-positives on valid partial edits), this compares the net
+// bracket count of the whole file before and after. A non-zero delta
+// strongly suggests broken structure — e.g. a '}' was removed without
+// its matching '{'.
+func checkBracketBalanceDelta(oldContent, newContent string) string {
+	o := countBrackets(oldContent)
+	n := countBrackets(newContent)
 	var warns []string
-	if diff := openParens - closeParens; diff > 0 {
-		warns = append(warns, fmt.Sprintf("%d more ( than )", diff))
-	} else if diff := closeParens - openParens; diff > 0 {
-		warns = append(warns, fmt.Sprintf("%d more ) than (", diff))
+	if o.parens != n.parens {
+		warns = append(warns, fmt.Sprintf("() %d->%d", o.parens, n.parens))
 	}
-	if diff := openBraces - closeBraces; diff > 0 {
-		warns = append(warns, fmt.Sprintf("%d more { than }", diff))
-	} else if diff := closeBraces - openBraces; diff > 0 {
-		warns = append(warns, fmt.Sprintf("%d more } than {", diff))
+	if o.braces != n.braces {
+		warns = append(warns, fmt.Sprintf("{} %d->%d", o.braces, n.braces))
 	}
-	if diff := openBrackets - closeBrackets; diff > 0 {
-		warns = append(warns, fmt.Sprintf("%d more [ than ]", diff))
-	} else if diff := closeBrackets - openBrackets; diff > 0 {
-		warns = append(warns, fmt.Sprintf("%d more ] than [", diff))
+	if o.brackets != n.brackets {
+		warns = append(warns, fmt.Sprintf("[] %d->%d", o.brackets, n.brackets))
 	}
 	if len(warns) == 0 {
 		return ""
 	}
-	return "bracket mismatch: " + strings.Join(warns, ", ")
+	return "bracket balance changed: " + strings.Join(warns, ", ") + " -- verify structure"
+}
+
+type bracketCounts struct{ parens, braces, brackets int }
+
+func countBrackets(s string) bracketCounts {
+	var c bracketCounts
+	for _, ch := range s {
+		switch ch {
+		case '(':
+			c.parens++
+		case ')':
+			c.parens--
+		case '{':
+			c.braces++
+		case '}':
+			c.braces--
+		case '[':
+			c.brackets++
+		case ']':
+			c.brackets--
+		}
+	}
+	return c
 }
 
 // splitLines splits s by newline, removing the trailing empty element

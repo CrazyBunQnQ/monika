@@ -1,23 +1,27 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { IDockviewPanelProps } from 'dockview'
-import { Compartment, EditorState } from '@codemirror/state'
-import { EditorView, hoverTooltip, keymap, lineNumbers } from '@codemirror/view'
-import { defaultKeymap } from '@codemirror/commands'
+import { EditorState } from '@codemirror/state'
+import { EditorView, hoverTooltip, keymap, lineNumbers, highlightSpecialChars, drawSelection, dropCursor } from '@codemirror/view'
+import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
 import { oneDarkHighlightStyle } from '@codemirror/theme-one-dark'
-import { syntaxHighlighting } from '@codemirror/language'
+import { syntaxHighlighting, bracketMatching, indentOnInput, foldGutter, foldService } from '@codemirror/language'
+import { closeBrackets, closeBracketsKeymap, autocompletion, completionKeymap, CompletionContext } from '@codemirror/autocomplete'
+import { search, searchKeymap } from '@codemirror/search'
 import { useStore } from '../../store'
-import { getLanguageForFile, getLanguage, treeSitterInitPromise } from '../../lib/treeSitter'
+import { getLanguageForFile, getLanguage, treeSitterInitPromise, computeFoldableRanges, FoldRange } from '../../lib/treeSitter'
 import { treeSitterHighlightExtension } from '../../lib/treeSitterHighlight'
 import { Call } from '@wailsio/runtime'
 import { lspService, LspSymbol, LspDiagnostic } from '../../lib/lspService'
-import { lspDiagnosticField, updateLspDiagnostics } from '../../lib/lspDecorations'
 import { LspSymbolSidebar } from './LspSymbolSidebar'
 
-import { IconEdit, IconEye, IconSidebar, IconFolder, IconMaximize, IconRestore, IconSearch, IconClose } from '../Icons'
+import { IconSidebar, IconFolder, IconMaximize, IconRestore, IconSearch, IconClose, IconEye, IconEdit } from '../Icons'
 import { CodeMinimap } from './CodeMinimap'
 import MarkdownPreview from './MarkdownPreview'
 import { AnsiText } from '../../lib/ansi'
+import FileTree from '../FileTree/FileTree'
+import MonacoPreview from './MonacoPreview'
+import type * as monacoType from 'monaco-editor'
 const ANSI_STRIP_RE = /\x1b\][^\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b./g
 function stripAnsi(s: string): string { return s.replace(ANSI_STRIP_RE, '') }
 const MAX_FILE_LINES = 5000
@@ -59,6 +63,94 @@ const previewTheme = EditorView.theme({
     '.cm-selectionBackground': { backgroundColor: 'rgba(75,125,219,0.15)' },
     '.cm-focused .cm-selectionBackground': { backgroundColor: 'rgba(75,125,219,0.15)' },
     '.cm-matchingBracket': { backgroundColor: 'rgba(75,125,219,0.25)', outline: '1px solid rgba(75,125,219,0.4)' },
+
+    // Search panel — dark theme match
+    '.cm-panel.cm-search': {
+        backgroundColor: '#101218',
+        color: '#abb2bf',
+        padding: '6px 8px',
+        fontFamily: 'var(--font-sans)',
+        fontSize: '12px',
+        borderBottom: '1px solid #1e2130',
+        '& input, & button, & label': { margin: '.2em .6em .2em 0' },
+        '& input[type=checkbox]': { marginRight: '.3em', accentColor: '#528bff' },
+        '& input.cm-textfield': {
+            backgroundColor: '#1a1d2e',
+            border: '1px solid #2c3040',
+            color: '#abb2bf',
+            borderRadius: 4,
+            padding: '2px 6px',
+            fontFamily: 'var(--font-mono)',
+            fontSize: '12px',
+        },
+        '& input.cm-textfield:focus': {
+            outline: 'none',
+            borderColor: '#528bff',
+        },
+        '& button.cm-button': {
+            backgroundColor: '#1e2130',
+            border: '1px solid #2c3040',
+            color: '#abb2bf',
+            borderRadius: 4,
+            cursor: 'pointer',
+            padding: '2px 8px',
+            fontSize: '11px',
+            fontFamily: 'var(--font-sans)',
+        },
+        '& button.cm-button:hover': {
+            backgroundColor: '#2c3040',
+        },
+        '& label': {
+            fontSize: '11px',
+            color: '#8b8fa0',
+            whiteSpace: 'pre',
+            display: 'inline-flex',
+            alignItems: 'center',
+        },
+        '& [name=close]': {
+            position: 'absolute',
+            top: '6px',
+            right: '8px',
+            backgroundColor: 'transparent',
+            border: 'none',
+            color: '#8b8fa0',
+            fontSize: '16px',
+            cursor: 'pointer',
+            padding: '0 4px',
+            lineHeight: 1,
+        },
+        '& [name=close]:hover': {
+            color: '#abb2bf',
+        },
+    },
+    '.cm-searchMatch': { backgroundColor: 'rgba(82,139,255,0.25)' },
+    '.cm-searchMatch-selected': { backgroundColor: 'rgba(82,139,255,0.45)' },
+    // Autocomplete tooltip — dark theme
+    '.cm-tooltip-autocomplete > ul': {
+        fontFamily: 'var(--font-mono)',
+        fontSize: '12px',
+    },
+    '.cm-tooltip-autocomplete > ul > li': {
+        padding: '2px 8px 2px 18px',
+    },
+    '.cm-tooltip-autocomplete > ul > li[aria-selected]': {
+        backgroundColor: 'rgba(82,139,255,0.2)',
+        color: '#d7dae0',
+    },
+    '.cm-tooltip': {
+        backgroundColor: '#1a1d2e',
+        border: '1px solid #2c3040',
+        borderRadius: 4,
+        boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+    },
+    '.cm-tooltip-autocomplete .cm-completionDetail': {
+        color: '#6b7280',
+        fontSize: '11px',
+    },
+    '.cm-completionIcon': {
+        fontSize: '11px',
+        opacity: 0.7,
+    },
 }, { dark: true })
 
 function getLangLabel(filePath: string): string | null {
@@ -81,6 +173,79 @@ function getLangLabel(filePath: string): string | null {
     }
     return map[ext] || null
 }
+
+
+const lspCompletionSource = async (context: CompletionContext) => {
+    const state = useStore.getState()
+    const fp = state.preview.filePath
+    const pp = state.projectPath
+    if (!fp || !pp) return null
+
+    const word = context.matchBefore(/[\w$]+(\.[\w$]*)?/)
+    if (!word && !context.explicit) return null
+    if (word && word.from === word.to && !context.explicit) return null
+
+    const view = context.view
+    if (!view) return null
+    const line = view.state.doc.lineAt(context.pos)
+    const col = context.pos - line.from
+
+    try {
+        // Sync current document content to LSP before requesting completions.
+        const content = context.state.doc.toString()
+        lspDocVersion++
+        await lspService.didChange(pp, fp, content, lspDocVersion)
+
+        const result = await lspService.completion(pp, fp, line.number - 1, col)
+        if (!result || !result.items || result.items.length === 0) return null
+
+        // After a dot, position 'from' after the dot so only the member name is replaced.
+        const dotIdx = word ? word.text.lastIndexOf('.') : -1
+        const replaceFrom = dotIdx >= 0
+            ? word!.from + dotIdx + 1
+            : (word ? word.from : context.pos)
+
+        return {
+            from: replaceFrom,
+            options: result.items.map((item) => ({
+                label: item.label,
+                detail: item.detail,
+                type: getCompletionType(item.kind),
+                apply: item.insertText || item.label,
+            })),
+            validFor: /^[\w$]*$/,
+        }
+    } catch {
+        return null
+    }
+}
+
+// Helper to map LSP CompletionItemKind to CM6 completion type string
+function getCompletionType(kind: number | undefined): string {
+    const types: Record<number, string> = {
+        1: 'text', 2: 'method', 3: 'function', 4: 'constructor',
+        5: 'field', 6: 'variable', 7: 'class', 8: 'interface',
+        9: 'module', 10: 'property', 11: 'unit', 12: 'value',
+        13: 'enum', 14: 'keyword', 15: 'snippet', 16: 'color',
+        17: 'file', 18: 'reference', 19: 'folder', 20: 'enumMember',
+        21: 'constant', 22: 'struct', 23: 'event', 24: 'operator',
+        25: 'typeParameter',
+    }
+    return types[kind ?? 0] || 'text'
+}
+
+// Shared LSP document version counter — used by both the completion source and the component.
+let lspDocVersion = 0
+
+// Fold state — populated after tree-sitter init parses the document.
+let foldRanges: FoldRange[] = []
+
+const treeSitterFoldService = foldService.of((state: EditorState, lineStart: number, _lineEnd: number) => {
+    for (const r of foldRanges) {
+        if (r.from === lineStart) return r
+    }
+    return null
+})
 
 
 interface HunkLine {
@@ -128,11 +293,15 @@ function parseDiffLines(lines: string[]): { hunks: HunkLine[]; added: number; re
     return { hunks, added, removed }
 }
 
-function DiffView({ lines, fileName }: { lines: string[]; fileName: string }) {
+function DiffView({ lines, fileName, conflictActive = false, conflictAiContent = null }: {
+    lines: string[];
+    fileName: string;
+    conflictActive?: boolean;
+    conflictAiContent?: string | null;
+}) {
     const { hunks, added, removed } = parseDiffLines(lines)
     const scrollRef = useRef<HTMLDivElement>(null)
     const firstChangeRef = useRef<HTMLTableRowElement>(null)
-
     useEffect(() => {
         if (firstChangeRef.current && scrollRef.current) {
             const container = scrollRef.current
@@ -198,6 +367,67 @@ function DiffView({ lines, fileName }: { lines: string[]; fileName: string }) {
                         )
                     })()}
                 </svg>
+                {/* Conflict resolution buttons */}
+                {conflictActive && (
+                    <>
+                        <button
+                            style={{
+                                padding: '3px 12px',
+                                background: 'var(--green)',
+                                color: '#000',
+                                border: 'none',
+                                borderRadius: 4,
+                                cursor: 'pointer',
+                                fontSize: 11,
+                                fontWeight: 600,
+                                marginLeft: 8,
+                            }}
+                            onClick={async () => {
+                                const state = useStore.getState()
+                                if (state.preview.filePath && conflictAiContent) {
+                                    await Call.ByName('monika/internal/api.App.WriteFile', state.projectPath, state.preview.filePath, conflictAiContent)
+                                    useStore.getState().markFileClean(state.preview.filePath!)
+                                    useStore.setState({
+                                        preview: {
+                                            ...useStore.getState().preview,
+                                            conflictActive: false,
+                                            conflictAiContent: null,
+                                        },
+                                    })
+                                }
+                            }}
+                        >
+                            Accept AI
+                        </button>
+                        <button
+                            style={{
+                                padding: '3px 12px',
+                                background: 'var(--red)',
+                                color: '#fff',
+                                border: 'none',
+                                borderRadius: 4,
+                                cursor: 'pointer',
+                                fontSize: 11,
+                                fontWeight: 600,
+                            }}
+                            onClick={() => {
+                                const state = useStore.getState()
+                                useStore.setState({
+                                    preview: {
+                                        ...state.preview,
+                                        conflictActive: false,
+                                        conflictAiContent: null,
+                                    },
+                                })
+                                if (state.preview.filePath) {
+                                    useStore.getState().markFileDirty(state.preview.filePath)
+                                }
+                            }}
+                        >
+                            Keep Mine
+                        </button>
+                    </>
+                )}
             </div>
 
             {/* Diff body */}
@@ -320,6 +550,7 @@ function FilePreviewHeader({ fileName, filePath, lineCount, truncated }: {
     truncated?: boolean
 }) {
     const lang = getLangLabel(filePath)
+    const isDirty = useStore((s) => s.dirtyFiles.has(filePath))
     return (
         <div
             className="flex items-center gap-2 px-3 py-1.5 shrink-0"
@@ -329,13 +560,22 @@ function FilePreviewHeader({ fileName, filePath, lineCount, truncated }: {
             }}
         >
             <IconFolder size={13} style={{ opacity: 0.45 }} />
+            {isDirty && (
+                <span style={{
+                    width: 7,
+                    height: 7,
+                    borderRadius: '50%',
+                    background: '#e5c07b',
+                    flexShrink: 0,
+                }} title="Unsaved changes" />
+            )}
             <span style={{
                 fontSize: 11,
                 fontWeight: 600,
                 color: 'var(--text-secondary)',
                 fontFamily: 'var(--font-mono)',
             }}>
-                {fileName}
+                {filePath || fileName}
             </span>
             {lang && (
                 <span style={{
@@ -365,6 +605,8 @@ function FilePreviewHeader({ fileName, filePath, lineCount, truncated }: {
 
 function PreviewPanel(props: IDockviewPanelProps) {
     const preview = useStore((s) => s.preview)
+    const dirtyFiles = useStore((s) => s.dirtyFiles)
+    const isDirtyPanel = !!(preview.filePath && dirtyFiles.has(preview.filePath))
 
 
     const selectedBgTaskId = useStore((s) => s.selectedBgTaskId)
@@ -373,12 +615,10 @@ function PreviewPanel(props: IDockviewPanelProps) {
     const stopBgTask = useStore((s) => s.stopBgTask)
     const containerRef = useRef<HTMLDivElement>(null)
     const editorRef = useRef<EditorView | null>(null)
+    const monacoEditorRef = useRef<monacoType.editor.IStandaloneCodeEditor | null>(null)
     const headerRef = useRef<HTMLDivElement>(null)
     const [maximized, setMaximized] = useState(false)
-    const [editMode, setEditMode] = useState(false)
-    const editableCompartment = useRef(new Compartment())
     const saveTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
-    const versionRef = useRef(0)
     const prevFilePathRef = useRef<string | null>(null)
     const diagTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
     const bgLogRef = useRef<HTMLDivElement>(null)
@@ -415,6 +655,7 @@ function PreviewPanel(props: IDockviewPanelProps) {
         }
     }, [previewNeedsRefresh, preview.filePath])
     const [showSymbols, setShowSymbols] = useState(false)
+    const [mdPreviewMode, setMdPreviewMode] = useState(true)
 
     useEffect(() => {
         if (!contextMenu) return
@@ -485,39 +726,35 @@ function PreviewPanel(props: IDockviewPanelProps) {
     const showDiff = preview.mode === 'diff' && preview.diffLines
     const showEmpty = preview.mode === null
     const isMarkdown = /\.(md|mdx|markdown)$/i.test(preview.filePath || '')
-    const showMarkdownPreview = showFile && !editMode && isMarkdown
+    const showMarkdownPreview = showFile && isMarkdown && mdPreviewMode
 
     const bgTask = selectedBgTaskId ? bgTasks.find(t => t.id === selectedBgTaskId) : null
     const bgLogs = selectedBgTaskId ? (bgTaskLogs[selectedBgTaskId] || []) : []
-    const showTask = preview.mode === 'task'
+    const showTask = preview.mode === 'task' && !maximized
 
-    const saveContent = useCallback(async () => {
-        const view = editorRef.current
-        if (!view) return
+    const saveContent = useCallback(async (content: string) => {
         const store = useStore.getState()
         const fp = store.preview.filePath
         const pp = store.projectPath
         if (!fp || !pp) return
 
-        const content = view.state.doc.toString()
-        versionRef.current++
+        lspDocVersion++
 
         try {
             await Call.ByName('monika/internal/api.App.WriteFile', pp, fp, content)
+            useStore.getState().markFileClean(fp)
             if (lspEnabledRef.current) {
-                lspService.didChange(pp, fp, content, versionRef.current).catch(() => { })
+                lspService.didChange(pp, fp, content, lspDocVersion).catch(() => { })
             }
             clearTimeout(diagTimeoutRef.current)
             diagTimeoutRef.current = setTimeout(async () => {
                 const store = useStore.getState()
                 const fp2 = store.preview.filePath
                 const pp2 = store.projectPath
-                if (!fp2 || !pp2 || !editorRef.current) return
+                if (!fp2 || !pp2) return
                 try {
                     const diags = await lspService.diagnostics(pp2, fp2)
-                    updateLspDiagnostics(editorRef.current!, diags)
                     setDiagnostics(diags)
-                    updateLspDiagnostics(editorRef.current!, diags)
                 } catch { }
             }, 500)
         } catch (e) {
@@ -557,32 +794,34 @@ function PreviewPanel(props: IDockviewPanelProps) {
     const navigateToLocation = useCallback(async (loc: { path: string; line: number; col: number }) => {
         const store = useStore.getState()
         const curPath = store.preview.filePath
-        const view = editorRef.current
-        if (!view) return
 
         if (loc.path === curPath) {
-            const line = view.state.doc.line(loc.line + 1)
-            view.dispatch({
-                effects: EditorView.scrollIntoView(line.from, { y: 'center' }),
-                selection: { anchor: line.from + loc.col },
-            })
-        } else {
-            try {
-                const decodedPath = decodeURIComponent(loc.path)
-                const result: any = await Call.ByName(
-                    'monika/internal/api.App.ReadFile',
-                    store.projectPath,
-                    decodedPath,
-                )
-                store.setPreviewFile(decodedPath, decodedPath.split(/[/\\]/).pop() || '', result.content)
-            } catch (e) {
-                console.error('[lsp] failed to open file:', loc.path, e)
-            }
+            pushNavHistory(loc)
+            return
         }
-        pushNavHistory(loc)
+
+        try {
+            const decodedPath = decodeURIComponent(loc.path)
+            const result: any = await Call.ByName(
+                'monika/internal/api.App.ReadFile',
+                store.projectPath,
+                decodedPath,
+            )
+            store.setPreviewFile(decodedPath, decodedPath.split(/[/\\]/).pop() || '', result.content)
+        } catch (e) {
+            console.error('[lsp] failed to open file:', loc.path, e)
+        }
     }, [pushNavHistory])
 
     const handleSymbolClick = useCallback((sym: LspSymbol) => {
+        const mEditor = monacoEditorRef.current
+        if (mEditor) {
+            const pos = { lineNumber: sym.startLine + 1, column: sym.startCol + 1 }
+            mEditor.setPosition(pos)
+            mEditor.revealPositionInCenter(pos)
+            mEditor.focus()
+            return
+        }
         const view = editorRef.current
         if (!view) return
         const line = view.state.doc.line(sym.startLine + 1)
@@ -640,8 +879,6 @@ function PreviewPanel(props: IDockviewPanelProps) {
         },
     })
 
-    const editModeRef = useRef(editMode)
-    editModeRef.current = editMode
     const lspEnabledRef = useRef(lspEnabled)
     lspEnabledRef.current = lspEnabled
 
@@ -701,8 +938,20 @@ function PreviewPanel(props: IDockviewPanelProps) {
         } catch { return null }
     }, { hoverTime: 500 })
 
+    // Auto-save + dirty tracking for Monaco
+    const handleMonacoChange = useCallback((val: string) => {
+        const st = useStore.getState()
+        if (st.preview.filePath) st.markFileDirty(st.preview.filePath)
+        clearTimeout(saveTimeoutRef.current)
+        saveTimeoutRef.current = setTimeout(() => saveContent(val), 300)
+    }, [saveContent])
+
     const saveUpdateListener = EditorView.updateListener.of((update) => {
-        if (!update.docChanged || !editModeRef.current) return
+        if (!update.docChanged) return
+        const state = useStore.getState()
+        if (state.preview.filePath) {
+            state.markFileDirty(state.preview.filePath)
+        }
         clearTimeout(saveTimeoutRef.current)
         saveTimeoutRef.current = setTimeout(saveContent, 300)
     })
@@ -718,10 +967,66 @@ function PreviewPanel(props: IDockviewPanelProps) {
 
     const sharedEditorExtensions = [
         previewTheme, syntaxHighlighting(oneDarkHighlightStyle), lineNumbers(),
+        highlightSpecialChars(), drawSelection(), dropCursor(),
         keymap.of(defaultKeymap), keymap.of(navKeymap),
-        editableCompartment.current.of(EditorView.editable.of(false)),
+        history(),
+        foldGutter(), treeSitterFoldService,
+        bracketMatching(),
+        indentOnInput(),
+        closeBrackets(),
+        autocompletion({ override: [lspCompletionSource] }),
+        search({ top: true }),
+        keymap.of([
+            ...closeBracketsKeymap,
+            ...historyKeymap,
+            ...searchKeymap,
+            ...completionKeymap,
+            indentWithTab,
+        ]),
+        keymap.of([{
+            key: 'Mod-s',
+            run: (view) => {
+                const content = view.state.doc.toString()
+                const state = useStore.getState()
+                const filePath = state.preview.filePath
+                const projectPath = state.projectPath
+                if (filePath && projectPath) {
+                    Call.ByName('monika/internal/api.App.WriteFile', projectPath, filePath, content).then(() => {
+                        useStore.getState().markFileClean(filePath)
+                        lspService.didChange(projectPath, filePath, content, lspDocVersion).catch(() => { })
+                    }).catch((err: any) => {
+                        console.error('Save failed:', err)
+                    })
+                }
+                return true
+            },
+            preventDefault: true,
+        }]),
+        keymap.of([{
+            key: 'F12',
+            run: (view) => {
+                const state = useStore.getState()
+                if (!state.preview.filePath || !state.projectPath) return false
+                const pos = view.state.selection.main.head
+                const line = view.state.doc.lineAt(pos)
+                const char = pos - line.from
+                lspService.goToDefinition(state.projectPath, state.preview.filePath, line.number - 1, char)
+                    .then((locs) => {
+                        if (locs && locs.length > 0) {
+                            const loc = locs[0]
+                            if (loc.path === state.preview.filePath) {
+                                view.dispatch({
+                                    selection: { anchor: view.state.doc.line(loc.line + 1).from + loc.col },
+                                    scrollIntoView: true,
+                                })
+                            }
+                        }
+                    }).catch(() => { })
+                return true
+            },
+        }]),
         copyHandler, goToDefinitionHandler, contextmenuHandler,
-        lspDiagnosticField, saveUpdateListener, cursorUpdateListener, hoverProvider,
+        saveUpdateListener, cursorUpdateListener, hoverProvider,
     ]
 
     useEffect(() => {
@@ -729,21 +1034,45 @@ function PreviewPanel(props: IDockviewPanelProps) {
         lspEnabledRef.current = true
     }, [preview.filePath])
 
+    // Fetch document symbols for Monaco editor (CM6 path is disabled)
+    // Backend blocks until LSP server is ready (up to ~2s), so single call is enough
     useEffect(() => {
+        if (preview.mode !== 'file' || !preview.filePath) {
+            setSymbols([])
+            return
+        }
+        const pp = useStore.getState().projectPath
+        if (!pp) return
+        let cancelled = false
+        console.log('[symbols] useEffect fired: file=%s mode=%s showSymbols=%s project=%s', preview.filePath, preview.mode, showSymbols, pp)
+        lspService.openFile(pp, preview.filePath).then(() => {
+            console.log('[symbols] openFile OK, calling documentSymbols...')
+            if (cancelled) return
+            return lspService.documentSymbols(pp, preview.filePath!)
+        }).then(syms => {
+            console.log('[symbols] documentSymbols returned:', syms ? `${syms.length} items` : 'null', syms)
+            if (cancelled || !syms) return
+            setSymbols(syms)
+        }).catch((e) => { console.error('[symbols] error:', e) })
+        return () => { cancelled = true }
+    }, [preview.filePath, preview.mode, showSymbols])
+
+    useEffect(() => {
+        if (true) return; // CM6 disabled — using Monaco instead
         if (!containerRef.current || preview.mode !== 'file' || !preview.fileContent || showBinary) {
             if (editorRef.current) {
-                editorRef.current.destroy()
+                editorRef.current!.destroy()
                 editorRef.current = null
             }
             return
         }
         if (editorRef.current) {
-            editorRef.current.destroy()
+            editorRef.current!.destroy()
             editorRef.current = null
         }
         if (prevFilePathRef.current && lspEnabledRef.current) {
             const store = useStore.getState()
-            lspService.closeFile(store.projectPath, prevFilePathRef.current).catch(() => { })
+            lspService.closeFile(store.projectPath, prevFilePathRef.current!).catch(() => { })
         }
         prevFilePathRef.current = null
 
@@ -753,7 +1082,7 @@ function PreviewPanel(props: IDockviewPanelProps) {
             doc: displayContent,
             extensions: sharedEditorExtensions,
         })
-        editorRef.current = new EditorView({ state, parent: containerRef.current })
+        editorRef.current = new EditorView({ state, parent: containerRef.current! })
 
         if (!truncated) {
             (async () => {
@@ -769,6 +1098,7 @@ function PreviewPanel(props: IDockviewPanelProps) {
                     const cur = useStore.getState().preview
                     if (cur.mode !== 'file' || cur.filePath !== preview.filePath) return
                     if (!displayContent) return
+                    foldRanges = computeFoldableRanges(displayContent, lang)
                     const hlState = EditorState.create({
                         doc: displayContent,
                         extensions: [
@@ -823,7 +1153,7 @@ function PreviewPanel(props: IDockviewPanelProps) {
             const store = useStore.getState()
             const pp = store.projectPath
             if (pp) {
-                lspService.openFile(pp, preview.filePath).then(() => {
+                lspService.openFile(pp, preview.filePath!).then(() => {
                     setLspEnabled(true)
                     lspService.documentSymbols(pp!, preview.filePath!).then(syms => {
                         if (syms) setSymbols(syms)
@@ -845,13 +1175,6 @@ function PreviewPanel(props: IDockviewPanelProps) {
         }
     }, [preview.mode, preview.fileContent, preview.filePath])
 
-    useEffect(() => {
-        const view = editorRef.current
-        if (!view) return
-        view.dispatch({
-            effects: editableCompartment.current.reconfigure(EditorView.editable.of(editMode)),
-        })
-    }, [editMode])
 
     const showContextMenu = useCallback((x: number, y: number, _view: any, line: number, col: number) => {
         setContextMenu({ x, y, line, col })
@@ -928,6 +1251,13 @@ function PreviewPanel(props: IDockviewPanelProps) {
     }, [breadcrumbs, symbols])
 
     const handleBreadcrumbClick = useCallback((sym: LspSymbol) => {
+        const mEditor = monacoEditorRef.current
+        if (mEditor) {
+            const pos = { lineNumber: sym.startLine + 1, column: sym.startCol + 1 }
+            mEditor.setPosition(pos)
+            mEditor.revealPositionInCenter(pos)
+            return
+        }
         const view = editorRef.current
         if (!view) return
         const line = view.state.doc.line(sym.startLine + 1)
@@ -945,28 +1275,10 @@ function PreviewPanel(props: IDockviewPanelProps) {
                 className="flex items-center gap-1.5 select-none shrink-0"
                 style={{ fontFamily: 'var(--font-sans)', fontSize: 12, padding: '5px 6px 5px 10px', background: 'var(--bg-sidebar)' }}
             >
-                <span className="truncate min-w-0">{showTask ? 'TASK' : 'PREVIEW'}</span>
+                <span className="truncate min-w-0">{showTask ? 'TASK' : (maximized && showFile) ? 'EDITOR' : 'PREVIEW'}</span>
                 <div className="flex-1" />
                 {!showTask && (
                     <>
-                        <div
-                            onClick={() => setEditMode(!editMode)}
-                            style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                width: 22,
-                                height: 22,
-                                borderRadius: 4,
-                                color: editMode ? 'var(--accent)' : 'var(--text-dim)',
-                                cursor: 'pointer',
-                                flexShrink: 0,
-                                transition: 'color 0.15s, background 0.15s',
-                            }}
-                            title={editMode ? 'Switch to read-only' : 'Enable editing'}
-                        >
-                            {editMode ? <IconEdit size={12} /> : <IconEye size={12} />}
-                        </div>
                         <div
                             onClick={() => setShowSymbols(!showSymbols)}
                             style={{
@@ -979,6 +1291,22 @@ function PreviewPanel(props: IDockviewPanelProps) {
                         >
                             <IconSidebar size={12} />
                         </div>
+                        {showFile && isMarkdown && (
+                            <div
+                                onClick={() => setMdPreviewMode(!mdPreviewMode)}
+                                onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.color = 'var(--text-secondary)' }}
+                                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = mdPreviewMode ? 'var(--accent)' : 'var(--text-dim)' }}
+                                style={{
+                                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                                    width: 22, height: 22, borderRadius: 4,
+                                    color: mdPreviewMode ? 'var(--accent)' : 'var(--text-dim)',
+                                    cursor: 'pointer', flexShrink: 0, transition: 'color 0.15s, background 0.15s',
+                                }}
+                                title={mdPreviewMode ? 'Switch to Edit mode' : 'Switch to Preview mode'}
+                            >
+                                {mdPreviewMode ? <IconEye size={12} /> : <IconEdit size={12} />}
+                            </div>
+                        )}
                     </>
                 )}
                 <div
@@ -1080,236 +1408,256 @@ function PreviewPanel(props: IDockviewPanelProps) {
 
             {/* File preview — wrapper always mounted for CodeMirror DOM safety    */}
             <div
-                className="flex flex-col flex-1 min-h-0"
-                style={{ display: showFile ? 'flex' : 'none', position: 'relative' }}
+                className={`flex flex-1 min-h-0 ${maximized ? 'flex-row' : 'flex-col'}`}
+                style={{ display: (showFile || maximized) ? 'flex' : 'none' }}
             >
-                <FilePreviewHeader
-                    fileName={preview.fileName || ''}
-                    filePath={preview.filePath || ''}
-                    lineCount={lineCount}
-                    truncated={truncated}
-                />
-                {refreshBanner && (
-                    <div
-                        style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 8,
-                            padding: '4px 10px',
-                            fontSize: 11,
-                            background: 'rgba(229,192,123,0.1)',
-                            borderBottom: '1px solid rgba(229,192,123,0.2)',
-                            color: '#e5c07b',
-                        }}
-                    >
-                        <span style={{ flex: 1 }}>File was modified by AI assistant</span>
-                        <button
-                            onClick={async () => {
-                                const store = useStore.getState()
-                                const fp = store.preview.filePath
-                                const pp = store.projectPath
-                                if (!fp || !pp) return
-                                try {
-                                    const result: any = await Call.ByName('monika/internal/api.App.ReadFile', pp, fp)
-                                    store.setPreviewFile(fp, fp.split(/[/\\]/).pop() || '', result.content)
-                                } catch { }
-                                useStore.setState({ previewNeedsRefresh: null })
-                                setRefreshBanner(false)
-                            }}
-                            style={{
-                                padding: '2px 8px',
-                                borderRadius: 3,
-                                border: '1px solid rgba(229,192,123,0.3)',
-                                background: 'transparent',
-                                color: '#e5c07b',
-                                cursor: 'pointer',
-                                fontSize: 10,
-                            }}
-                        >
-                            Reload
-                        </button>
+                {maximized && (
+                    <div style={{ width: 260, flexShrink: 0, height: '100%', borderRight: '1px solid var(--border)', overflow: 'hidden' }}>
+                        <FileTree hideTasks={true} {...({} as any)} />
                     </div>
                 )}
-                <div style={{ display: 'flex', flex: 1, minHeight: 0, position: 'relative' }}>
-                    <div ref={containerRef} style={{ flex: 1, overflow: 'hidden', display: showMarkdownPreview ? 'none' : 'block' }} onContextMenu={e => {
-                        if (!lspEnabledRef.current || !editorRef.current) return
-                        e.preventDefault()
-                        const pos = editorRef.current.posAtCoords({ x: e.clientX, y: e.clientY })
-                        if (pos === null) return
-                        const line = editorRef.current.state.doc.lineAt(pos)
-                        const lineNum = line.number - 1
-                        const col = pos - line.from
-                        showContextMenu(e.clientX, e.clientY, editorRef.current, lineNum, col)
-                    }} />
-                    {showMarkdownPreview && (
-                        <MarkdownPreview
-                            content={rawContent}
-                            filePath={preview.filePath || ''}
-                        />
-                    )}
-                    {showSymbols && (
-                        <LspSymbolSidebar
-                            symbols={symbols}
-                            onSymbolClick={handleSymbolClick}
-                            currentLine={currentLine}
-                        />
-                    )}
+                {showFile ? (<div className="flex flex-col flex-1 min-h-0" style={{ position: 'relative' }}>
 
-                    {editorRef.current && !isMarkdown && (
-                        <CodeMinimap
-                            content={displayContent}
-                            totalLines={minimapLines}
-                            editorView={editorRef.current}
-                            width={50}
-                            diagnostics={diagnostics}
-                        />
-                    )}
-                </div>
-                {/* Bottom status bar with breadcrumbs + cursor */}
-                <div
-                    style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        padding: '0 10px',
-                        height: 22,
-                        fontSize: 10,
-                        fontFamily: 'var(--font-mono)',
-                        color: '#5c6370',
-                        borderTop: '1px solid rgba(255,255,255,0.06)',
-                        background: '#0a0b10',
-                        flexShrink: 0,
-                        gap: 6,
-                    }}
-                >
-                    {/* Breadcrumbs */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 2, flex: 1, overflow: 'hidden' }}>
-                        {breadcrumbs.length === 0 && (
-                            <span style={{ color: '#3e4451', fontStyle: 'italic' }}>no symbols</span>
-                        )}
-                        {breadcrumbs.map((bc, i) => (
-                            <React.Fragment key={bc.name + i}>
-                                {i > 0 && <span style={{ color: '#3e4451', flexShrink: 0 }}>&gt;</span>}
-                                <span
-                                    onClick={(e) => showBreadcrumbMenu(e, bc.sym)}
-                                    style={{
-                                        cursor: 'pointer',
-                                        color: '#8b8fa0',
-                                        whiteSpace: 'nowrap',
-                                        overflow: 'hidden',
-                                        textOverflow: 'ellipsis',
-                                        maxWidth: 120,
-                                    }}
-                                    title={bc.name}
-                                >
-                                    {bc.name}
-                                </span>
-                            </React.Fragment>
-                        ))}
-                    </div>
-                    {/* Cursor position + language */}
-                    <div style={{ display: 'flex', gap: 8, flexShrink: 0, color: '#3e4451' }}>
-                        <span>Ln {cursorPos.line + 1}, Col {cursorPos.col + 1}</span>
-                        <span>{getLangLabel(preview.filePath || '') || ''}</span>
-                    </div>
-                </div>
-                {breadcrumbMenu && (
-                    <>
-                        <div
-                            style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999 }}
-                            onClick={() => setBreadcrumbMenu(null)}
-                        />
+                    <FilePreviewHeader
+                        fileName={preview.fileName || ''}
+                        filePath={preview.filePath || ''}
+                        lineCount={lineCount}
+                        truncated={truncated}
+                    />
+                    {refreshBanner && (
                         <div
                             style={{
-                                position: 'fixed',
-                                left: breadcrumbMenu.x,
-                                top: breadcrumbMenu.y,
-                                zIndex: 1000,
-                                background: '#1e1e1e',
-                                border: '1px solid #333',
-                                borderRadius: 6,
-                                padding: '4px 0',
-                                minWidth: 150,
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 8,
+                                padding: '4px 10px',
                                 fontSize: 11,
-                                fontFamily: 'var(--font-mono)',
-                                boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+                                background: 'rgba(229,192,123,0.1)',
+                                borderBottom: '1px solid rgba(229,192,123,0.2)',
+                                color: '#e5c07b',
                             }}
                         >
-                            {breadcrumbMenu.siblings.map((s, i) => (
-                                <div
-                                    key={i}
-                                    onClick={() => {
-                                        setBreadcrumbMenu(null)
-                                        handleBreadcrumbClick(s)
-                                    }}
-                                    style={{
-                                        padding: '4px 12px',
-                                        cursor: 'pointer',
-                                        color: s.startLine === currentLine ? '#61afef' : '#abb2bf',
-                                        background: s.startLine === currentLine ? 'rgba(97,175,239,0.08)' : 'transparent',
-                                    }}
-                                    onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)' }}
-                                    onMouseLeave={e => { e.currentTarget.style.background = s.startLine === currentLine ? 'rgba(97,175,239,0.08)' : 'transparent' }}
-                                >
-                                    {s.name}
-                                </div>
-                            ))}
+                            <span style={{ flex: 1 }}>File was modified by AI assistant</span>
+                            <button
+                                onClick={async () => {
+                                    const store = useStore.getState()
+                                    const fp = store.preview.filePath
+                                    const pp = store.projectPath
+                                    if (!fp || !pp) return
+                                    try {
+                                        const result: any = await Call.ByName('monika/internal/api.App.ReadFile', pp, fp)
+                                        store.setPreviewFile(fp, fp.split(/[/\\]/).pop() || '', result.content)
+                                    } catch { }
+                                    useStore.setState({ previewNeedsRefresh: null })
+                                    setRefreshBanner(false)
+                                }}
+                                style={{
+                                    padding: '2px 8px',
+                                    borderRadius: 3,
+                                    border: '1px solid rgba(229,192,123,0.3)',
+                                    background: 'transparent',
+                                    color: '#e5c07b',
+                                    cursor: 'pointer',
+                                    fontSize: 10,
+                                }}
+                            >
+                                Reload
+                            </button>
                         </div>
-                    </>
-                )}
-                {peekPanel && (
+                    )}
+                    <div style={{ display: 'flex', flex: 1, minHeight: 0, position: 'relative' }}>
+                        {showMarkdownPreview ? (
+                            <MarkdownPreview
+                                content={rawContent}
+                                filePath={preview.filePath || ''}
+                            />
+                        ) : (
+                            <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
+                                <MonacoPreview
+                                    filePath={preview.filePath || ''}
+                                    projectPath={useStore.getState().projectPath}
+                                    content={displayContent}
+                                    onSave={saveContent}
+                                    onContentChange={handleMonacoChange}
+                                    onCursorChange={(line, col) => {
+                                        setCurrentLine(line)
+                                        setCursorPos({ line, col })
+                                    }}
+                                    onEditorMount={(editor) => {
+                                        monacoEditorRef.current = editor
+                                    }}
+                                />
+                            </div>
+                        )}
+                        {showSymbols && (
+                            <LspSymbolSidebar
+                                symbols={symbols}
+                                onSymbolClick={handleSymbolClick}
+                                currentLine={currentLine}
+                            />
+                        )}
+
+                        {editorRef.current && !isMarkdown && (
+                            <CodeMinimap
+                                content={displayContent}
+                                totalLines={minimapLines}
+                                editorView={editorRef.current}
+                                width={50}
+                                diagnostics={diagnostics}
+                            />
+                        )}
+                    </div>
+                    {/* Bottom status bar with breadcrumbs + cursor */}
                     <div
                         style={{
-                            position: 'absolute',
-                            inset: 0,
-                            zIndex: 100,
-                            background: 'rgba(0,0,0,0.5)',
                             display: 'flex',
                             alignItems: 'center',
-                            justifyContent: 'center',
+                            padding: '0 10px',
+                            height: 22,
+                            fontSize: 10,
+                            fontFamily: 'var(--font-mono)',
+                            color: '#5c6370',
+                            borderTop: '1px solid rgba(255,255,255,0.06)',
+                            background: '#0a0b10',
+                            flexShrink: 0,
+                            gap: 6,
                         }}
-                        onClick={() => setPeekPanel(null)}
                     >
-                        <div
-                            onClick={(e) => e.stopPropagation()}
-                            style={{
-                                background: '#1e1e2e',
-                                border: '1px solid #333',
-                                borderRadius: 8,
-                                padding: 12,
-                                minWidth: 360,
-                                maxHeight: '60%',
-                                overflow: 'auto',
-                                boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
-                            }}
-                        >
-                            <div style={{ fontSize: 12, fontWeight: 600, color: '#cdd6f4', marginBottom: 8 }}>
-                                {peekPanel.title}
-                            </div>
-                            {peekPanel.items.map((item, i) => (
-                                <div
-                                    key={i}
-                                    onClick={() => {
-                                        navigateToLocation(item)
-                                        setPeekPanel(null)
-                                    }}
-                                    style={{
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: 8,
-                                        padding: '4px 8px',
-                                        borderRadius: 4,
-                                        cursor: 'pointer',
-                                        fontSize: 12,
-                                        fontFamily: 'var(--font-mono)',
-                                        color: '#a6adc8',
-                                    }}
-                                    onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)' }}
-                                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
-                                >
-                                    <span style={{ color: '#89b4fa' }}>{item.path}:{item.line + 1}:{item.col}</span>
-                                </div>
+                        {/* Breadcrumbs */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 2, flex: 1, overflow: 'hidden' }}>
+                            {breadcrumbs.length === 0 && (
+                                <span style={{ color: '#3e4451', fontStyle: 'italic' }}>no symbols</span>
+                            )}
+                            {breadcrumbs.map((bc, i) => (
+                                <React.Fragment key={bc.name + i}>
+                                    {i > 0 && <span style={{ color: '#3e4451', flexShrink: 0 }}>&gt;</span>}
+                                    <span
+                                        onClick={(e) => showBreadcrumbMenu(e, bc.sym)}
+                                        style={{
+                                            cursor: 'pointer',
+                                            color: '#8b8fa0',
+                                            whiteSpace: 'nowrap',
+                                            overflow: 'hidden',
+                                            textOverflow: 'ellipsis',
+                                            maxWidth: 120,
+                                        }}
+                                        title={bc.name}
+                                    >
+                                        {bc.name}
+                                    </span>
+                                </React.Fragment>
                             ))}
                         </div>
+                        {/* Cursor position + language */}
+                        <div style={{ display: 'flex', gap: 8, flexShrink: 0, color: '#3e4451' }}>
+                            <span>Ln {cursorPos.line + 1}, Col {cursorPos.col + 1}</span>
+                            {isDirtyPanel && <span style={{ color: '#e5c07b' }}>● Unsaved</span>}
+                            <span>{getLangLabel(preview.filePath || '') || ''}</span>
+                        </div>
+                    </div>
+                    {breadcrumbMenu && (
+                        <>
+                            <div
+                                style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999 }}
+                                onClick={() => setBreadcrumbMenu(null)}
+                            />
+                            <div
+                                style={{
+                                    position: 'fixed',
+                                    left: breadcrumbMenu.x,
+                                    top: breadcrumbMenu.y,
+                                    zIndex: 1000,
+                                    background: '#1e1e1e',
+                                    border: '1px solid #333',
+                                    borderRadius: 6,
+                                    padding: '4px 0',
+                                    minWidth: 150,
+                                    fontSize: 11,
+                                    fontFamily: 'var(--font-mono)',
+                                    boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+                                }}
+                            >
+                                {breadcrumbMenu.siblings.map((s, i) => (
+                                    <div
+                                        key={i}
+                                        onClick={() => {
+                                            setBreadcrumbMenu(null)
+                                            handleBreadcrumbClick(s)
+                                        }}
+                                        style={{
+                                            padding: '4px 12px',
+                                            cursor: 'pointer',
+                                            color: s.startLine === currentLine ? '#61afef' : '#abb2bf',
+                                            background: s.startLine === currentLine ? 'rgba(97,175,239,0.08)' : 'transparent',
+                                        }}
+                                        onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)' }}
+                                        onMouseLeave={e => { e.currentTarget.style.background = s.startLine === currentLine ? 'rgba(97,175,239,0.08)' : 'transparent' }}
+                                    >
+                                        {s.name}
+                                    </div>
+                                ))}
+                            </div>
+                        </>
+                    )}
+                    {peekPanel && (
+                        <div
+                            style={{
+                                position: 'absolute',
+                                inset: 0,
+                                zIndex: 100,
+                                background: 'rgba(0,0,0,0.5)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                            }}
+                            onClick={() => setPeekPanel(null)}
+                        >
+                            <div
+                                onClick={(e) => e.stopPropagation()}
+                                style={{
+                                    background: '#1e1e2e',
+                                    border: '1px solid #333',
+                                    borderRadius: 8,
+                                    padding: 12,
+                                    minWidth: 360,
+                                    maxHeight: '60%',
+                                    overflow: 'auto',
+                                    boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+                                }}
+                            >
+                                <div style={{ fontSize: 12, fontWeight: 600, color: '#cdd6f4', marginBottom: 8 }}>
+                                    {peekPanel.title}
+                                </div>
+                                {peekPanel.items.map((item, i) => (
+                                    <div
+                                        key={i}
+                                        onClick={() => {
+                                            navigateToLocation(item)
+                                            setPeekPanel(null)
+                                        }}
+                                        style={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: 8,
+                                            padding: '4px 8px',
+                                            borderRadius: 4,
+                                            cursor: 'pointer',
+                                            fontSize: 12,
+                                            fontFamily: 'var(--font-mono)',
+                                            color: '#a6adc8',
+                                        }}
+                                        onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)' }}
+                                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
+                                    >
+                                        <span style={{ color: '#89b4fa' }}>{item.path}:{item.line + 1}:{item.col}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>) : (
+                    <div className="flex flex-1 items-center justify-center" style={{ color: 'var(--text-dim)', fontSize: 12 }}>
+                        Select a file to edit
                     </div>
                 )}
             </div>
@@ -1459,7 +1807,7 @@ function PreviewPanel(props: IDockviewPanelProps) {
             }
             {
                 showDiff && (
-                    <DiffView lines={preview.diffLines!} fileName={preview.fileName || ''} />
+                    <DiffView lines={preview.diffLines!} fileName={preview.fileName || ''} conflictActive={preview.conflictActive} conflictAiContent={preview.conflictAiContent} />
                 )
             }
             {

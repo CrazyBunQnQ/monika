@@ -342,6 +342,31 @@
     color: var(--md-code);
   }
 
+  /* inline hex color chips (e.g. #89b4fa rendered by LLM) */
+  .markdown-body .md-color-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin: 0 1px;
+    vertical-align: baseline;
+  }
+  .markdown-body .md-color-swatch {
+    display: inline-block;
+    width: 0.95em;
+    height: 0.95em;
+    border-radius: 3px;
+    border: 1px solid rgba(255,255,255,0.2);
+    box-shadow: inset 0 0 0 0.5px rgba(0,0,0,0.3);
+    flex-shrink: 0;
+  }
+  .markdown-body .md-color-code {
+    font-family: var(--font-mono);
+    font-size: 0.88em;
+    color: var(--text-primary);
+  }
+  .markdown-body--muted .md-color-code { color: var(--text-secondary); }
+  .markdown-body--muted .md-color-chip { opacity: 0.85; }
+
   /* fenced code blocks */
   .markdown-body pre {
     background: var(--bg-console);

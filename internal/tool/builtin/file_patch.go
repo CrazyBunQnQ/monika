@@ -67,6 +67,23 @@ func (f *filePatch) Execute(ctx context.Context, args json.RawMessage) (tool.Exe
 		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 	}
 
+	if tool.IsFileDirty(safePath) {
+		diskData, _ := os.ReadFile(safePath)
+		diskContent := string(diskData)
+		normalized := strings.ReplaceAll(diskContent, "\r\n", "\n")
+		normalizedSearch := strings.ReplaceAll(params.Search, "\r\n", "\n")
+		normalizedReplace := strings.ReplaceAll(params.Replace, "\r\n", "\n")
+		aiContent := strings.Replace(normalized, normalizedSearch, normalizedReplace, 1)
+		diff := computeDiff(safePath, normalized, aiContent)
+		return tool.ExecutionResult{
+			Content:     fmt.Sprintf("⚠ %s has unsaved user edits. Choose Accept AI or Keep Mine in preview.", safePath),
+			Conflict:    true,
+			DiskContent: diskContent,
+			AiContent:   aiContent,
+			DiffLines:   diff,
+		}, nil
+	}
+
 	result, err := f.patchFile(safePath, params.Search, params.Replace)
 	if err != nil {
 		return result, err
@@ -141,9 +158,12 @@ func (f *filePatch) patchFile(path, search, replace string) (tool.ExecutionResul
 	newLines := len(splitLines(normalizedReplace))
 
 	resultText := fmt.Sprintf("Patched %d -> %d lines in %s", oldLines, newLines, path)
-	balanceWarn := checkBracketBalance(normalizedReplace)
+	balanceWarn := checkBracketBalanceDelta(content, newContent)
 	if balanceWarn != "" {
 		resultText += "\n⚠ " + balanceWarn
+	}
+	if len(diffLines) > 0 {
+		resultText += "\n" + strings.Join(diffLines, "\n")
 	}
 	return tool.ExecutionResult{
 		Content:   resultText,

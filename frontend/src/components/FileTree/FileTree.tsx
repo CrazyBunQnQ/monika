@@ -20,7 +20,7 @@ interface Clipboard {
     isDir: boolean
 }
 
-function FileTree(_props: IDockviewPanelProps) {
+function FileTree({ hideTasks, ..._props }: IDockviewPanelProps & { hideTasks?: boolean }) {
     const activeTab = useStore((s) => s.fileTreeActiveTab)
     const setActiveTab = useStore((s) => s.setFileTreeActiveTab)
     const [tree, setTree] = useState<FileNode[]>([])
@@ -57,7 +57,15 @@ function FileTree(_props: IDockviewPanelProps) {
         })
     }
 
+    // When maximized, force task tab hidden
     useEffect(() => {
+        if (hideTasks && activeTab === 'tasks') {
+            setActiveTab('files')
+        }
+    }, [hideTasks, activeTab, setActiveTab])
+
+    useEffect(() => {
+
         if (!projectPath) return
         let cancelled = false
         App.ListFileTree(projectPath, showHidden)
@@ -516,22 +524,24 @@ function FileTree(_props: IDockviewPanelProps) {
                 >
                     FILES
                 </button>
-                <button
-                    className="text-[11px] px-2 py-1 cursor-pointer transition-colors rounded"
-                    style={{
-                        fontFamily: 'var(--font-sans)',
-                        color: activeTab === 'tasks' ? 'var(--text-primary)' : 'var(--text-dim)',
-                        background: activeTab === 'tasks' ? 'var(--bg-active)' : 'transparent',
-                        border: 'none',
-                        borderBottom: activeTab === 'tasks' ? '2px solid var(--accent)' : '2px solid transparent',
-                        fontWeight: 500,
-                    }}
-                    onMouseEnter={(e) => { if (activeTab !== 'tasks') { e.currentTarget.style.background = 'var(--bg-hover)'; e.currentTarget.style.color = 'var(--text-secondary)' } }}
-                    onMouseLeave={(e) => { if (activeTab !== 'tasks') { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-dim)' } }}
-                    onClick={() => setActiveTab('tasks')}
-                >
-                    TASKS
-                </button>
+                {!hideTasks && (
+                    <button
+                        className="text-[11px] px-2 py-1 cursor-pointer transition-colors rounded"
+                        style={{
+                            fontFamily: 'var(--font-sans)',
+                            color: activeTab === 'tasks' ? 'var(--text-primary)' : 'var(--text-dim)',
+                            background: activeTab === 'tasks' ? 'var(--bg-active)' : 'transparent',
+                            border: 'none',
+                            borderBottom: activeTab === 'tasks' ? '2px solid var(--accent)' : '2px solid transparent',
+                            fontWeight: 500,
+                        }}
+                        onMouseEnter={(e) => { if (activeTab !== 'tasks') { e.currentTarget.style.background = 'var(--bg-hover)'; e.currentTarget.style.color = 'var(--text-secondary)' } }}
+                        onMouseLeave={(e) => { if (activeTab !== 'tasks') { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-dim)' } }}
+                        onClick={() => setActiveTab('tasks')}
+                    >
+                        TASKS
+                    </button>
+                )}
             </div>
 
             {/* FILES tab content */}
@@ -623,7 +633,7 @@ function FileTree(_props: IDockviewPanelProps) {
             </div>
 
             {/* TASKS tab content */}
-            <div style={{ display: activeTab === 'tasks' ? 'flex' : 'none', flex: 1, overflow: 'hidden', flexDirection: 'column' }}>
+            <div style={{ display: (activeTab === 'tasks' && !hideTasks) ? 'flex' : 'none', flex: 1, overflow: 'hidden', flexDirection: 'column' }}>
                 <input
                     className="mx-2 mt-2 bg-[var(--bg-input)] text-[var(--text)] text-xs px-2 py-1 rounded outline-none border border-[var(--border)] placeholder:text-[var(--text-muted)]"
                     placeholder="Run command..."

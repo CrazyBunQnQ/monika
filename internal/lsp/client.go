@@ -382,6 +382,32 @@ func (c *Client) Hover(ctx context.Context, uri string, pos Position) (*Hover, e
 	return &result, nil
 }
 
+// LSP CompletionItem types (minimal — let JSON unmarshal handle the rest)
+// LSP CompletionItem types (minimal — let JSON unmarshal handle the rest)
+type CompletionItem struct {
+	Label         string `json:"label"`
+	Kind          int    `json:"kind,omitempty"`
+	Detail        string `json:"detail,omitempty"`
+	Documentation string `json:"documentation,omitempty"`
+	InsertText    string `json:"insertText,omitempty"`
+}
+
+type CompletionList struct {
+	IsIncomplete bool             `json:"isIncomplete"`
+	Items        []CompletionItem `json:"items"`
+}
+
+func (c *Client) Complete(ctx context.Context, uri string, pos Position) (*CompletionList, error) {
+	var result CompletionList
+	if err := c.call(ctx, "textDocument/completion", TextDocumentPositionParams{
+		TextDocument: TextDocumentIdentifier{URI: uri},
+		Position:     pos,
+	}, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 func (c *Client) DocumentSymbols(ctx context.Context, uri string) ([]DocumentSymbol, error) {
 	var raw json.RawMessage
 	if err := c.call(ctx, "textDocument/documentSymbol", struct {

@@ -99,6 +99,8 @@ interface PreviewState {
     fileName: string | null
     fileContent: string | null
     diffLines: string[] | null
+    conflictAiContent?: string | null
+    conflictActive?: boolean
 }
 
 export interface AgentInfo {
@@ -175,6 +177,7 @@ interface AppState {
     sessionParents: Record<string, string>
     subagentStack: Record<string, string[]>
     preview: PreviewState
+    dirtyFiles: Set<string>
     fileTreeActiveTab: 'files' | 'tasks'
 
     fileTreeVersion: number
@@ -274,6 +277,10 @@ interface AppState {
     setPreviewFile: (filePath: string, fileName: string, content: string) => void
     setPreviewDiff: (filePath: string, fileName: string, lines: string[]) => void
     clearPreview: () => void
+    markFileDirty: (path: string) => void
+    markFileClean: (path: string) => void
+    setPreview: (preview: Partial<PreviewState>) => void
+    handleToolConflict: (toolEvent: { filePath: string; name: string; diffLines: string[]; diskContent: string; aiContent: string }) => void
 
     setRevealFilePath: (filePath: string | null) => void
     setFileTreeActiveTab: (tab: 'files' | 'tasks') => void
@@ -358,7 +365,8 @@ export const useStore = create<AppState>((set, get) => ({
     activeSessionId: '',
     sessionParents: {},
     subagentStack: {},
-    preview: { mode: null, filePath: null, fileName: null, fileContent: null, diffLines: null },
+    preview: { mode: null, filePath: null, fileName: null, fileContent: null, diffLines: null, conflictAiContent: null, conflictActive: false },
+    dirtyFiles: new Set<string>(),
 
     fileTreeActiveTab: 'files' as 'files' | 'tasks',
 
@@ -659,7 +667,7 @@ export const useStore = create<AppState>((set, get) => ({
         set((state) => ({
             sessionWorktrees: { ...state.sessionWorktrees, [sessionId]: path },
         })),
-    selectBgTask: (id) => set({ selectedBgTaskId: id, preview: { mode: 'task', filePath: null, fileName: null, fileContent: null, diffLines: null } }),
+    selectBgTask: (id) => set({ selectedBgTaskId: id, preview: { mode: 'task', filePath: null, fileName: null, fileContent: null, diffLines: null, conflictAiContent: null, conflictActive: false } }),
     updateBgTask: (info) => set((state) => {
         const idx = state.bgTasks.findIndex(t => t.id === info.id)
         if (idx >= 0) {
@@ -760,7 +768,10 @@ export const useStore = create<AppState>((set, get) => ({
     setBranch: (branch) => {
         set({ branch });
     },
-    setActiveSessionId: (id) => set({ activeSessionId: id }),
+    setActiveSessionId: (id) => {
+        set({ activeSessionId: id })
+        Call.ByName('monika/internal/api.App.ClearSessionDirty', {}).catch(() => { })
+    },
     setDockviewApi: (api) => set({ dockviewApi: api }),
 
     openSessionTab: async (id, title) => {
@@ -1092,15 +1103,50 @@ export const useStore = create<AppState>((set, get) => ({
     },
 
     setPreviewFile: (filePath, fileName, content) => {
-        set({ preview: { mode: 'file', filePath, fileName, fileContent: content, diffLines: null }, selectedBgTaskId: null })
+        set({ preview: { mode: 'file', filePath, fileName, fileContent: content, diffLines: null, conflictAiContent: null, conflictActive: false }, selectedBgTaskId: null })
     },
 
     setPreviewDiff: (filePath, fileName, lines) => {
-        set({ preview: { mode: 'diff', filePath, fileName, fileContent: null, diffLines: lines }, selectedBgTaskId: null })
+        set({ preview: { mode: 'diff', filePath, fileName, fileContent: null, diffLines: lines, conflictAiContent: null, conflictActive: false }, selectedBgTaskId: null })
     },
 
     clearPreview: () => {
+        set({ preview: { mode: null, filePath: null, fileName: null, fileContent: null, diffLines: null, conflictAiContent: null, conflictActive: false } })
         set({ preview: { mode: null, filePath: null, fileName: null, fileContent: null, diffLines: null } })
+    },
+
+    setPreview: (preview) => set((s) => ({ preview: { ...s.preview, ...preview } })),
+
+    markFileDirty: (path: string) => {
+        set((s) => ({
+            dirtyFiles: new Set([...s.dirtyFiles, path])
+        }))
+        Call.ByName('monika/internal/api.App.SetFileDirty', get().projectPath, path, true).catch(() => { })
+    },
+
+    markFileClean: (path: string) => {
+        set((s) => {
+            const next = new Set(s.dirtyFiles)
+            next.delete(path)
+            return { dirtyFiles: next }
+        })
+        Call.ByName('monika/internal/api.App.SetFileDirty', get().projectPath, path, false).catch(() => { })
+    },
+
+    handleToolConflict: (toolEvent) => {
+        const name = toolEvent.filePath.split('/').pop() || toolEvent.filePath.split('\\').pop() || toolEvent.filePath
+        set((s) => ({
+            preview: {
+                ...s.preview,
+                mode: 'diff',
+                filePath: toolEvent.filePath,
+                fileName: name,
+                diffLines: toolEvent.diffLines,
+                fileContent: toolEvent.diskContent,
+                conflictAiContent: toolEvent.aiContent,
+                conflictActive: true,
+            }
+        }))
     },
 
 
@@ -1703,7 +1749,17 @@ export function setupWailsEvents() {
                                 const parsed = JSON.parse(data.tool.input)
                                 if (parsed.filePath) {
                                     const name = parsed.filePath.split('/').pop() || parsed.filePath.split('\\').pop() || parsed.filePath
-                                    useStore.getState().setPreviewDiff(parsed.filePath, name, data.tool.diffLines)
+                                    if (data.tool.conflict && data.tool.diskContent && data.tool.aiContent) {
+                                        useStore.getState().handleToolConflict({
+                                            filePath: parsed.filePath,
+                                            name: data.tool.name,
+                                            diffLines: data.tool.diffLines,
+                                            diskContent: data.tool.diskContent,
+                                            aiContent: data.tool.aiContent,
+                                        })
+                                    } else {
+                                        useStore.getState().setPreviewDiff(parsed.filePath, name, data.tool.diffLines)
+                                    }
                                 }
                             } catch { }
                         }

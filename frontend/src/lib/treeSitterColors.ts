@@ -2,36 +2,36 @@ import { tags, Tag } from '@lezer/highlight'
 import { getLanguageForFile, treeSitterInitPromise, getLanguage } from './treeSitter'
 import { Parser } from 'web-tree-sitter'
 
-// ── Tag → hex color (One Dark palette) ───────────────────────────────────
+// ── Tag → hex color (Catppuccin Mocha palette) ────────────────────────────
 // Pre-computed at module load so compound tags (e.g. function(variableName))
 // are available for direct lookup.
 
 const TAG_TO_HEX_NAMES: Record<string, string> = {
-    comment: '#5c6370',
-    docComment: '#5c6370',
-    string: '#98c379',
-    escape: '#98c379',
-    meta: '#c678dd',
-    number: '#d19a66',
-    literal: '#d19a66',
-    bool: '#d19a66',
-    color: '#d19a66',
-    unit: '#d19a66',
-    keyword: '#c678dd',
-    moduleKeyword: '#c678dd',
-    controlKeyword: '#c678dd',
-    definitionKeyword: '#c678dd',
-    self: '#c678dd',
-    typeName: '#56b6c2',
-    className: '#56b6c2',
-    namespace: '#56b6c2',
-    variableName: '#e06c75',
-    propertyName: '#e06c75',
+    comment: '#6c7086',
+    docComment: '#6c7086',
+    string: '#a6e3a1',
+    escape: '#a6e3a1',
+    meta: '#cba6f7',
+    number: '#fab387',
+    literal: '#fab387',
+    bool: '#fab387',
+    color: '#fab387',
+    unit: '#fab387',
+    keyword: '#cba6f7',
+    moduleKeyword: '#cba6f7',
+    controlKeyword: '#cba6f7',
+    definitionKeyword: '#cba6f7',
+    self: '#f38ba8',
+    typeName: '#f9e2af',
+    className: '#f9e2af',
+    namespace: '#f9e2af',
+    variableName: '#cdd6f4',
+    propertyName: '#cdd6f4',
     // Compound / function-modifier variants
-    function: '#61afef',
-    standard: '#61afef',
-    attributeName: '#61afef',
-    labelName: '#61afef',
+    function: '#89b4fa',
+    standard: '#89b4fa',
+    attributeName: '#f5c2e7',
+    labelName: '#89b4fa',
 }
 
 const tagHexMap = new Map<Tag, string>()
@@ -229,7 +229,7 @@ export async function getLineColors(
         // No language — all base color
         const lines = content.split('\n')
         for (let i = 0; i < lines.length; i++) {
-            result.push({ line: i, spans: [{ from: 0, to: lines[i].length, color: '#abb2bf' }] })
+            result.push({ line: i, spans: [{ from: 0, to: lines[i].length, color: '#cdd6f4' }] })
         }
         return result
     }
@@ -242,7 +242,7 @@ export async function getLineColors(
         // Fallback to monochrome
         const lines = content.split('\n')
         for (let i = 0; i < lines.length; i++) {
-            result.push({ line: i, spans: [{ from: 0, to: lines[i].length, color: '#abb2bf' }] })
+            result.push({ line: i, spans: [{ from: 0, to: lines[i].length, color: '#cdd6f4' }] })
         }
         return result
     }
@@ -252,7 +252,7 @@ export async function getLineColors(
         parser.delete()
         const lines = content.split('\n')
         for (let i = 0; i < lines.length; i++) {
-            result.push({ line: i, spans: [{ from: 0, to: lines[i].length, color: '#abb2bf' }] })
+            result.push({ line: i, spans: [{ from: 0, to: lines[i].length, color: '#cdd6f4' }] })
         }
         return result
     }
@@ -263,7 +263,7 @@ export async function getLineColors(
         parser.delete()
         const lines = content.split('\n')
         for (let i = 0; i < lines.length; i++) {
-            result.push({ line: i, spans: [{ from: 0, to: lines[i].length, color: '#abb2bf' }] })
+            result.push({ line: i, spans: [{ from: 0, to: lines[i].length, color: '#cdd6f4' }] })
         }
         return result
     }
@@ -341,7 +341,7 @@ export async function getLineColors(
                 }
             }
         }
-        result.push({ line: i, spans: merged.length > 0 ? merged : [{ from: 0, to: lines[i].length, color: '#abb2bf' }] })
+        result.push({ line: i, spans: merged.length > 0 ? merged : [{ from: 0, to: lines[i].length, color: '#cdd6f4' }] })
     }
 
     return result

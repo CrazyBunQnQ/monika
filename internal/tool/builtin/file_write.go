@@ -21,7 +21,7 @@ func NewFileWrite(projectDir string) tool.Tool {
 
 func (f *fileWrite) SetDiagFunc(fn LSPDiagFunc) { f.diagFunc = fn }
 
-func (f *fileWrite) Name() string        { return "file_write" }
+func (f *fileWrite) Name() string { return "file_write" }
 func (f *fileWrite) Description() string {
 	return "Write a file to the local filesystem. Overwrites existing files at the target path. Creates parent directories automatically. Always use absolute paths within the project directory."
 }
@@ -59,6 +59,20 @@ func (f *fileWrite) Execute(ctx context.Context, args json.RawMessage) (tool.Exe
 	safePath, err := f.resolvePath(ctx, params.FilePath)
 	if err != nil {
 		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
+	}
+
+	if tool.IsFileDirty(safePath) {
+		diskData, _ := os.ReadFile(safePath)
+		diskContent := string(diskData)
+		aiContent := params.Content
+		diff := computeDiff(safePath, diskContent, aiContent)
+		return tool.ExecutionResult{
+			Content:     fmt.Sprintf("⚠ %s has unsaved user edits. Choose Accept AI or Keep Mine in preview.", safePath),
+			Conflict:    true,
+			DiskContent: diskContent,
+			AiContent:   aiContent,
+			DiffLines:   diff,
+		}, nil
 	}
 
 	dir := filepath.Dir(safePath)

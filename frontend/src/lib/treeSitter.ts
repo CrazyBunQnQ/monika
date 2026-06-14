@@ -102,6 +102,50 @@ async function doQuery(langName: string, source: string, pattern: string): Promi
     }
 }
 
+export interface FoldRange {
+    from: number
+    to: number
+}
+
+const MIN_FOLD_LINES = 3
+
+/**
+ * Parse source with tree-sitter and return foldable ranges (character offsets).
+ * Only nodes whose type is in foldableTypes and span at least MIN_FOLD_LINES are included.
+ */
+export function computeFoldableRanges(source: string, lang: Language): FoldRange[] {
+    const parser = new Parser()
+    parser.setLanguage(lang)
+    const tree = parser.parse(source)
+    if (!tree) {
+        parser.delete()
+        return []
+    }
+    try {
+        const ranges: FoldRange[] = []
+        walkFoldable(tree.rootNode, ranges)
+        return ranges
+    } finally {
+        tree.delete()
+        parser.delete()
+    }
+
+    function walkFoldable(node: any, acc: FoldRange[]) {
+        if (!node.isNamed) return
+        const type = node.type
+        const startRow = node.startPosition.row
+        const endRow = node.endPosition.row
+        const bodyLines = endRow - startRow + 1
+        if (foldableTypes.has(type) && bodyLines >= MIN_FOLD_LINES) {
+            acc.push({ from: node.startIndex, to: node.endIndex })
+        }
+        if (node.childCount > 0) {
+            for (let i = 0; i < node.childCount; i++) {
+                walkFoldable(node.child(i), acc)
+            }
+        }
+    }
+}
 interface SummaryNode {
     type: string
     text: string

@@ -1076,12 +1076,15 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 			ch <- Event{
 				Type: EventToolOutput,
 				Tool: &ToolEvent{
-					ID:        tc.ID,
-					Name:      tc.Function.Name,
-					Input:     tc.Function.Arguments,
-					Output:    toolContent,
-					Status:    status,
-					DiffLines: execResult.DiffLines,
+					ID:          tc.ID,
+					Name:        tc.Function.Name,
+					Input:       tc.Function.Arguments,
+					Output:      toolContent,
+					Status:      status,
+					DiffLines:   execResult.DiffLines,
+					Conflict:    execResult.Conflict,
+					DiskContent: execResult.DiskContent,
+					AiContent:   execResult.AiContent,
 				},
 			}
 

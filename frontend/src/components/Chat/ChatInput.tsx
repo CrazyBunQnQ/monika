@@ -75,6 +75,8 @@ function getRangeText(range: Range): string {
     let n: Node | null
     while ((n = tw.nextNode())) {
         if (n.nodeType === Node.TEXT_NODE) {
+            const parent = n.parentElement
+            if (parent && parent.closest('[contenteditable="false"]')) continue
             text += n.textContent || ''
         } else if (n.nodeType === Node.ELEMENT_NODE) {
             const el = n as HTMLElement
@@ -223,10 +225,12 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
     const isComposingRef = useRef(false)
     const pendingCursorRef = useRef<number | null>(null)
     const lastCursorRef = useRef(0)
+    const fromUserInputRef = useRef(false)
 
     const skills = useStore((s) => s.skills)
     const skillNames = useMemo(() => new Set(skills.map((s) => s.name)), [skills])
     const labels = useMemo(() => findLabels(value, skillNames), [value, skillNames])
+    const labelsKey = useMemo(() => JSON.stringify(labels), [labels])
 
     const activeSessionId = useStore((s) => s.activeSessionId)
     const inputMode = useStore((s) => s.inputModes[activeSessionId] || 'normal')
@@ -258,19 +262,26 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
         historyRef.current = loadHistory(activeSessionId)
     }, [activeSessionId])
 
-    // Render content into editor only when chip regions change (preserves undo)
+    // Sync DOM when value or chip structure changes.
+    // Skip innerHTML rewrite when change came from user typing AND no chip change (browser already updated DOM).
     const isRenderingRef = useRef(false)
+    const prevLabelsKeyRef = useRef(labelsKey)
     useEffect(() => {
         if (isRenderingRef.current) return
         const el = editorRef.current
         if (!el) return
+        const chipsChanged = prevLabelsKeyRef.current !== labelsKey
+        prevLabelsKeyRef.current = labelsKey
+        if (fromUserInputRef.current && !chipsChanged) {
+            fromUserInputRef.current = false
+            return
+        }
+        fromUserInputRef.current = false
         const hadFocus = document.activeElement === el
         const cursor = pendingCursorRef.current ?? (hadFocus ? getTextOffset(el) : null)
         isRenderingRef.current = true
         el.innerHTML = renderContentHTML(value, labels)
         isRenderingRef.current = false
-        // Force Chromium's contentEditable engine to reinitialize after innerHTML replacement.
-        // Prevents input becoming unresponsive when restoring focus after re-render.
         el.contentEditable = 'false'
         el.contentEditable = 'true'
         if (cursor !== null && hadFocus) {
@@ -278,7 +289,7 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
             setCaretAtOffset(el, Math.min(cursor, value.length))
             el.focus()
         }
-    }, [labels])
+    }, [value, labelsKey])
 
     // Reset history index when user types manually
     useEffect(() => {
@@ -388,6 +399,7 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
         if (!el) return
         const text = extractText(el)
         if (text === valueRef.current) return
+        fromUserInputRef.current = true
         setValue(text)
         // getTextOffset can return bogus values when chips contain SVG (e.g. <br> adds '\n')
         const cursor = Math.min(getTextOffset(el), text.length)
@@ -405,6 +417,7 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
         if (!el) return
         const text = extractText(el)
         if (text === valueRef.current) return
+        fromUserInputRef.current = true
         setValue(text)
         const cursor = Math.min(getTextOffset(el), text.length)
         pendingCursorRef.current = cursor
@@ -489,6 +502,11 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
         const slashMatch = text.match(/^\/([^\s]*)$/)
         if (slashMatch) return { prefix: '/', query: slashMatch[1], cursor }
 
+        // Shell mode: trigger candidate menu from history for direct command typing
+        if (inputMode === 'shell' && text.trim()) {
+            return { prefix: '', query: text, cursor }
+        }
+
         return null
     }
 
@@ -546,8 +564,15 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
                     icon: f.is_dir ? '▸' : '▹',
                     insert: f.is_dir ? `@${f.path}/` : `@${f.path} `,
                 }))
-        }
+        } else if (prefix === '') {
+            // Shell mode direct typing: show matching command history
+            const histItems: AcItem[] = historyRef.current
+                .filter(h => h.toLowerCase().startsWith(lq))
+                .slice(0, 10)
+                .map(h => ({ name: h, detail: 'history', icon: '⏎', insert: h }))
 
+            items = histItems
+        }
         setAc({ open: true, items, selectedIdx: 0, prefix, query })
     }, [projectPath])
 

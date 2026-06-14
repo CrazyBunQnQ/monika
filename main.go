@@ -538,6 +538,7 @@ func loadSystemPrompt(projectDir string) string {
 			return string(data)
 		}
 	}
+	
 	return ""
 }
 

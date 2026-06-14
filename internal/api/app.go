@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1214,6 +1215,13 @@ func (a *App) WriteFile(projectPath, filePath, content string) error {
 		},
 	})
 	return nil
+}
+
+// SetFileDirty notifies the backend that a file has unsaved user edits.
+// The frontend calls this when the user starts/stops editing a file.
+func (a *App) SetFileDirty(projectPath, filePath string, dirty bool) {
+	absPath := filepath.Join(projectPath, filePath)
+	tool2.SetFileDirty(absPath, dirty)
 }
 
 func (a *App) CreateDir(projectPath, dirPath string) error {
@@ -3704,19 +3712,63 @@ func (a *App) LspHover(projectPath, filePath string, line, col int) (*LspHoverRe
 		return nil, nil
 	}
 	return &LspHoverResult{Contents: text}, nil
+	return &LspHoverResult{Contents: text}, nil
 }
 
-func (a *App) LspDocumentSymbols(projectPath, filePath string) ([]LspSymbol, error) {
+func (a *App) LspCompletion(projectPath, filePath string, line, col int) (*LspCompletionResult, error) {
 	client, _, uri, err := a.resolveLspClient(projectPath, filePath)
 	if err != nil {
 		return nil, err
 	}
-	absPath := resolvePath(projectPath, filePath)
-	syms, err := client.DocumentSymbols(a.ctx, uri)
+	result, err := client.Complete(a.ctx, uri, lsp.Position{Line: line, Character: col})
 	if err != nil {
 		return nil, err
 	}
-	return documentSymbolsToLSP(syms, absPath), nil
+	if result == nil {
+		return &LspCompletionResult{Items: []LspCompletionItem{}}, nil
+	}
+	items := make([]LspCompletionItem, 0, len(result.Items))
+	for _, item := range result.Items {
+		items = append(items, LspCompletionItem{
+			Label:         item.Label,
+			Kind:          item.Kind,
+			Detail:        item.Detail,
+			Documentation: item.Documentation,
+			InsertText:    item.InsertText,
+		})
+	}
+	return &LspCompletionResult{Items: items}, nil
+}
+
+func (a *App) LspDocumentSymbols(projectPath, filePath string) ([]LspSymbol, error) {
+	log.Printf("[LSP] LspDocumentSymbols called: project=%s file=%s", projectPath, filePath)
+	client, _, uri, err := a.resolveLspClient(projectPath, filePath)
+	if err != nil {
+		log.Printf("[LSP] resolveLspClient error: %v", err)
+		return nil, err
+	}
+	absPath := resolvePath(projectPath, filePath)
+	log.Printf("[LSP] documentSymbols uri=%s", uri)
+	for attempt := 0; attempt < 4; attempt++ {
+		syms, err := client.DocumentSymbols(a.ctx, uri)
+		if err != nil {
+			log.Printf("[LSP] DocumentSymbols attempt %d error: %v", attempt, err)
+			return nil, err
+		}
+		log.Printf("[LSP] DocumentSymbols attempt %d: got %d symbols", attempt, len(syms))
+		if len(syms) > 0 {
+			return documentSymbolsToLSP(syms, absPath), nil
+		}
+		if attempt < 3 {
+			select {
+			case <-a.ctx.Done():
+				return documentSymbolsToLSP(syms, absPath), nil
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+	}
+	log.Printf("[LSP] DocumentSymbols: no symbols after all retries")
+	return nil, nil
 }
 
 func (a *App) LspTypeDefinition(projectPath, filePath string, line, col int) ([]LspLocation, error) {

@@ -14,10 +14,13 @@ type Tool interface {
 }
 
 type ExecutionResult struct {
-	Content   string
-	IsError   bool
-	DiffLines []string
-	Conflicts bool
+	Content     string
+	IsError     bool
+	DiffLines   []string
+	Conflicts   bool   // merge conflict markers in file
+	Conflict    bool   // user has unsaved edits — AI edit blocked
+	DiskContent string `json:"diskContent,omitempty"` // file on disk (with user edits)
+	AiContent   string `json:"aiContent,omitempty"`   // what AI wants to write
 }
 
 type ToolRegistry struct {

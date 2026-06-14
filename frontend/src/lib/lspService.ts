@@ -82,6 +82,12 @@ export const lspService = {
     hover: (projectPath: string, filePath: string, line: number, col: number) =>
         Call.ByName(method('LspHover'), projectPath, filePath, line, col) as Promise<LspHoverResult | null>,
 
+    completion: (projectPath: string, filePath: string, line: number, col: number) =>
+        Call.ByName(method('LspCompletion'), projectPath, filePath, line, col) as Promise<{
+            isIncomplete: boolean;
+            items: { label: string; kind?: number; detail?: string; documentation?: string; insertText?: string }[];
+        } | null>,
+
     documentSymbols: (projectPath: string, filePath: string) =>
         Call.ByName(method('LspDocumentSymbols'), projectPath, filePath) as Promise<LspSymbol[]>,
 
