@@ -178,7 +178,7 @@ interface AppState {
     subagentStack: Record<string, string[]>
     preview: PreviewState
     dirtyFiles: Set<string>
-    fileTreeActiveTab: 'files' | 'tasks'
+    fileTreeActiveTab: 'files' | 'tasks' | 'debug'
 
     fileTreeVersion: number
     sessionListVersion: number
@@ -283,7 +283,7 @@ interface AppState {
     handleToolConflict: (toolEvent: { filePath: string; name: string; diffLines: string[]; diskContent: string; aiContent: string }) => void
 
     setRevealFilePath: (filePath: string | null) => void
-    setFileTreeActiveTab: (tab: 'files' | 'tasks') => void
+    setFileTreeActiveTab: (tab: 'files' | 'tasks' | 'debug') => void
     revealFilePath: string | null
 
     loadRecentProjects: () => Promise<void>
@@ -368,7 +368,7 @@ export const useStore = create<AppState>((set, get) => ({
     preview: { mode: null, filePath: null, fileName: null, fileContent: null, diffLines: null, conflictAiContent: null, conflictActive: false },
     dirtyFiles: new Set<string>(),
 
-    fileTreeActiveTab: 'files' as 'files' | 'tasks',
+    fileTreeActiveTab: 'files' as 'files' | 'tasks' | 'debug',
 
     revealFilePath: null,
 
@@ -1154,7 +1154,7 @@ export const useStore = create<AppState>((set, get) => ({
     setRevealFilePath: (filePath: string | null) => {
         set({ revealFilePath: filePath })
     },
-    setFileTreeActiveTab: (tab: 'files' | 'tasks') => {
+    setFileTreeActiveTab: (tab: 'files' | 'tasks' | 'debug') => {
         set({ fileTreeActiveTab: tab })
     },
 

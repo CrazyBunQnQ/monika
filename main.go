@@ -17,6 +17,7 @@ import (
 	"monika/internal/api"
 	"monika/internal/bootstrap"
 	config2 "monika/internal/config"
+	"monika/internal/dap"
 	"monika/internal/permission"
 	"monika/internal/prompt"
 	"monika/internal/tool"
@@ -307,6 +308,11 @@ Once you identify the right skill or tool, load it with **skill** or call the MC
 	appService.InitTSBridge(tsBridge)
 	appGetProjectPath = appService.GetProjectPath
 
+	// Wire DAP debugger
+	dapManager := dap.NewDapManager(cwd)
+	appService.SetDapManager(dapManager)
+	builtin.RegisterDebug(registry, dapManager)
+
 	// Wire background task manager to bash and background_task tools
 	for _, name := range []string{"bash", "background_task"} {
 		if t, ok := registry.Get(name); ok {
@@ -538,7 +544,7 @@ func loadSystemPrompt(projectDir string) string {
 			return string(data)
 		}
 	}
-	
+
 	return ""
 }
 

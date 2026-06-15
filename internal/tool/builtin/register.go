@@ -9,6 +9,7 @@ import (
 
 	"monika/internal/agent"
 	"monika/internal/config"
+	"monika/internal/dap"
 	"monika/internal/lsp"
 	"monika/internal/tool"
 	"monika/pkg/engine"
@@ -200,7 +201,6 @@ func RegisterSpawnAgent(r *tool.ToolRegistry, registry *agent.AgentRegistry, dis
 	r.Register(NewSpawnAgent(registry, dispatchFn, pendingStore))
 }
 
-// RegisterSkillTool registers the skill tool for on-demand skill loading.
 func RegisterSkillTool(r *tool.ToolRegistry, skEng engine.SkillEngine, home string, getCwd func() string, cfg *config.Config) {
 	r.Register(NewSkillTool(skEng, home, getCwd, cfg))
 }
@@ -239,4 +239,9 @@ func RegisterMCPSearchTool(r *tool.ToolRegistry, mcpRegistry *engine.MCPRegistry
 // RegisterLSPListTool registers the lsp_list tool for querying language server status.
 func RegisterLSPListTool(r *tool.ToolRegistry) {
 	r.Register(NewLSPListTool(r))
+}
+
+// RegisterDebug registers the DAP debug tool for LLM-driven debugging.
+func RegisterDebug(r *tool.ToolRegistry, manager *dap.DapManager) {
+	r.Register(NewDebugTool(manager))
 }

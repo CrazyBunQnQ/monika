@@ -23,6 +23,7 @@ import (
 
 	agent2 "monika/internal/agent"
 	config2 "monika/internal/config"
+	"monika/internal/dap"
 	"monika/internal/lsp"
 	"monika/internal/permission"
 	tool2 "monika/internal/tool"
@@ -83,6 +84,9 @@ type App struct {
 	trayMgr   *TrayManager
 	tsBridge  *tsBridge
 	bgTaskMgr *BackgroundTaskManager
+
+	dapManager *dap.DapManager
+	debugAPI   *DebugAPI
 
 	headWatcher    *fsnotify.Watcher
 	watchedGitDirs map[string]string // gitDir → projectPath
@@ -4037,4 +4041,132 @@ func (a *App) GetLSPStatus() []lsp.LSPServerStatus {
 		return nil
 	}
 	return mgr.ServerStatuses()
+}
+
+// SetDapManager sets the DAP session manager and wires callbacks to the EventBus.
+func (a *App) SetDapManager(mgr *dap.DapManager) {
+	a.dapManager = mgr
+	a.debugAPI = NewDebugAPI(mgr)
+	mgr.OnSessionCreated(func(s dap.DapSessionSummary) {
+		data, _ := json.Marshal(s)
+		application.Get().Event.Emit("stream", StreamEvent{
+			Type:    DebugSessionCreated,
+			Content: string(data),
+			Seq:     a.eventSeq.Add(1),
+		})
+	})
+	mgr.OnSessionTerminated(func(s dap.DapSessionSummary) {
+		data, _ := json.Marshal(s)
+		application.Get().Event.Emit("stream", StreamEvent{
+			Type:    DebugSessionTerminated,
+			Content: string(data),
+			Seq:     a.eventSeq.Add(1),
+		})
+	})
+	mgr.OnStopped(func(s dap.DapSessionSummary) {
+		data, _ := json.Marshal(s)
+		application.Get().Event.Emit("stream", StreamEvent{
+			Type:    DebugStopped,
+			Content: string(data),
+			Seq:     a.eventSeq.Add(1),
+		})
+	})
+	mgr.OnContinued(func(s dap.DapSessionSummary) {
+		data, _ := json.Marshal(s)
+		application.Get().Event.Emit("stream", StreamEvent{
+			Type:    DebugContinued,
+			Content: string(data),
+			Seq:     a.eventSeq.Add(1),
+		})
+	})
+	mgr.OnStateChanged(func(s dap.DapSessionSummary) {
+		data, _ := json.Marshal(s)
+		application.Get().Event.Emit("stream", StreamEvent{
+			Type:    DebugStateChanged,
+			Content: string(data),
+			Seq:     a.eventSeq.Add(1),
+		})
+	})
+	mgr.OnOutput(func(sessionID string, output string) {
+		application.Get().Event.Emit("stream", StreamEvent{
+			Type:      DebugOutput,
+			Content:   output,
+			SessionID: sessionID,
+			Seq:       a.eventSeq.Add(1),
+		})
+	})
+}
+
+// Debug API methods (delegate to debugAPI)
+
+func (a *App) DebugLaunch(program string, args []string, adapter string, cwd string) (*dap.DapSessionSummary, error) {
+	return a.debugAPI.Launch(program, args, adapter, cwd)
+}
+
+func (a *App) DebugAttach(pid int, port int, host string, adapter string, cwd string) (*dap.DapSessionSummary, error) {
+	return a.debugAPI.Attach(pid, port, host, adapter, cwd)
+}
+
+func (a *App) DebugStop(sessionID string) {
+	a.debugAPI.Stop(sessionID)
+}
+
+func (a *App) DebugContinue(sessionID string) (*dap.DapContinueOutcome, error) {
+	return a.debugAPI.Continue(sessionID)
+}
+
+func (a *App) DebugStepOver(sessionID string) (*dap.DapContinueOutcome, error) {
+	return a.debugAPI.StepOver(sessionID)
+}
+
+func (a *App) DebugStepIn(sessionID string) (*dap.DapContinueOutcome, error) {
+	return a.debugAPI.StepIn(sessionID)
+}
+
+func (a *App) DebugStepOut(sessionID string) (*dap.DapContinueOutcome, error) {
+	return a.debugAPI.StepOut(sessionID)
+}
+
+func (a *App) DebugPause(sessionID string) (*dap.DapSessionSummary, error) {
+	return a.debugAPI.Pause(sessionID)
+}
+
+func (a *App) DebugGetState(sessionID string) (*dap.DapSessionSummary, error) {
+	return a.debugAPI.GetState(sessionID)
+}
+
+func (a *App) DebugListSessions() []dap.DapSessionSummary {
+	return a.debugAPI.ListSessions()
+}
+
+func (a *App) DebugGetOutput(sessionID string) (string, error) {
+	return a.debugAPI.GetOutput(sessionID)
+}
+
+func (a *App) DebugGetVariables(sessionID string, variablesRef int) ([]dap.DapVariable, error) {
+	return a.debugAPI.GetVariables(sessionID, variablesRef)
+}
+
+func (a *App) DebugSetBreakpoint(sessionID string, file string, line int, condition string) ([]dap.DapBreakpointRecord, error) {
+	return a.debugAPI.SetBreakpoint(sessionID, file, line, condition)
+}
+
+func (a *App) DebugRemoveBreakpoint(sessionID string, file string, line int) ([]dap.DapBreakpointRecord, error) {
+	return a.debugAPI.RemoveBreakpoint(sessionID, file, line)
+}
+
+func (a *App) DebugGetScopes(sessionID string, frameID int) ([]dap.DapScope, error) {
+	return a.debugAPI.GetScopes(sessionID, frameID)
+}
+
+func (a *App) DebugGetStackTrace(sessionID string, levels int) ([]dap.DapStackFrame, error) {
+	return a.debugAPI.GetStackTrace(sessionID, levels)
+}
+
+func (a *App) DebugGetThreads(sessionID string) ([]dap.DapThread, error) {
+	return a.debugAPI.GetThreads(sessionID)
+}
+
+func (a *App) DebugGetKeys(sessionID string, scopesID int) ([]dap.DapScope, error) {
+	return a.debugAPI.GetKeys(sessionID, scopesID)
 }

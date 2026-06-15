@@ -5,6 +5,7 @@ import { App, FileNode } from '../../../bindings/monika'
 import { useStore } from '../../store'
 import { IconChevronRight, IconChevronDown, IconFile, IconEye, IconSearch, IconFilePlus, IconFolderPlus, IconPencilLine, IconTrash, IconRestore, IconClipboardPaste, IconFiles, IconExternalLink } from '../Icons'
 import { Link, MessageSquare, FileMinus } from 'lucide-react'
+import DebugPanel from '../debug/DebugPanel'
 
 type HeaderAction = 'none' | 'new-file' | 'new-folder' | 'search'
 
@@ -539,6 +540,22 @@ function FileTree({ hideTasks, ..._props }: IDockviewPanelProps & { hideTasks?: 
                         TASKS
                     </button>
                 )}
+                <button
+                    className="text-[11px] px-2 py-1 cursor-pointer transition-colors rounded"
+                    style={{
+                        fontFamily: 'var(--font-sans)',
+                        color: activeTab === 'debug' ? 'var(--text-primary)' : 'var(--text-dim)',
+                        background: activeTab === 'debug' ? 'var(--bg-active)' : 'transparent',
+                        border: 'none',
+                        borderBottom: activeTab === 'debug' ? '2px solid var(--accent)' : '2px solid transparent',
+                        fontWeight: 500,
+                    }}
+                    onMouseEnter={(e) => { if (activeTab !== 'debug') { e.currentTarget.style.background = 'var(--bg-hover)'; e.currentTarget.style.color = 'var(--text-secondary)' } }}
+                    onMouseLeave={(e) => { if (activeTab !== 'debug') { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-dim)' } }}
+                    onClick={() => setActiveTab('debug')}
+                >
+                    DEBUG
+                </button>
             </div>
 
             {/* FILES tab content */}
@@ -688,6 +705,11 @@ function FileTree({ hideTasks, ..._props }: IDockviewPanelProps & { hideTasks?: 
                         ))
                     })()}
                 </div>
+            </div>
+
+            {/* DEBUG tab content */}
+            <div style={{ display: activeTab === 'debug' ? 'flex' : 'none', flex: 1, overflow: 'hidden', flexDirection: 'column' }}>
+                <DebugPanel />
             </div>
         </div>
     )

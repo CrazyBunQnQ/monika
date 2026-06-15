@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo } from 'react'
 import { DockviewReact, type DockviewApi, IDockviewPanelProps } from 'dockview'
+import { Events } from '@wailsio/runtime'
 import TitleBar from './components/TitleBar/TitleBar'
 import SessionList from './components/Sidebar/SessionList'
 import ChatArea from './components/Chat/ChatArea'
@@ -40,6 +41,17 @@ function App() {
     const loadSkills = useStore((s) => s.loadSkills)
     const activeSessionId = useStore((s) => s.activeSessionId)
     const sessionWorktrees = useStore((s) => s.sessionWorktrees)
+    const setFileTreeActiveTab = useStore((s) => s.setFileTreeActiveTab)
+
+    // Auto-open debug tab on debug events
+    useEffect(() => {
+        const unsub = Events.On('stream', (ev: any) => {
+            if (ev?.type?.startsWith('debug.')) {
+                setFileTreeActiveTab('debug')
+            }
+        })
+        return () => { unsub() }
+    }, [setFileTreeActiveTab])
 
     const effectiveChangesPath = useMemo(() => {
         const wt = activeSessionId ? sessionWorktrees[activeSessionId] : undefined
@@ -114,15 +126,17 @@ function App() {
     return (
         <div className="flex flex-col h-full bg-[var(--bg-root)] overflow-hidden">
             <TitleBar />
-            <div className="flex-1 overflow-hidden">
-                <DockviewReact
-                    components={components}
-                    tabComponents={tabComponents}
-                    defaultTabComponent={DefaultTab}
-                    onReady={handleReady}
-                    className="h-full"
-                    disableDnd={true}
-                />
+            <div className="flex-1 overflow-hidden flex">
+                <div className="flex-1">
+                    <DockviewReact
+                        components={components}
+                        tabComponents={tabComponents}
+                        defaultTabComponent={DefaultTab}
+                        onReady={handleReady}
+                        className="h-full"
+                        disableDnd={true}
+                    />
+                </div>
             </div>
             <StatusBar />
             <ToastContainer />

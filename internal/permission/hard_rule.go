@@ -89,6 +89,10 @@ func (e *HardRuleEngine) extractMatchValue(ctx CheckContext) string {
 		if name, ok := args["name"].(string); ok {
 			return name
 		}
+	case "debug":
+		if action, ok := args["action"].(string); ok {
+			return action
+		}
 	}
 	return ""
 }
