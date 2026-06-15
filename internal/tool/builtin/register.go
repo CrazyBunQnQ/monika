@@ -63,6 +63,15 @@ func WireLSPHooks(r *tool.ToolRegistry) {
 			return "\n\n--- LSP Diagnostics ---\n(empty file path)"
 		}
 
+		// Skip diagnostics entirely for file types with no LSP server configured.
+		if checker, ok := lspTool.(interface {
+			HasServerForFile(string) bool
+		}); ok {
+			if !checker.HasServerForFile(filePath) {
+				return ""
+			}
+		}
+
 		// Wait for LSP server to be ready before querying diagnostics.
 		ready := false
 		if checker, ok := lspTool.(interface {
@@ -84,14 +93,12 @@ func WireLSPHooks(r *tool.ToolRegistry) {
 		if !ready {
 			return "\n\n--- LSP Diagnostics ---\nLSP server not available"
 		}
-
 		// Optional: format file via LSP before diagnostics
 		if formatter, ok := lspTool.(interface {
 			FormatContent(context.Context, string) (string, error)
 		}); ok {
 			formatter.FormatContent(ctx, filePath)
 		}
-
 		// Send didSave to trigger LSP re-analysis (like OMP's notifyFileSaved)
 		if saver, ok := lspTool.(interface {
 			NotifySavedForFile(context.Context, string) error

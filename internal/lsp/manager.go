@@ -92,6 +92,16 @@ func (m *Manager) ClientForFile(ctx context.Context, filePath string) (*Client, 
 
 }
 
+// HasServerForFile returns true if any LSP server is configured for the file's type.
+// Unlike ReadyForFile it does not start a server — it is a quick map lookup.
+func (m *Manager) HasServerForFile(filePath string) bool {
+	ext := strings.ToLower(filepath.Ext(filePath))
+	if ext == "" {
+		return false
+	}
+	return len(FileTypeToServer(ext, m.servers)) > 0
+}
+
 // ReadyForFile returns true if an LSP client is running and initialized for this file.
 func (m *Manager) ReadyForFile(ctx context.Context, filePath string) bool {
 	client, _, err := m.ClientForFile(ctx, filePath)

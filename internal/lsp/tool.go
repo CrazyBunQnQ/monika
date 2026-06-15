@@ -29,6 +29,10 @@ func (t *LSPTool) NotifySavedForFile(ctx context.Context, filePath string) error
 	return t.manager.NotifySavedForFile(ctx, filePath)
 }
 
+func (t *LSPTool) HasServerForFile(filePath string) bool {
+	return t.manager.HasServerForFile(filePath)
+}
+
 func (t *LSPTool) ReadyForFile(ctx context.Context, filePath string) bool {
 	return t.manager.ReadyForFile(ctx, filePath)
 }
