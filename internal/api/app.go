@@ -3527,6 +3527,9 @@ func (a *App) LspOpenFile(projectPath, filePath string) error {
 		return nil
 	}
 	absPath := resolvePath(projectPath, filePath)
+	if !mgr.HasServerForFile(absPath) {
+		return nil
+	}
 	client, serverName, err := mgr.ClientForFile(a.ctx, absPath)
 	if err != nil {
 		return err
@@ -3554,6 +3557,9 @@ func (a *App) LspDidChange(projectPath, filePath, content string, version int) e
 		return nil
 	}
 	absPath := resolvePath(projectPath, filePath)
+	if !mgr.HasServerForFile(absPath) {
+		return nil
+	}
 	client, serverName, err := mgr.ClientForFile(a.ctx, absPath)
 	if err != nil {
 		return err
@@ -3641,6 +3647,9 @@ func (a *App) resolveLspClient(projectPath, filePath string) (*lsp.Client, strin
 		return nil, "", "", fmt.Errorf("no LSP manager available")
 	}
 	absPath := resolvePath(projectPath, filePath)
+	if !mgr.HasServerForFile(absPath) {
+		return nil, "", "", nil
+	}
 	client, serverName, err := mgr.ClientForFile(a.ctx, absPath)
 	if err != nil {
 		return nil, "", "", err
@@ -3659,6 +3668,9 @@ func (a *App) LspDiagnostics(projectPath, filePath string) ([]LspDiagnostic, err
 		return nil, nil
 	}
 	absPath := resolvePath(projectPath, filePath)
+	if !mgr.HasServerForFile(absPath) {
+		return nil, nil
+	}
 	client, serverName, err := mgr.ClientForFile(a.ctx, absPath)
 	if err != nil {
 		return nil, err
@@ -3676,6 +3688,9 @@ func (a *App) LspGoToDefinition(projectPath, filePath string, line, col int) ([]
 	if err != nil {
 		return nil, err
 	}
+	if client == nil {
+		return nil, nil
+	}
 	locs, err := client.Definition(a.ctx, uri, lsp.Position{Line: line, Character: col})
 	if err != nil {
 		return nil, err
@@ -3687,6 +3702,9 @@ func (a *App) LspReferences(projectPath, filePath string, line, col int) ([]LspL
 	client, _, uri, err := a.resolveLspClient(projectPath, filePath)
 	if err != nil {
 		return nil, err
+	}
+	if client == nil {
+		return nil, nil
 	}
 	locs, err := client.References(a.ctx, uri, lsp.Position{Line: line, Character: col})
 	if err != nil {
@@ -3700,6 +3718,9 @@ func (a *App) LspHover(projectPath, filePath string, line, col int) (*LspHoverRe
 	if err != nil {
 		return nil, err
 	}
+	if client == nil {
+		return nil, nil
+	}
 	hover, err := client.Hover(a.ctx, uri, lsp.Position{Line: line, Character: col})
 	if err != nil {
 		return nil, err
@@ -3712,13 +3733,15 @@ func (a *App) LspHover(projectPath, filePath string, line, col int) (*LspHoverRe
 		return nil, nil
 	}
 	return &LspHoverResult{Contents: text}, nil
-	return &LspHoverResult{Contents: text}, nil
 }
 
 func (a *App) LspCompletion(projectPath, filePath string, line, col int) (*LspCompletionResult, error) {
 	client, _, uri, err := a.resolveLspClient(projectPath, filePath)
 	if err != nil {
 		return nil, err
+	}
+	if client == nil {
+		return &LspCompletionResult{Items: []LspCompletionItem{}}, nil
 	}
 	result, err := client.Complete(a.ctx, uri, lsp.Position{Line: line, Character: col})
 	if err != nil {
@@ -3746,6 +3769,9 @@ func (a *App) LspDocumentSymbols(projectPath, filePath string) ([]LspSymbol, err
 	if err != nil {
 		log.Printf("[LSP] resolveLspClient error: %v", err)
 		return nil, err
+	}
+	if client == nil {
+		return nil, nil
 	}
 	absPath := resolvePath(projectPath, filePath)
 	log.Printf("[LSP] documentSymbols uri=%s", uri)
@@ -3776,6 +3802,9 @@ func (a *App) LspTypeDefinition(projectPath, filePath string, line, col int) ([]
 	if err != nil {
 		return nil, err
 	}
+	if client == nil {
+		return nil, nil
+	}
 	locs, err := client.TypeDefinition(a.ctx, uri, lsp.Position{Line: line, Character: col})
 	if err != nil {
 		return nil, err
@@ -3787,6 +3816,9 @@ func (a *App) LspImplementation(projectPath, filePath string, line, col int) ([]
 	client, _, uri, err := a.resolveLspClient(projectPath, filePath)
 	if err != nil {
 		return nil, err
+	}
+	if client == nil {
+		return nil, nil
 	}
 	locs, err := client.Implementation(a.ctx, uri, lsp.Position{Line: line, Character: col})
 	if err != nil {
@@ -3838,6 +3870,9 @@ func (a *App) LspRename(projectPath, filePath string, line, col int, newName str
 	if err != nil {
 		return nil, err
 	}
+	if client == nil {
+		return nil, nil
+	}
 	wsEdit, err := client.Rename(a.ctx, uri, lsp.Position{Line: line, Character: col}, newName)
 	if err != nil {
 		return nil, err
@@ -3849,6 +3884,9 @@ func (a *App) LspCodeActions(projectPath, filePath string, line, col int) ([]Lsp
 	client, _, uri, err := a.resolveLspClient(projectPath, filePath)
 	if err != nil {
 		return nil, err
+	}
+	if client == nil {
+		return nil, nil
 	}
 	r := lsp.Range{
 		Start: lsp.Position{Line: line, Character: col},

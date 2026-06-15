@@ -165,6 +165,24 @@ const tagMap: TagEntry[] = [
     ['*_operator', tags.operator],
     ['attribute', tags.attributeName],
     ['*_attribute', tags.attributeName],
+    // YAML
+    ['double_quote_scalar', tags.string],
+    ['single_quote_scalar', tags.string],
+    ['block_scalar', tags.string],
+    ['integer_scalar', tags.number],
+    ['float_scalar', tags.number],
+    ['boolean_scalar', tags.bool],
+    ['null_scalar', tags.keyword],
+    ['anchor_name', tags.labelName],
+    ['alias_name', tags.labelName],
+    ['tag', tags.typeName],
+    ['yaml_directive', tags.attributeName],
+    ['tag_directive', tags.attributeName],
+    ['reserved_directive', tags.attributeName],
+    // JSON
+    ['true', tags.bool],
+    ['false', tags.bool],
+    ['null', tags.keyword],
 ]
 
 function matchTag(nt: string): Tag | null {
@@ -185,10 +203,15 @@ function matchTag(nt: string): Tag | null {
     return null
 }
 
-function resolveTag(nt: string, parentStack: string[]): Tag | null {
+function resolveTag(nt: string, parentStack: string[], inKeySubtree: boolean = false): Tag | null {
     const pLen = parentStack.length
     const parent = pLen > 0 ? parentStack[pLen - 1] : ''
     const grandparent = pLen > 1 ? parentStack[pLen - 2] : ''
+
+    // YAML/JSON key detection
+    if (inKeySubtree && (nt === 'string_scalar' || nt === 'double_quote_scalar' || nt === 'single_quote_scalar' || nt === 'string')) {
+        return tags.propertyName
+    }
 
     if (nt === 'identifier') {
         if (parent === 'call_expression') return tags.function(tags.variableName)
@@ -284,9 +307,11 @@ export async function getLineColors(
         lineColors.set(i, [])
     }
 
-    function walk(node: any, parents: string[]) {
+    const keyContainers = new Set(['block_mapping_pair', 'flow_pair', 'pair'])
+
+    function walk(node: any, parents: string[], inKeySubtree = false) {
         const nt = node.type || ''
-        const tag = resolveTag(nt, parents)
+        const tag = resolveTag(nt, parents, inKeySubtree)
         const hex = tagToHex(tag)
         if (hex) {
             const startLine = content.slice(0, node.startIndex).split('\n').length - 1
@@ -301,8 +326,15 @@ export async function getLineColors(
         }
         parents.push(nt)
         if (node.children) {
+            const isKeyContainer = keyContainers.has(nt)
+            let firstNamedSeen = false
             for (const child of node.children) {
-                walk(child, parents)
+                let childInKey = inKeySubtree
+                if (isKeyContainer && child.isNamed && !firstNamedSeen) {
+                    childInKey = true
+                }
+                if (child.isNamed) firstNamedSeen = true
+                walk(child, parents, childInKey)
             }
         }
         parents.pop()

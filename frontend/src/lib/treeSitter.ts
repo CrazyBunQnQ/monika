@@ -174,6 +174,10 @@ const foldableTypes = new Set([
     'constructor_declaration', 'enum_declaration',
     // C/C++
     'function_definition', 'class_specifier', 'struct_specifier', 'namespace_definition',
+    // YAML
+    'block_mapping_pair', 'block_sequence_item',
+    // JSON
+    'pair', 'object', 'array',
 ])
 
 function buildSummary(node: any, source: string, totalLines: number, minBodyLines = 4): SummaryNode {
