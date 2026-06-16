@@ -29,9 +29,12 @@ func (s *KBStore) ComputeSimilarity(candidate ExtractCandidate) ([]SimilarityRes
 		return nil, err
 	}
 	var sims []SimilarityResult
-	for _, r := range results {
+	for idx, r := range results {
 		overlap := tagOverlap(candidate.Tags, r.Tags)
-		bm25Score := 0.5
+		bm25Score := 0.9 - float64(idx)*0.2
+		if bm25Score < 0.1 {
+			bm25Score = 0.1
+		}
 		sims = append(sims, SimilarityResult{
 			File:  r,
 			Score: bm25Score + float64(overlap)*0.25,
