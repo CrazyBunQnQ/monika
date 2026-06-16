@@ -147,7 +147,11 @@ func (s *KBStore) addLink(scope, sourcePath, targetPath string) error {
 		lines = newLines
 	}
 	root := s.rootFor(scope)
-	return os.WriteFile(filepath.Join(root, sourcePath), []byte(strings.Join(lines, "\n")), 0644)
+	if err := os.WriteFile(filepath.Join(root, sourcePath), []byte(strings.Join(lines, "\n")), 0644); err != nil {
+		return err
+	}
+	// 同步 DB linked_to 列，让 memory_search 能直接返回依赖关系，无需 file_read 全文。
+	return s.setLinkedTo(scope, sourcePath, parseFMLinks(strings.Join(lines, "\n")))
 }
 
 func olderFile(a, b, scope string, s *KBStore) string {

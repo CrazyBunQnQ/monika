@@ -23,6 +23,13 @@ func TestKBStoreWriteAndSearch(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
+	err = store.WriteFile(ScopeProject, CategoryTopic, "VSCode MCP 配置指南",
+		"VSCode + Claude Code 通过 MCP 操作 Unreal Engine 配置指南", []string{"vscode", "mcp", "unreal"}, "high")
+	if err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// 英文多词搜索（走 FTS5）
 	results, err := store.Search("goroutines channels", ScopeProject, 5)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -31,6 +38,18 @@ func TestKBStoreWriteAndSearch(t *testing.T) {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
 	if results[0].Title != "Test Lesson" {
+		t.Errorf("got '%s'", results[0].Title)
+	}
+
+	// 中文多词搜索（走 searchLike，拆分后 AND 组合）
+	results, err = store.Search("unreal engine mcp vscode 配置", ScopeProject, 5)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result for Chinese multi-word, got %d", len(results))
+	}
+	if results[0].Title != "VSCode MCP 配置指南" {
 		t.Errorf("got '%s'", results[0].Title)
 	}
 }

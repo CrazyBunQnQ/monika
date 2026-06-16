@@ -10,6 +10,7 @@ import (
 const (
 	ScopeGlobal  = "global"
 	ScopeProject = "project"
+	ScopeAuto    = "auto"
 )
 
 const (
