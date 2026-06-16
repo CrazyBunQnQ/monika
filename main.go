@@ -344,6 +344,7 @@ Once you identify the right skill or tool, load it with **skill** or call the MC
 
 	appService = api.NewApp(home, cwd, pr.Config, pr.Providers, pr.Model, registry, loopOpts, taskStoreAccessor, agentRegistry, taskRunner, mcpRegistry, kbStore)
 	appService.InitTSBridge(tsBridge)
+	appService.StartBackgroundTasks()
 	appGetProjectPath = appService.GetProjectPath
 	if dbMgr != nil {
 		appService.SetDBManager(dbMgr)
