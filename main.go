@@ -19,6 +19,7 @@ import (
 	config2 "monika/internal/config"
 	"monika/internal/dap"
 	"monika/internal/dbdiscovery"
+	"monika/internal/memory"
 	"monika/internal/permission"
 	"monika/internal/prompt"
 	"monika/internal/tool"
@@ -162,6 +163,13 @@ func main() {
 		builtin.RegisterSkillSearchTool(registry, skEngine, home, getCwd, &pr.Config)
 	}
 
+	kbStore, err := memory.NewKBStore(home, cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[monika] kb init failed: %v\n", err)
+	} else {
+		builtin.RegisterMemory(registry, kbStore)
+	}
+
 	// Register skill management tools (install/uninstall) with deferred App binding
 	var skillInstallFn func(url string, scope string) ([]string, error)
 	var skillUninstallFn func(name string) error
@@ -238,6 +246,8 @@ Once you identify the right skill or tool, load it with **skill** or call the MC
 		agent.WithProjectDir(cwd),
 		agent.WithModel(pr.Model),
 		agent.WithSystemPrompt(systemPrompt),
+		agent.WithHomeDir(home),
+		agent.WithKBStore(kbStore),
 	}
 
 	// Wire permission pipeline
@@ -332,7 +342,7 @@ Once you identify the right skill or tool, load it with **skill** or call the MC
 		taskStoreAccessor = accessor
 	}
 
-	appService = api.NewApp(home, cwd, pr.Config, pr.Providers, pr.Model, registry, loopOpts, taskStoreAccessor, agentRegistry, taskRunner, mcpRegistry)
+	appService = api.NewApp(home, cwd, pr.Config, pr.Providers, pr.Model, registry, loopOpts, taskStoreAccessor, agentRegistry, taskRunner, mcpRegistry, kbStore)
 	appService.InitTSBridge(tsBridge)
 	appGetProjectPath = appService.GetProjectPath
 	if dbMgr != nil {

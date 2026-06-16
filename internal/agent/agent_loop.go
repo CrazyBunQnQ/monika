@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"monika/internal/memory"
 	"monika/internal/permission"
 	"monika/internal/tool"
 	"monika/pkg/engine"
@@ -261,6 +262,8 @@ type AgentLoop struct {
 	systemPrompt      string
 	pipeline          *permission.Pipeline
 	projectDir        string
+	homeDir           string
+	kbStore           *memory.KBStore
 	model             string
 	modelContextLimit int64
 	modelOutputLimit  int64
@@ -296,6 +299,14 @@ func WithProjectDir(dir string) LoopOption {
 	return func(a *AgentLoop) {
 		a.projectDir = dir
 	}
+}
+
+func WithHomeDir(dir string) LoopOption {
+	return func(a *AgentLoop) { a.homeDir = dir }
+}
+
+func WithKBStore(store *memory.KBStore) LoopOption {
+	return func(a *AgentLoop) { a.kbStore = store }
 }
 
 func WithModel(model string) LoopOption {
@@ -1165,6 +1176,11 @@ func (a *AgentLoop) buildMessages(conv *Conversation) []engine.ChatMessage {
 				}
 				b.WriteString("</task-list>")
 				parts = append(parts, b.String())
+			}
+		}
+		if a.kbStore != nil {
+			if block := a.kbStore.BuildMemoryBlock(); block != "" {
+				parts = append(parts, block)
 			}
 		}
 
