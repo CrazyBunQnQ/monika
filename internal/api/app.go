@@ -4262,3 +4262,19 @@ func (a *App) DebugGetThreads(sessionID string) ([]dap.DapThread, error) {
 func (a *App) DebugGetKeys(sessionID string, scopesID int) ([]dap.DapScope, error) {
 	return a.debugAPI.GetKeys(sessionID, scopesID)
 }
+
+func (a *App) StartBackgroundTasks() {
+	if a.kbStore == nil {
+		return
+	}
+	go func() {
+		for {
+			time.Sleep(24 * time.Hour)
+			// Background review — requires a ReviewLLM implementation
+			// P3 MVP: skip if no LLM adapter available
+			// Skill generation doesn't need LLM
+			skillsDir := filepath.Join(a.home, ".monika", "skills")
+			a.kbStore.BackgroundSkillGen(context.Background(), nil, skillsDir)
+		}
+	}()
+}
