@@ -74,6 +74,7 @@ type App struct {
 	loopOpts        []agent2.LoopOption
 	mcpRegistry     *engine2.MCPRegistry
 	kbStore         *memory.KBStore
+	memoryHook      *memory.ArchiveHook
 
 	permissionRequests map[string]chan permission.PermissionResponse
 	permMu             sync.Mutex
@@ -583,7 +584,50 @@ func (a *App) ArchiveSession(projectPath, sessionID string) error {
 		return err
 	}
 	s.Status = StatusArchived
-	return sm.Save(s)
+	if err := sm.Save(s); err != nil {
+		return err
+	}
+
+	if a.memoryHook != nil {
+		summary := extractCompactionSummary(s)
+		scope := memory.ScopeProject
+		go func() {
+			a.memoryHook.OnArchive(context.Background(), scope, sessionID, summary)
+		}()
+	}
+	return nil
+}
+
+func extractCompactionSummary(s *Session) string {
+	for i := len(s.Messages) - 1; i >= 0; i-- {
+		if s.Messages[i].Name == "compaction_summary" {
+			return s.Messages[i].Content
+		}
+	}
+	var parts []string
+	start := len(s.Messages) - 10
+	if start < 0 {
+		start = 0
+	}
+	for i := start; i < len(s.Messages); i++ {
+		m := s.Messages[i]
+		if m.Role == "user" || m.Role == "assistant" {
+			role := m.Role
+			if m.Name != "" {
+				role += " (" + m.Name + ")"
+			}
+			content := m.Content
+			if len(content) > 500 {
+				content = content[:500] + "..."
+			}
+			parts = append(parts, role+": "+content)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func (a *App) SetMemoryHook(hook *memory.ArchiveHook) {
+	a.memoryHook = hook
 }
 
 func (a *App) MarkSessionViewed(projectPath, sessionID string) {
