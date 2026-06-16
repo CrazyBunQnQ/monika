@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -118,16 +119,32 @@ func (s *KBStore) addLink(scope, sourcePath, targetPath string) error {
 	if err != nil {
 		return err
 	}
-	link := fmt.Sprintf("\n> 关联：[[%s]]", targetPath)
+	link := fmt.Sprintf("> 关联：[[%s]]", targetPath)
 	if strings.Contains(content, link) {
 		return nil
 	}
 	lines := strings.Split(content, "\n")
+	found := false
 	for i, line := range lines {
 		if strings.HasPrefix(line, "> 关联：") {
 			lines[i] = strings.TrimSuffix(line, "\n") + " | [[" + targetPath + "]]"
+			found = true
 			break
 		}
+	}
+	if !found {
+		// Insert after the last metadata line ("> ..." lines in frontmatter)
+		insertIdx := 0
+		for i, line := range lines {
+			if strings.HasPrefix(line, "> ") {
+				insertIdx = i + 1
+			}
+		}
+		newLines := make([]string, 0, len(lines)+1)
+		newLines = append(newLines, lines[:insertIdx]...)
+		newLines = append(newLines, link)
+		newLines = append(newLines, lines[insertIdx:]...)
+		lines = newLines
 	}
 	root := s.rootFor(scope)
 	return os.WriteFile(filepath.Join(root, sourcePath), []byte(strings.Join(lines, "\n")), 0644)
@@ -170,5 +187,19 @@ Respond in JSON format.`
 }
 
 func parseReviewResponse(resp string) *ReviewResult {
-	return &ReviewResult{}
+	jsonStr := strings.TrimSpace(resp)
+	if idx := strings.Index(jsonStr, "```json"); idx >= 0 {
+		jsonStr = jsonStr[idx+7:]
+		if end := strings.Index(jsonStr, "```"); end >= 0 {
+			jsonStr = jsonStr[:end]
+		}
+	} else if idx := strings.Index(jsonStr, "{"); idx >= 0 {
+		jsonStr = jsonStr[idx:]
+	}
+
+	var result ReviewResult
+	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
+		return &ReviewResult{}
+	}
+	return &result
 }
