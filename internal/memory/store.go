@@ -18,7 +18,8 @@ import (
 type KBStore struct {
 	globalPath  string
 	projectPath string
-	db          *sql.DB
+	globalDB    *sql.DB
+	projectDB   *sql.DB
 }
 
 func NewKBStore(homeDir, projectDir string) (*KBStore, error) {
@@ -32,21 +33,34 @@ func NewKBStore(homeDir, projectDir string) (*KBStore, error) {
 		}
 	}
 	s := &KBStore{globalPath: gp, projectPath: pp}
-	if err := s.openIndex(); err != nil {
-		return nil, err
+
+	gdb, err := openDB(filepath.Join(gp, ".index", "kb.db"))
+	if err != nil {
+		return nil, fmt.Errorf("open global db: %w", err)
 	}
+	s.globalDB = gdb
+
+	pdb, err := openDB(filepath.Join(pp, ".index", "kb.db"))
+	if err != nil {
+		gdb.Close()
+		return nil, fmt.Errorf("open project db: %w", err)
+	}
+	s.projectDB = pdb
+
+	s.autoReindex(ScopeGlobal)
+	s.autoReindex(ScopeProject)
+
 	return s, nil
 }
 
-func (s *KBStore) openIndex() error {
-	dbPath := filepath.Join(s.projectPath, ".index", "kb.db")
+func openDB(dbPath string) (*sql.DB, error) {
 	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=5000")
 	if err != nil {
-		return fmt.Errorf("open: %w", err)
+		return nil, fmt.Errorf("open: %w", err)
 	}
 	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		db.Close()
-		return err
+		return nil, err
 	}
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS file_index (
@@ -85,10 +99,26 @@ func (s *KBStore) openIndex() error {
 	`)
 	if err != nil {
 		db.Close()
-		return fmt.Errorf("migrate: %w", err)
+		return nil, fmt.Errorf("migrate: %w", err)
 	}
-	s.db = db
-	return nil
+	return db, nil
+}
+
+func (s *KBStore) dbFor(scope string) *sql.DB {
+	if scope == ScopeGlobal {
+		return s.globalDB
+	}
+	return s.projectDB
+}
+
+// autoReindex 如果 DB 索引为空但磁盘上有 .md 文件，从磁盘重建索引。
+func (s *KBStore) autoReindex(scope string) {
+	var count int
+	s.dbFor(scope).QueryRow("SELECT COUNT(*) FROM file_index").Scan(&count)
+	if count > 0 {
+		return
+	}
+	s.ReindexFromDisk(scope)
 }
 
 // sanitizeFTSQuery 转义 FTS5 查询中的特殊字符。
@@ -127,26 +157,20 @@ func (s *KBStore) Search(query, scope string, limit int) ([]KBFile, error) {
 
 // searchFTS 使用 FTS5 全文搜索（适用于英文等以空格分词的语言）。
 func (s *KBStore) searchFTS(query, scope string, limit int) ([]KBFile, error) {
-	where := ""
-	args := []any{sanitizeFTSQuery(query)}
-	if scope == ScopeGlobal || scope == ScopeProject {
-		where = " AND f.scope = ?"
-		args = append(args, scope)
-	}
-	q := fmt.Sprintf(`
+	args := []any{sanitizeFTSQuery(query), limit}
+	q := `
 		SELECT f.id, f.path, f.scope, f.category, f.title, f.tags,
 		       f.confidence, f.status, f.char_count, f.linked_to,
 		       f.created_at, f.updated_at,
 		       snippet(file_fts, 2, '<b>', '</b>', '...', 40)
 		FROM file_fts
 		JOIN file_index f ON file_fts.rowid = f.id
-		WHERE file_fts MATCH ? %s AND f.status != 'trash'
+		WHERE file_fts MATCH ? AND f.status != 'trash'
 		ORDER BY bm25(file_fts, 0, 10, 5)
 		LIMIT ?
-	`, where)
-	args = append(args, limit)
+	`
 
-	rows, err := s.db.Query(q, args...)
+	rows, err := s.dbFor(scope).Query(q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}
@@ -156,24 +180,17 @@ func (s *KBStore) searchFTS(query, scope string, limit int) ([]KBFile, error) {
 
 // searchLike 使用 LIKE 子串匹配搜索（适用于中文等 FTS5 unicode61 无法正确分词的语言）。
 func (s *KBStore) searchLike(query, scope string, limit int) ([]KBFile, error) {
-	where := " WHERE f.status != 'trash'"
-	args := []any{}
-	if scope == ScopeGlobal || scope == ScopeProject {
-		where += " AND f.scope = ?"
-		args = append(args, scope)
-	}
 	likePattern := "%" + likeEscape(query) + "%"
-	where += " AND (f.title LIKE ? ESCAPE '\\' OR f.content LIKE ? ESCAPE '\\')"
-	args = append(args, likePattern, likePattern)
-	args = append(args, limit)
+	args := []any{likePattern, likePattern, limit}
 
-	rows, err := s.db.Query(`
+	rows, err := s.dbFor(scope).Query(`
 		SELECT f.id, f.path, f.scope, f.category, f.title, f.tags,
 		       f.confidence, f.status, f.char_count, f.linked_to,
 		       f.created_at, f.updated_at,
 		       substr(f.content, 1, 200)
 		FROM file_index f
-	`+where+`
+		WHERE f.status != 'trash'
+		  AND (f.title LIKE ? ESCAPE '\' OR f.content LIKE ? ESCAPE '\')
 		ORDER BY f.updated_at DESC
 		LIMIT ?
 	`, args...)
@@ -190,6 +207,7 @@ func likeEscape(s string) string {
 	s = strings.ReplaceAll(s, `_`, `\_`)
 	return s
 }
+
 func (s *KBStore) WriteFile(scope, category, title, content string, tags []string, confidence string) error {
 	root := s.rootFor(scope)
 	if tags == nil {
@@ -222,7 +240,7 @@ func (s *KBStore) WriteFile(scope, category, title, content string, tags []strin
 	}
 
 	charCount := len([]rune(content))
-	_, err := s.db.Exec(`
+	_, err := s.dbFor(scope).Exec(`
 		INSERT INTO file_index (path, scope, category, title, content, tags, confidence, status, char_count, linked_to, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, '[]', ?, ?)
 		ON CONFLICT(path) DO UPDATE SET
@@ -252,17 +270,17 @@ func (s *KBStore) ListFiles(scope, category string) ([]KBFile, error) {
 	var rows *sql.Rows
 	var err error
 	if category != "" {
-		rows, err = s.db.Query(`
+		rows, err = s.dbFor(scope).Query(`
 			SELECT id, path, scope, category, title, tags, confidence, status, char_count, linked_to, created_at, updated_at
-			FROM file_index WHERE scope = ? AND category = ? AND status != 'trash'
+			FROM file_index WHERE category = ? AND status != 'trash'
 			ORDER BY updated_at DESC
-		`, scope, category)
+		`, category)
 	} else {
-		rows, err = s.db.Query(`
+		rows, err = s.dbFor(scope).Query(`
 			SELECT id, path, scope, category, title, tags, confidence, status, char_count, linked_to, created_at, updated_at
-			FROM file_index WHERE scope = ? AND status != 'trash'
+			FROM file_index WHERE status != 'trash'
 			ORDER BY updated_at DESC
-		`, scope)
+		`)
 	}
 	if err != nil {
 		return nil, err
@@ -272,16 +290,17 @@ func (s *KBStore) ListFiles(scope, category string) ([]KBFile, error) {
 }
 
 func (s *KBStore) SoftDelete(scope, relPath string) error {
-	_, err := s.db.Exec("UPDATE file_index SET status = 'trash', updated_at = ? WHERE path = ?",
+	db := s.dbFor(scope)
+	_, err := db.Exec("UPDATE file_index SET status = 'trash', updated_at = ? WHERE path = ?",
 		time.Now().UTC().Format(time.RFC3339), relPath)
 	if err != nil {
 		return err
 	}
 	var id int64
-	if err := s.db.QueryRow("SELECT id FROM file_index WHERE path = ?", relPath).Scan(&id); err != nil {
+	if err := db.QueryRow("SELECT id FROM file_index WHERE path = ?", relPath).Scan(&id); err != nil {
 		return fmt.Errorf("soft-delete scan id: %w", err)
 	}
-	if _, err := s.db.Exec("DELETE FROM file_fts WHERE rowid = ?", id); err != nil {
+	if _, err := db.Exec("DELETE FROM file_fts WHERE rowid = ?", id); err != nil {
 		return fmt.Errorf("soft-delete fts: %w", err)
 	}
 	oldPath := filepath.Join(s.rootFor(scope), relPath)
@@ -297,12 +316,11 @@ func (s *KBStore) SoftDelete(scope, relPath string) error {
 }
 
 func (s *KBStore) SetFileStatus(scope, relPath, status string) error {
-
 	root := s.rootFor(scope)
 	fullPath := filepath.Join(root, relPath)
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	_, err := s.db.Exec("UPDATE file_index SET status = ?, updated_at = ? WHERE path = ?", status, now, relPath)
+	_, err := s.dbFor(scope).Exec("UPDATE file_index SET status = ?, updated_at = ? WHERE path = ?", status, now, relPath)
 	if err != nil {
 		return fmt.Errorf("set status: %w", err)
 	}
@@ -319,21 +337,27 @@ func (s *KBStore) SetFileStatus(scope, relPath, status string) error {
 }
 
 func (s *KBStore) GetStatistics(scope string) (total, active, archived int, lastUpdate string, err error) {
-	err = s.db.QueryRow(`
+	err = s.dbFor(scope).QueryRow(`
 		SELECT COUNT(*),
 		       SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END),
 		       SUM(CASE WHEN status = 'archived' OR status = 'deprecated' THEN 1 ELSE 0 END),
 		       COALESCE(MAX(updated_at), '')
-		FROM file_index WHERE scope = ? AND status != 'trash'
-	`, scope).Scan(&total, &active, &archived, &lastUpdate)
+		FROM file_index WHERE status != 'trash'
+	`).Scan(&total, &active, &archived, &lastUpdate)
 	return
 }
 
 func (s *KBStore) Close() error {
-	if s.db != nil {
-		return s.db.Close()
+	var err error
+	if s.globalDB != nil {
+		err = s.globalDB.Close()
 	}
-	return nil
+	if s.projectDB != nil {
+		if perr := s.projectDB.Close(); perr != nil && err == nil {
+			err = perr
+		}
+	}
+	return err
 }
 
 func (s *KBStore) rootFor(scope string) string {

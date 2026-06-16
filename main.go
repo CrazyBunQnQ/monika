@@ -396,7 +396,7 @@ The knowledge base contains three types of entries:
 		appService.SetMemoryHook(hook)
 	}
 	appService.InitTSBridge(tsBridge)
-	appService.StartBackgroundTasks()
+	// appService.StartBackgroundTasks() // 后台审查/技能生成，暂不实现
 	appGetProjectPath = appService.GetProjectPath
 	if dbMgr != nil {
 		appService.SetDBManager(dbMgr)

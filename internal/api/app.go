@@ -588,13 +588,14 @@ func (a *App) ArchiveSession(projectPath, sessionID string) error {
 		return err
 	}
 
-	if a.memoryHook != nil {
-		summary := extractCompactionSummary(s)
-		scope := memory.ScopeProject
-		go func() {
-			a.memoryHook.OnArchive(context.Background(), scope, sessionID, summary)
-		}()
-	}
+	// 会话归档自动触发记忆提取 — 暂不支持
+	// if a.memoryHook != nil {
+	// 	summary := extractCompactionSummary(s)
+	// 	scope := memory.ScopeProject
+	// 	go func() {
+	// 		a.memoryHook.OnArchive(context.Background(), scope, sessionID, summary)
+	// 	}()
+	// }
 	return nil
 }
 
@@ -4286,18 +4287,16 @@ func (a *App) DebugGetKeys(sessionID string, scopesID int) ([]dap.DapScope, erro
 	return a.debugAPI.GetKeys(sessionID, scopesID)
 }
 
-func (a *App) StartBackgroundTasks() {
-	if a.kbStore == nil {
-		return
-	}
-	go func() {
-		for {
-			time.Sleep(24 * time.Hour)
-			// Background review — requires a ReviewLLM implementation
-			// P3 MVP: skip if no LLM adapter available
-			// Skill generation doesn't need LLM
-			skillsDir := filepath.Join(a.home, ".monika", "skills")
-			a.kbStore.BackgroundSkillGen(context.Background(), nil, skillsDir)
-		}
-	}()
-}
+// StartBackgroundTasks — 后台审查/技能生成，暂不实现
+// func (a *App) StartBackgroundTasks() {
+// 	if a.kbStore == nil {
+// 		return
+// 	}
+// 	go func() {
+// 		for {
+// 			time.Sleep(24 * time.Hour)
+// 			skillsDir := filepath.Join(a.home, ".monika", "skills")
+// 			a.kbStore.BackgroundSkillGen(context.Background(), nil, skillsDir)
+// 		}
+// 	}()
+// }
