@@ -1,7 +1,9 @@
 package memory
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -37,7 +39,7 @@ func NewKBStore(homeDir, projectDir string) (*KBStore, error) {
 
 func (s *KBStore) openIndex() error {
 	dbPath := filepath.Join(s.projectPath, ".index", "kb.db")
-	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_foreign_keys=on")
+	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=5000")
 	if err != nil {
 		return fmt.Errorf("open: %w", err)
 	}
@@ -52,6 +54,7 @@ func (s *KBStore) openIndex() error {
 			scope       TEXT NOT NULL DEFAULT 'project',
 			category    TEXT NOT NULL,
 			title       TEXT NOT NULL,
+			content     TEXT DEFAULT '',
 			tags        TEXT DEFAULT '[]',
 			confidence  TEXT DEFAULT 'medium',
 			status      TEXT DEFAULT 'active',
@@ -66,17 +69,17 @@ func (s *KBStore) openIndex() error {
 		);
 		CREATE TRIGGER IF NOT EXISTS fts_ai AFTER INSERT ON file_index BEGIN
 			INSERT INTO file_fts(rowid, path, title, content)
-			VALUES (new.id, new.path, new.title, '');
+			VALUES (new.id, new.path, new.title, new.content);
 		END;
 		CREATE TRIGGER IF NOT EXISTS fts_ad AFTER DELETE ON file_index BEGIN
 			INSERT INTO file_fts(file_fts, rowid, path, title, content)
-			VALUES ('delete', old.id, old.path, old.title, '');
+			VALUES ('delete', old.id, old.path, old.title, old.content);
 		END;
 		CREATE TRIGGER IF NOT EXISTS fts_au AFTER UPDATE ON file_index BEGIN
 			INSERT INTO file_fts(file_fts, rowid, path, title, content)
-			VALUES ('delete', old.id, old.path, old.title, '');
+			VALUES ('delete', old.id, old.path, old.title, old.content);
 			INSERT INTO file_fts(rowid, path, title, content)
-			VALUES (new.id, new.path, new.title, '');
+			VALUES (new.id, new.path, new.title, new.content);
 		END;
 	`)
 	if err != nil {
@@ -151,21 +154,15 @@ func (s *KBStore) WriteFile(scope, category, title, content string, tags []strin
 
 	charCount := len([]rune(content))
 	_, err := s.db.Exec(`
-		INSERT INTO file_index (path, scope, category, title, tags, confidence, status, char_count, linked_to, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, 'active', ?, '[]', ?, ?)
+		INSERT INTO file_index (path, scope, category, title, content, tags, confidence, status, char_count, linked_to, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, '[]', ?, ?)
 		ON CONFLICT(path) DO UPDATE SET
-			category=excluded.category, title=excluded.title, tags=excluded.tags,
-			confidence=excluded.confidence, char_count=excluded.char_count,
+			category=excluded.category, title=excluded.title, content=excluded.content, tags=excluded.tags,
+			confidence=excluded.confidence, status='active', char_count=excluded.char_count,
 			updated_at=excluded.updated_at
-	`, relPath, scope, category, title, string(tagsJSON), confidence, charCount, now, now)
+	`, relPath, scope, category, title, content, string(tagsJSON), confidence, charCount, now, now)
 	if err != nil {
 		return fmt.Errorf("upsert: %w", err)
-	}
-
-	var id int64
-	s.db.QueryRow("SELECT id FROM file_index WHERE path = ?", relPath).Scan(&id)
-	if id > 0 {
-		s.db.Exec("UPDATE file_fts SET content = ? WHERE rowid = ?", content, id)
 	}
 	return nil
 }
@@ -212,15 +209,21 @@ func (s *KBStore) SoftDelete(scope, relPath string) error {
 		return err
 	}
 	var id int64
-	s.db.QueryRow("SELECT id FROM file_index WHERE path = ?", relPath).Scan(&id)
-	if id > 0 {
-		s.db.Exec("DELETE FROM file_fts WHERE rowid = ?", id)
+	if err := s.db.QueryRow("SELECT id FROM file_index WHERE path = ?", relPath).Scan(&id); err != nil {
+		return fmt.Errorf("soft-delete scan id: %w", err)
+	}
+	if _, err := s.db.Exec("DELETE FROM file_fts WHERE rowid = ?", id); err != nil {
+		return fmt.Errorf("soft-delete fts: %w", err)
 	}
 	oldPath := filepath.Join(s.rootFor(scope), relPath)
 	trashSubdir := filepath.Join(".trash", filepath.Dir(relPath))
 	trashPath := filepath.Join(s.rootFor(scope), trashSubdir)
-	os.MkdirAll(trashPath, 0755)
-	os.Rename(oldPath, filepath.Join(trashPath, filepath.Base(relPath)))
+	if err := os.MkdirAll(trashPath, 0755); err != nil {
+		return fmt.Errorf("soft-delete mkdir: %w", err)
+	}
+	if err := os.Rename(oldPath, filepath.Join(trashPath, filepath.Base(relPath))); err != nil {
+		return fmt.Errorf("soft-delete rename: %w", err)
+	}
 	return nil
 }
 
@@ -280,7 +283,8 @@ func titleToSlug(title string) string {
 	}
 	r := strings.Trim(c.String(), "-")
 	if r == "" {
-		return "untitled"
+		h := sha256.Sum256([]byte(title))
+		return "untitled-" + hex.EncodeToString(h[:3])
 	}
 	return r
 }
@@ -294,6 +298,9 @@ func scanKBFiles(rows *sql.Rows) ([]KBFile, error) {
 			&f.Confidence, &f.Status, &f.CharCount, &linkedJSON, &ca, &ua, &snippet); err != nil {
 			return nil, err
 		}
+		// Ignore unmarshal/parse errors: tags/linked_to are internally written as
+		// valid JSON and timestamps always use RFC3339, so failures here are
+		// recoverable per-row corruption, not fatal DB errors.
 		json.Unmarshal([]byte(tagsJSON), &f.Tags)
 		json.Unmarshal([]byte(linkedJSON), &f.LinkedTo)
 		f.CreatedAt, _ = time.Parse(time.RFC3339, ca)
@@ -315,6 +322,9 @@ func scanKBFilesFlat(rows *sql.Rows) ([]KBFile, error) {
 			&f.Confidence, &f.Status, &f.CharCount, &linkedJSON, &ca, &ua); err != nil {
 			return nil, err
 		}
+		// Ignore unmarshal/parse errors: tags/linked_to are internally written as
+		// valid JSON and timestamps always use RFC3339, so failures here are
+		// recoverable per-row corruption, not fatal DB errors.
 		json.Unmarshal([]byte(tagsJSON), &f.Tags)
 		json.Unmarshal([]byte(linkedJSON), &f.LinkedTo)
 		f.CreatedAt, _ = time.Parse(time.RFC3339, ca)
