@@ -257,6 +257,8 @@ interface AppState {
     setProjectPath: (path: string) => void
     setBranch: (branch: string) => void
     setActiveSessionId: (id: string) => void
+    memoryStatus: string | null
+    setMemoryStatus: (status: string | null) => void
     setDockviewApi: (api: DockviewApi | null) => void
     bumpFileTreeVersion: () => void
     bumpSessionListVersion: () => void
@@ -363,6 +365,7 @@ export const useStore = create<AppState>((set, get) => ({
     projectPath: '',
     branch: '',
     activeSessionId: '',
+    memoryStatus: null,
     sessionParents: {},
     subagentStack: {},
     preview: { mode: null, filePath: null, fileName: null, fileContent: null, diffLines: null, conflictAiContent: null, conflictActive: false },
@@ -773,6 +776,7 @@ export const useStore = create<AppState>((set, get) => ({
         Call.ByName('monika/internal/api.App.ClearSessionDirty', {}).catch(() => { })
     },
     setDockviewApi: (api) => set({ dockviewApi: api }),
+    setMemoryStatus: (status) => set({ memoryStatus: status }),
 
     openSessionTab: async (id, title) => {
         const state = useStore.getState()
