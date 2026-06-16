@@ -105,6 +105,24 @@ func (a *App) KBStatistics(scope string) (*KBStats, error) {
 	}, nil
 }
 
+func (a *App) KBCreateMemory(args json.RawMessage) error {
+	if a.kbStore == nil {
+		return fmt.Errorf("kb not initialized")
+	}
+	var p struct {
+		Scope      string   `json:"scope"`
+		Category   string   `json:"category"`
+		Title      string   `json:"title"`
+		Content    string   `json:"content"`
+		Tags       []string `json:"tags"`
+		Confidence string   `json:"confidence"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil {
+		return err
+	}
+	return a.kbStore.WriteFile(p.Scope, p.Category, p.Title, p.Content, p.Tags, p.Confidence)
+}
+
 func (a *App) KBUploadDocument(args json.RawMessage) error {
 	if a.kbStore == nil {
 		return fmt.Errorf("kb not initialized")
