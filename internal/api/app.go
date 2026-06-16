@@ -26,6 +26,7 @@ import (
 	"monika/internal/dap"
 	"monika/internal/dbdiscovery"
 	"monika/internal/lsp"
+	"monika/internal/memory"
 	"monika/internal/permission"
 	tool2 "monika/internal/tool"
 	"monika/internal/tool/builtin"
@@ -72,6 +73,7 @@ type App struct {
 	pendingChildren map[string]string               // parentSessionID → childSessionID
 	loopOpts        []agent2.LoopOption
 	mcpRegistry     *engine2.MCPRegistry
+	kbStore         *memory.KBStore
 
 	permissionRequests map[string]chan permission.PermissionResponse
 	permMu             sync.Mutex
@@ -98,7 +100,7 @@ type App struct {
 	eventSeq atomic.Int64
 }
 
-func NewApp(home, cwd string, cfg config2.Config, providers map[string]engine2.ProviderEngine, model string, registry *tool2.ToolRegistry, loopOpts []agent2.LoopOption, taskStoreAccessor TaskStoreAccessor, agentRegistry *agent2.AgentRegistry, taskRunner *agent2.TaskRunner, mcpRegistry *engine2.MCPRegistry) *App {
+func NewApp(home, cwd string, cfg config2.Config, providers map[string]engine2.ProviderEngine, model string, registry *tool2.ToolRegistry, loopOpts []agent2.LoopOption, taskStoreAccessor TaskStoreAccessor, agentRegistry *agent2.AgentRegistry, taskRunner *agent2.TaskRunner, mcpRegistry *engine2.MCPRegistry, kbStore *memory.KBStore) *App {
 	return &App{
 		home:              home,
 		cfg:               cfg,
@@ -118,6 +120,7 @@ func NewApp(home, cwd string, cfg config2.Config, providers map[string]engine2.P
 		pendingChildren:   make(map[string]string),
 		loopOpts:          loopOpts,
 		mcpRegistry:       mcpRegistry,
+		kbStore:           kbStore,
 		checker:           update.NewChecker(),
 		bgTaskMgr:         NewBackgroundTaskManager(),
 		watchedGitDirs:    make(map[string]string),

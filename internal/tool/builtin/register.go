@@ -11,6 +11,7 @@ import (
 	"monika/internal/config"
 	"monika/internal/dap"
 	"monika/internal/lsp"
+	"monika/internal/memory"
 	"monika/internal/tool"
 	"monika/pkg/engine"
 )
@@ -253,4 +254,12 @@ func RegisterDatabase(r *tool.ToolRegistry, dbMgr DBQuerier) {
 	}
 	r.Register(NewDBSchema(dbMgr))
 	r.Register(NewDBQuery(dbMgr))
+}
+
+// RegisterMemory registers the memory search/write/index/reindex tools.
+func RegisterMemory(r *tool.ToolRegistry, store *memory.KBStore) {
+	r.Register(NewMemorySearch(store))
+	r.Register(NewMemoryWrite(store))
+	r.Register(NewMemoryIndex(store))
+	r.Register(NewMemoryReindex(store))
 }
