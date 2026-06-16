@@ -74,6 +74,14 @@ func (a *App) KBDeleteFile(scope, path string) error {
 	return a.kbStore.SoftDelete(scope, path)
 }
 
+func (a *App) KBSetFileStatus(scope, path, status string) error {
+
+	if a.kbStore == nil {
+		return fmt.Errorf("kb not initialized")
+	}
+	return a.kbStore.SetFileStatus(scope, path, status)
+}
+
 func (a *App) KBSearch(query, scope string) ([]KBFileInfo, error) {
 	if a.kbStore == nil {
 		return nil, fmt.Errorf("kb not initialized")

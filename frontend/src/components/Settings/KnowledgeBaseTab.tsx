@@ -118,6 +118,17 @@ function KnowledgeBaseTab() {
         }
     }
 
+    const handleToggleStatus = async (f: KBFileInfo) => {
+        const newStatus = f.status === 'active' ? 'archived' : 'active'
+        try {
+            await App.KBSetFileStatus(f.scope, f.path, newStatus)
+            loadFiles()
+            loadStats()
+        } catch (e) {
+            console.error('KBSetFileStatus:', e)
+        }
+    }
+
     const handleSave = async () => {
         if (!selectedFile) return
         try {
@@ -290,6 +301,7 @@ function KnowledgeBaseTab() {
                                 style={{
                                     background: selectedFile?.path === f.path ? 'var(--bg-active, var(--accent-muted))' : 'var(--bg-card)',
                                     borderColor: selectedFile?.path === f.path ? 'var(--accent)' : 'var(--border)',
+                                    opacity: f.status === 'archived' ? 0.5 : 1,
                                 }}
                             >
                                 <div className="flex items-center gap-2 mb-1">
@@ -298,6 +310,17 @@ function KnowledgeBaseTab() {
                                     </span>
                                     <span className="text-[12px] font-medium truncate flex-1">{f.title}</span>
                                     {categoryBadge(f.category)}
+                                    <button
+                                        onClick={(e) => { e.stopPropagation(); handleToggleStatus(f) }}
+                                        className="relative w-8 h-[18px] rounded-full border-none cursor-pointer transition-colors shrink-0"
+                                        style={{ background: f.status === 'active' ? 'var(--accent)' : 'var(--border)' }}
+                                        title={f.status === 'active' ? 'Disable' : 'Enable'}
+                                    >
+                                        <span
+                                            className="absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white transition-all"
+                                            style={{ left: f.status === 'active' ? '14px' : '2px' }}
+                                        />
+                                    </button>
                                 </div>
                                 <div className="flex items-center gap-2 text-[10px] text-[var(--text-dim)]">
                                     <span>{f.confidence}</span>

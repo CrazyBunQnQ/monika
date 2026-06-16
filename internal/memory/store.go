@@ -228,6 +228,28 @@ func (s *KBStore) SoftDelete(scope, relPath string) error {
 	return nil
 }
 
+func (s *KBStore) SetFileStatus(scope, relPath, status string) error {
+
+	root := s.rootFor(scope)
+	fullPath := filepath.Join(root, relPath)
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	_, err := s.db.Exec("UPDATE file_index SET status = ?, updated_at = ? WHERE path = ?", status, now, relPath)
+	if err != nil {
+		return fmt.Errorf("set status: %w", err)
+	}
+
+	// Also update the file's frontmatter
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		return nil // file may not exist on disk, DB update is enough
+	}
+	content := string(data)
+	updated := strings.Replace(content, "> 状态：active", "> 状态："+status, 1)
+	updated = strings.Replace(updated, "> 状态：archived", "> 状态："+status, 1)
+	return os.WriteFile(fullPath, []byte(updated), 0644)
+}
+
 func (s *KBStore) GetStatistics(scope string) (total, active, archived int, lastUpdate string, err error) {
 	err = s.db.QueryRow(`
 		SELECT COUNT(*),
