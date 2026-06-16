@@ -509,13 +509,15 @@ The knowledge base contains three types of entries:
 	})
 
 	mainWindow := app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Title:      "Monika",
-		Width:      1400,
-		Height:     900,
-		MinWidth:   900,
-		MinHeight:  600,
-		Frameless:  true,
-		StartState: application.WindowStateMaximised,
+		Title:            "Monika",
+		Width:            1400,
+		Height:           900,
+		MinWidth:         900,
+		MinHeight:        600,
+		Frameless:        true,
+		StartState:       application.WindowStateMaximised,
+		Hidden:           true,
+		BackgroundColour: application.NewRGB(24, 24, 30),
 	})
 
 	trayMgr := api.NewTrayManager(app, mainWindow, iconPNG)
@@ -529,6 +531,12 @@ The knowledge base contains three types of entries:
 		})
 		appService.SetTrayManager(trayMgr)
 	}
+
+	// Show the main window once WebView2 runtime is initialised.
+	// Hidden: true prevents a title-bar flash on startup.
+	mainWindow.OnWindowEvent(events.Common.WindowRuntimeReady, func(e *application.WindowEvent) {
+		mainWindow.Show()
+	})
 
 	if err := app.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
