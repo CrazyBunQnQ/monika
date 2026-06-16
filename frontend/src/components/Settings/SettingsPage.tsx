@@ -7,9 +7,10 @@ import ModelsTab from './ModelsTab'
 import AboutTab from './AboutTab'
 import LspFormattersTab from './LspFormattersTab'
 import DatabasesTab from './DatabasesTab'
-import { IconDatabase, IconBot, IconShield, IconStar, IconPlug, IconServer, IconInfo, IconHardDrive } from '../Icons'
+import KnowledgeBaseTab from './KnowledgeBaseTab'
+import { IconDatabase, IconBot, IconShield, IconStar, IconPlug, IconServer, IconInfo, IconHardDrive, IconBrainCircuit } from '../Icons'
 
-type Tab = 'agents' | 'permissions' | 'skills' | 'mcp' | 'models' | 'lsp-formatters' | 'databases' | 'about'
+type Tab = 'agents' | 'permissions' | 'skills' | 'mcp' | 'models' | 'lsp-formatters' | 'databases' | 'knowledge-base' | 'about'
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
     { id: 'models', label: 'Providers', icon: <IconDatabase size={14} /> },
@@ -19,6 +20,7 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
     { id: 'mcp', label: 'MCP', icon: <IconPlug size={14} /> },
     { id: 'lsp-formatters', label: 'LSP & Format', icon: <IconServer size={14} /> },
     { id: 'databases', label: 'Databases', icon: <IconHardDrive size={14} /> },
+    { id: 'knowledge-base', label: 'Knowledge Base', icon: <IconBrainCircuit size={14} /> },
     { id: 'about', label: 'About', icon: <IconInfo size={14} /> },
 ]
 
@@ -71,6 +73,7 @@ function SettingsPage({ onClose }: { onClose: () => void }) {
                     {activeTab === 'lsp-formatters' && <LspFormattersTab />}
                     {activeTab === 'models' && <ModelsTab />}
                     {activeTab === 'databases' && <DatabasesTab />}
+                    {activeTab === 'knowledge-base' && <KnowledgeBaseTab />}
                     {activeTab === 'about' && <AboutTab />}
                 </main>
             </div>
