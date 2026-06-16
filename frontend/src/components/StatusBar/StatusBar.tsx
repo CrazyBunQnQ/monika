@@ -7,6 +7,7 @@ function StatusBar() {
     const toggleSettings = useStore((s) => s.toggleSettings)
     const lspServers = useStore((s) => s.lspServers)
     const loadLSPStatus = useStore((s) => s.loadLSPStatus)
+    const memoryStatus = useStore((s) => s.memoryStatus)
 
     const hasServers = lspServers.length > 0
 
@@ -51,6 +52,12 @@ function StatusBar() {
                             <span className="text-[var(--text-dim)]">{s.name}</span>
                         </div>
                     ))}
+                </div>
+            )}
+
+            {memoryStatus && (
+                <div className="flex items-center gap-1 ml-3" style={{ paddingLeft: 8, borderLeft: '1px solid var(--border)' }}>
+                    <span className="text-[var(--text-dim)]">{memoryStatus}</span>
                 </div>
             )}
 
