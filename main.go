@@ -64,6 +64,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "cannot determine working directory:", err)
 		os.Exit(1)
 	}
+	workspaceRoot := memory.ResolveWorkspaceRoot(cwd)
 
 	// Refresh models.dev catalog (background, non-blocking).
 	go func() {
@@ -96,12 +97,12 @@ func main() {
 	builtin.RegisterTasks(registry, taskStore)
 
 	var dbMgr *api.DBManager
-	cache, err := dbdiscovery.LoadCache(cwd)
+	cache, err := dbdiscovery.LoadCache(workspaceRoot)
 	if err != nil {
-		cache, _ = dbdiscovery.Scan(cwd)
+		cache, _ = dbdiscovery.Scan(workspaceRoot)
 	}
 	if cache != nil && len(cache.Connections) > 0 {
-		dbMgr = api.NewDBManager(cwd)
+		dbMgr = api.NewDBManager(workspaceRoot)
 		dbMgr.Init(cache)
 		dbMgr.StartSchemaBackground()
 		builtin.RegisterDatabase(registry, dbMgr)
@@ -163,7 +164,6 @@ func main() {
 		builtin.RegisterSkillSearchTool(registry, skEngine, home, getCwd, &pr.Config)
 	}
 
-	workspaceRoot := memory.ResolveWorkspaceRoot(cwd)
 	kbStore, err := memory.NewKBStore(home, workspaceRoot)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[monika] kb init failed: %v\n", err)
