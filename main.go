@@ -163,7 +163,8 @@ func main() {
 		builtin.RegisterSkillSearchTool(registry, skEngine, home, getCwd, &pr.Config)
 	}
 
-	kbStore, err := memory.NewKBStore(home, cwd)
+	workspaceRoot := memory.ResolveWorkspaceRoot(cwd)
+	kbStore, err := memory.NewKBStore(home, workspaceRoot)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[monika] kb init failed: %v\n", err)
 	} else {
@@ -229,7 +230,28 @@ changes as you install or configure them. Always search before assuming:
 - **mcp_search(query)** — fuzzy search MCP tools by name, server, or capability
 - **lsp_list** — list currently available language servers
 
-Once you identify the right skill or tool, load it with **skill** or call the MCP tool directly.`
+Once you identify the right skill or tool, load it with **skill** or call the MCP tool directly.
+
+## Knowledge Base (Memory)
+
+You have access to a self-evolving knowledge base that persists across sessions.
+Key knowledge (user preferences, project conventions, and recent facts) is injected
+at the top of this conversation inside <global_memory> and <project_memory> blocks.
+
+**SEARCH PRIORITY — local knowledge base FIRST, always:**
+Before using any web search, MCP tools, or asking the user, you MUST first call **memory_search(query)** to check the local knowledge base. Only if memory_search returns no relevant results should you fall back to web search or other external tools.
+
+- **memory_search(query)** — search the knowledge base for relevant memories. Use this
+  FIRST before any web search or MCP tool, for user preferences, project conventions,
+  past lessons, or technical topics.
+- **memory_index()** — list all stored memories organized by category
+- **memory_write(title, content, category)** — persist new knowledge discovered during
+  this session (lessons learned, user preferences, project conventions)
+
+The knowledge base contains three types of entries:
+- *lessons*: past bugs, root causes, and solutions
+- *topics*: architecture, patterns, conventions, API details
+- *knowledge*: user preferences, project constraints, persistent facts`
 
 	systemParts = append(systemParts, strings.TrimSpace(dynamicCapabilities))
 

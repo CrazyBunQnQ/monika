@@ -91,12 +91,44 @@ func (s *KBStore) openIndex() error {
 	return nil
 }
 
+// sanitizeFTSQuery 转义 FTS5 查询中的特殊字符。
+// FTS5 的 MATCH 操作符将 *, (), :, "", AND/OR/NOT 等视为语法元素。
+// 将每个词用双引号包裹，使其成为短语查询，避免语法错误。
+func sanitizeFTSQuery(query string) string {
+	words := strings.Fields(query)
+	for i, w := range words {
+		w = strings.ReplaceAll(w, `"`, `""`)
+		words[i] = `"` + w + `"`
+	}
+	return strings.Join(words, " ")
+}
+
+func containsCJK(s string) bool {
+	for _, r := range s {
+		if (r >= 0x4E00 && r <= 0x9FFF) || // CJK Unified Ideographs
+			(r >= 0x3400 && r <= 0x4DBF) || // CJK Extension A
+			(r >= 0x3040 && r <= 0x30FF) { // Hiragana + Katakana
+			return true
+		}
+	}
+	return false
+}
+
 func (s *KBStore) Search(query, scope string, limit int) ([]KBFile, error) {
 	if limit <= 0 {
 		limit = 5
 	}
+
+	if containsCJK(query) {
+		return s.searchLike(query, scope, limit)
+	}
+	return s.searchFTS(query, scope, limit)
+}
+
+// searchFTS 使用 FTS5 全文搜索（适用于英文等以空格分词的语言）。
+func (s *KBStore) searchFTS(query, scope string, limit int) ([]KBFile, error) {
 	where := ""
-	args := []any{query}
+	args := []any{sanitizeFTSQuery(query)}
 	if scope == ScopeGlobal || scope == ScopeProject {
 		where = " AND f.scope = ?"
 		args = append(args, scope)
@@ -122,6 +154,42 @@ func (s *KBStore) Search(query, scope string, limit int) ([]KBFile, error) {
 	return scanKBFiles(rows)
 }
 
+// searchLike 使用 LIKE 子串匹配搜索（适用于中文等 FTS5 unicode61 无法正确分词的语言）。
+func (s *KBStore) searchLike(query, scope string, limit int) ([]KBFile, error) {
+	where := " WHERE f.status != 'trash'"
+	args := []any{}
+	if scope == ScopeGlobal || scope == ScopeProject {
+		where += " AND f.scope = ?"
+		args = append(args, scope)
+	}
+	likePattern := "%" + likeEscape(query) + "%"
+	where += " AND (f.title LIKE ? ESCAPE '\\' OR f.content LIKE ? ESCAPE '\\')"
+	args = append(args, likePattern, likePattern)
+	args = append(args, limit)
+
+	rows, err := s.db.Query(`
+		SELECT f.id, f.path, f.scope, f.category, f.title, f.tags,
+		       f.confidence, f.status, f.char_count, f.linked_to,
+		       f.created_at, f.updated_at,
+		       substr(f.content, 1, 200)
+		FROM file_index f
+	`+where+`
+		ORDER BY f.updated_at DESC
+		LIMIT ?
+	`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("search: %w", err)
+	}
+	defer rows.Close()
+	return scanKBFiles(rows)
+}
+
+func likeEscape(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `%`, `\%`)
+	s = strings.ReplaceAll(s, `_`, `\_`)
+	return s
+}
 func (s *KBStore) WriteFile(scope, category, title, content string, tags []string, confidence string) error {
 	root := s.rootFor(scope)
 	if tags == nil {
@@ -256,7 +324,7 @@ func (s *KBStore) GetStatistics(scope string) (total, active, archived int, last
 		       SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END),
 		       SUM(CASE WHEN status = 'archived' OR status = 'deprecated' THEN 1 ELSE 0 END),
 		       COALESCE(MAX(updated_at), '')
-		FROM file_index WHERE scope = ?
+		FROM file_index WHERE scope = ? AND status != 'trash'
 	`, scope).Scan(&total, &active, &archived, &lastUpdate)
 	return
 }
@@ -358,4 +426,127 @@ func scanKBFilesFlat(rows *sql.Rows) ([]KBFile, error) {
 		results = []KBFile{}
 	}
 	return results, nil
+}
+
+// ReindexFromDisk 遍历磁盘上指定 scope 的所有 .md 文件，
+// 解析 frontmatter 并重新写入 FTS 索引。
+// 与基于 ListFiles 的旧逻辑不同，此方法直接读取文件系统，
+// 即使 DB 索引完全为空也能正常工作。
+func (s *KBStore) ReindexFromDisk(scope string) (int, error) {
+	root := s.rootFor(scope)
+	count := 0
+
+	err := filepath.Walk(root, func(fullPath string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			name := info.Name()
+			if name == ".index" || name == ".trash" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(info.Name(), ".md") {
+			return nil
+		}
+
+		relPath, err := filepath.Rel(root, fullPath)
+		if err != nil {
+			return nil
+		}
+		relPath = filepath.ToSlash(relPath)
+
+		data, err := os.ReadFile(fullPath)
+		if err != nil {
+			return nil
+		}
+		content := string(data)
+
+		title := parseFMTitle(content)
+		category := pathToCategory(relPath)
+		tags := parseFMTags(content)
+		confidence := parseFMField(content, "置信度")
+		body := extractMDBody(content)
+
+		if err := s.WriteFile(scope, category, title, body, tags, confidence); err != nil {
+			return nil
+		}
+		count++
+		return nil
+	})
+	return count, err
+}
+
+func pathToCategory(relPath string) string {
+	dir := filepath.ToSlash(filepath.Dir(relPath))
+	switch {
+	case relPath == "wiki/knowledge.md":
+		return CategoryKnowledge
+	case relPath == "wiki/profile.md":
+		return CategoryProfile
+	case strings.HasPrefix(dir, "wiki/lessons"):
+		return CategoryLesson
+	case strings.HasPrefix(dir, "wiki/topics"):
+		return CategoryTopic
+	case strings.HasPrefix(dir, "raw/docs"):
+		return CategoryRawDoc
+	case strings.HasPrefix(dir, "raw/code"):
+		return CategoryRawCode
+	default:
+		return dir
+	}
+}
+
+func parseFMTitle(content string) string {
+	for _, line := range strings.Split(content, "\n") {
+		if strings.HasPrefix(line, "# ") {
+			return strings.TrimSpace(line[2:])
+		}
+	}
+	return "Untitled"
+}
+
+func parseFMField(content, field string) string {
+	prefix := "> " + field + "："
+	for _, line := range strings.Split(content, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimSpace(line[len(prefix):])
+		}
+	}
+	return ""
+}
+
+func parseFMTags(content string) []string {
+	raw := parseFMField(content, "标签")
+	if raw == "" {
+		return []string{}
+	}
+	parts := strings.Split(raw, ",")
+	tags := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			tags = append(tags, p)
+		}
+	}
+	return tags
+}
+
+func extractMDBody(content string) string {
+	lines := strings.Split(content, "\n")
+	var body []string
+	pastFM := false
+	for _, line := range lines {
+		if !pastFM && (strings.HasPrefix(line, "> ") || strings.HasPrefix(line, "# ")) {
+			if strings.HasPrefix(line, "# ") && len(body) > 0 {
+				pastFM = true
+				body = append(body, line)
+			}
+			continue
+		}
+		pastFM = true
+		body = append(body, line)
+	}
+	return strings.Join(body, "\n")
 }

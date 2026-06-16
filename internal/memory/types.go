@@ -1,7 +1,9 @@
 package memory
 
 import (
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -52,4 +54,28 @@ func KBSubdirs() []string {
 		".index",
 		".trash",
 	}
+}
+
+// ResolveWorkspaceRoot 从给定目录出发，找到 git 仓库的根目录。
+// 对于 git worktree，返回主仓库根目录而非 worktree 子目录。
+// 如果不是 git 仓库，返回原始目录。
+func ResolveWorkspaceRoot(dir string) string {
+	cmd := exec.Command("git", "-C", dir, "rev-parse", "--git-common-dir")
+	out, err := cmd.Output()
+	if err != nil {
+		return dir
+	}
+	commonDir := strings.TrimSpace(string(out))
+	if commonDir == "" {
+		return dir
+	}
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(dir, commonDir)
+	}
+	// commonDir 类似 /repo/.git，仓库根 = 其父目录
+	root := filepath.Dir(commonDir)
+	if root == "" || root == "." {
+		return dir
+	}
+	return root
 }

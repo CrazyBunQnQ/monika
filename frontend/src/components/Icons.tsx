@@ -44,7 +44,7 @@ import {
     XCircle,
     HardDrive,
     FolderUp,
-    BrainCircuit,
+    BookOpen,
 } from 'lucide-react'
 
 export function IconClose({ size }: { size?: number }) {
@@ -227,6 +227,6 @@ export function IconFolderUp({ size }: { size?: number }) {
     return <FolderUp size={size || 16} strokeWidth={1.5} />
 }
 
-export function IconBrainCircuit({ size }: { size?: number }) {
-    return <BrainCircuit size={size || 16} strokeWidth={1.5} />
+export function IconBookOpen({ size }: { size?: number }) {
+    return <BookOpen size={size || 16} strokeWidth={1.5} />
 }

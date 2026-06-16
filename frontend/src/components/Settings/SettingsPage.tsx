@@ -8,7 +8,7 @@ import AboutTab from './AboutTab'
 import LspFormattersTab from './LspFormattersTab'
 import DatabasesTab from './DatabasesTab'
 import KnowledgeBaseTab from './KnowledgeBaseTab'
-import { IconDatabase, IconBot, IconShield, IconStar, IconPlug, IconServer, IconInfo, IconHardDrive, IconBrainCircuit } from '../Icons'
+import { IconDatabase, IconBot, IconShield, IconStar, IconPlug, IconServer, IconInfo, IconHardDrive, IconBookOpen } from '../Icons' (fix(memory): exclude trash from statistics, add CJK search and reindex)
 
 type Tab = 'agents' | 'permissions' | 'skills' | 'mcp' | 'models' | 'lsp-formatters' | 'databases' | 'knowledge-base' | 'about'
 
@@ -20,7 +20,7 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
     { id: 'mcp', label: 'MCP', icon: <IconPlug size={14} /> },
     { id: 'lsp-formatters', label: 'LSP & Format', icon: <IconServer size={14} /> },
     { id: 'databases', label: 'Databases', icon: <IconHardDrive size={14} /> },
-    { id: 'knowledge-base', label: 'Knowledge Base', icon: <IconBrainCircuit size={14} /> },
+    { id: 'knowledge-base', label: 'Knowledge Base', icon: <IconBookOpen size={14} /> }, (fix(memory): exclude trash from statistics, add CJK search and reindex)
     { id: 'about', label: 'About', icon: <IconInfo size={14} /> },
 ]
 

@@ -630,6 +630,29 @@ func (a *App) SetMemoryHook(hook *memory.ArchiveHook) {
 	a.memoryHook = hook
 }
 
+func (a *App) TriggerMemorySummarize(projectPath, sessionID string) error {
+	if a.memoryHook == nil {
+		return fmt.Errorf("memory hook not initialized")
+	}
+
+	sm := a.getSessionManager(projectPath)
+	sm.Lock()
+	s, err := sm.Load(sessionID)
+	sm.Unlock()
+	if err != nil {
+		return fmt.Errorf("session %s not found: %w", sessionID, err)
+	}
+
+	summary := extractCompactionSummary(s)
+	scope := memory.ScopeProject
+
+	go func() {
+		a.memoryHook.OnArchive(context.Background(), scope, sessionID, summary)
+	}()
+
+	return nil
+}
+
 func (a *App) MarkSessionViewed(projectPath, sessionID string) {
 	sm := a.getSessionManager(projectPath)
 	sm.Lock()
