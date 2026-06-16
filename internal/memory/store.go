@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -260,15 +261,15 @@ func categoryPath(category, title string) string {
 	case CategoryProfile:
 		return "wiki/profile.md"
 	case CategoryLesson:
-		return filepath.Join("wiki/lessons", slug+".md")
+		return path.Join("wiki/lessons", slug+".md")
 	case CategoryTopic:
-		return filepath.Join("wiki/topics", slug+".md")
+		return path.Join("wiki/topics", slug+".md")
 	case CategoryRawDoc:
-		return filepath.Join("raw/docs", slug+".md")
+		return path.Join("raw/docs", slug+".md")
 	case CategoryRawCode:
-		return filepath.Join("raw/code", slug+".md")
+		return path.Join("raw/code", slug+".md")
 	default:
-		return filepath.Join(category, slug+".md")
+		return path.Join(category, slug+".md")
 	}
 }
 
