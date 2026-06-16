@@ -26,8 +26,15 @@ export function FileDialog({ isOpen, onClose, onOpen }: FileDialogProps) {
     if (!isOpen) return;
     const projectPath = useStore.getState().projectPath;
     const start = projectPath ? projectPath.replace(/[/\\][^/\\]+$/, '') : '';
-    setCurrentPath(start || projectPath || '');
-    setPathInput(start || projectPath || '');
+    if (start || projectPath) {
+      setCurrentPath(start || projectPath || '');
+      setPathInput(start || projectPath || '');
+    } else {
+      App.GetHomePath().then((home: string) => {
+        setCurrentPath(home);
+        setPathInput(home);
+      });
+    }
     setSelectedPath('');
     setError(null);
     setNewFolderMode(false);
@@ -69,16 +76,34 @@ export function FileDialog({ isOpen, onClose, onOpen }: FileDialogProps) {
   };
 
   const goUp = () => {
-    if (/^[A-Za-z]:\\$/.test(currentPath) || /^[A-Za-z]:$/.test(currentPath)) {
+    if (!currentPath) return;
+    if (currentPath === '/') {
+      setCurrentPath('');
+      setPathInput('');
+      setSelectedPath('');
+      return;
+    }
+    if (/^[A-Za-z]:\\?$/.test(currentPath) || /^[A-Za-z]:$/.test(currentPath)) {
       setCurrentPath('');
       setPathInput('');
       setSelectedPath('');
       return;
     }
     const parent = currentPath.replace(/[/\\][^/\\]+$/, '');
-    if (parent && parent !== currentPath) {
-      const normalized = /^[A-Za-z]:$/.test(parent) ? parent + '\\' : parent;
-      navigateTo(normalized);
+    if (parent === currentPath) {
+      setCurrentPath('');
+      setPathInput('');
+      setSelectedPath('');
+      return;
+    }
+    if (!parent) {
+      navigateTo('/');
+      return;
+    }
+    if (/^[A-Za-z]:$/.test(parent)) {
+      navigateTo(parent + '\\');
+    } else {
+      navigateTo(parent);
     }
   };
 

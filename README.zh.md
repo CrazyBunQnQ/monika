@@ -128,20 +128,41 @@ Agent 通过丰富的内置工具直接操作你的项目：
 
 从 [Releases](https://github.com/RedTeaLab/monika/releases) 下载对应平台的安装包，或从源码构建：
 
-```bash
-# 前置依赖: Go 1.25+, Node.js 18+, Wails v3 CLI
-go install github.com/wailsapp/wails/v3/cmd/wails3@latest
+### 前置依赖
 
+| 平台 | 依赖 |
+|------|------|
+| **macOS** | Go 1.25+, Node.js 18+, Xcode Command Line Tools |
+| **Windows** | Go 1.25+, Node.js 18+, WebView2 |
+
+### 安装 Wails v3 CLI
+
+```bash
+# 安装与项目匹配的 CLI 版本 (v3.0.0-alpha.78)
+go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha.78
+```
+
+### 从源码构建
+
+```bash
 git clone https://github.com/RedTeaLab/monika.git
 cd monika
+
+# 1. 安装前端依赖
 cd frontend && npm install && cd ..
 
-# 开发模式 (热重载)
+# 2. 生成 Wails 绑定 (Go 类型 → TypeScript)
+wails3 generate bindings -ts
+node -e "require('fs').copyFileSync('build/barrel_index.ts','frontend/bindings/monika/index.ts')"
+
+# 3a. 开发模式 (热重载)
 wails3 dev
 
-# 构建独立可执行文件
+# 3b. 或构建独立可执行文件
 cd frontend && npm run build && cd ..
-go build .
+go build -o monika .
+# macOS: ./monika
+# Windows: .\monika.exe
 ```
 
 ### 配置模型提供商
@@ -159,6 +180,54 @@ model_providers:
 ```
 
 ---
+
+## 功能一览
+
+### 多面板 GUI
+
+会话列表、聊天区域、带 CodeMirror 6 的文件树编辑器、控制台、状态栏——一个窗口搞定全部。支持聊天、分屏（聊天 + 文件）、纯文件三种布局模式，可拖拽分隔条自由调节。
+
+### 多标签会话
+
+最多 8 个并发会话标签页，每个标签独立消息缓存。会话自动持久化为 JSON 文件，下次打开即恢复。
+
+### 流式 Agent 循环
+
+实时文本流、工具调用卡片、Token 用量追踪。Agent 自动处理上下文压缩，当对话超出模型限制时用单独的 LLM 调用摘要历史消息。
+
+### 工具调用
+
+Agent 可以直接操作你的项目：
+
+| 工具 | 功能 |
+|------|------|
+| `file_read` | 读取文件（带 offset/limit 精确读取） |
+| `file_write` | 创建或覆盖文件 |
+| `file_edit` | 精确字符串替换 |
+| `file_list` | 列出目录内容 |
+| `glob` | Glob 模式文件查找 |
+| `grep` | 正则搜索文件内容 |
+| `bash` | 执行 Shell 命令（跨平台） |
+| `lsp` | Language Server Protocol — 诊断、跳转定义、查找引用、重命名等 ([文档](docs/lsp.zh.md)) |
+| `db_schema` | 浏览数据库架构（表、列、外键） |
+| `db_query` | 执行只读 SQL/Redis 查询（SELECT, SHOW, EXPLAIN） |
+
+### Git 集成
+
+文件变更追踪、Diff 查看、本地/远程分支列表、创建和切换分支、Worktree 感知的分支管理。
+
+### Skills & MCP
+
+- **Skills** — 支持 [SKILL.md](https://github.com) 标准，从 GitHub 仓库自动发现和加载技能
+- **MCP** — Model Context Protocol，通过 stdio JSON-RPC 传输协议扩展 Agent 能力（数据库、浏览器、Web 搜索等）
+
+### 子 Agent 并发
+
+内置 TaskRunner 通过信号量调度最多 4 个并发子 Agent，适合大规模代码搜索、多文件修改等复杂任务。
+
+### 权限安全
+
+工具调用经过完整的权限管线检查——硬性规则 + 安全模型双重验证，确保 Agent 不会越权操作。
 
 ## 支持的模型提供商
 
@@ -190,11 +259,14 @@ monika/
 │   ├── api/               # Wails 服务: App, SessionManager, FileService, EventBus
 │   ├── bootstrap/         # Provider 初始化
 │   ├── config/            # YAML/JSON 配置加载 (~/.monika/ + .monika/)
+│   ├── dbbridge/          # Node.js/Python 数据库驱动桥接脚本
+│   ├── dbdiscovery/       # 从 .env、docker-compose 自动发现数据库
 │   ├── engines/           # Provider 适配器 + Skill + MCP 引擎
 │   ├── lsp/               # Language Server Protocol 客户端 + LSP 工具
 │   ├── permission/        # 工具权限管线
 │   └── tool/              # 工具接口 + 注册表 + 内置工具
 └── pkg/
+    ├── dbdriver/          # 数据库驱动接口 + 5 个原生驱动 (PostgreSQL, MySQL, SQLite, Redis, MongoDB)
     ├── engine/            # 公共 Engine 接口 + 注册表
     ├── openai/            # OpenAI 兼容 SSE 流式客户端
     ├── modelsdev/         # models.dev 模型目录获取
@@ -227,7 +299,8 @@ gofmt -w .
 cd frontend && npm run build
 
 # 重新生成 Wails 绑定 (修改 Go API 类型后)
-wails3 generate bindings -f "..." -ts
+wails3 generate bindings -ts
+node -e "require('fs').copyFileSync('build/barrel_index.ts','frontend/bindings/monika/index.ts')"
 
 # 依赖整理
 go mod tidy

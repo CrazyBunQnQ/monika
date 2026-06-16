@@ -2,7 +2,7 @@
 
 ## Build / Run
 
-```powershell
+```bash
 # Dev mode (hot reload): runs wails3 dev with Vite + Go rebuild
 wails3 dev
 
@@ -18,10 +18,15 @@ task build
 cd frontend && npm run dev
 
 # Regenerate Wails bindings (after changing Go API types)
-wails3 generate bindings -f "..." -ts
+# NOTE: do NOT pass -f "..." — it causes "go mod tidy" errors on some platforms
+wails3 generate bindings -ts
+node -e "require('fs').copyFileSync('build/barrel_index.ts','frontend/bindings/monika/index.ts')"
 ```
 
-- **Prerequisites**: Go 1.25+, Node.js 18+, `wails3` CLI (`go install github.com/wailsapp/wails/v3/cmd/wails3@latest`)
+- **Prerequisites**: Go 1.25+ (use `go@1.25` via Homebrew on macOS), Node.js 18+, `wails3` CLI
+- **Install wails3**: `go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha.78` (pin to project version)
+- **macOS**: requires Xcode Command Line Tools (`xcode-select --install`); if Go 1.26+ is installed alongside, use `export PATH="/usr/local/opt/go@1.25/bin:$PATH"` to ensure bindings generation works
+- **Windows**: requires WebView2 runtime
 - **Build orchestration**: `Taskfile.yml` at root, `build/Taskfile.yml` for common tasks, `build/windows/Taskfile.yml` for Windows-specific
 - **Frontend build** depends on bindings generation (`wails3 generate bindings`) — the Go types in `internal/api/` are the source of truth for the TS bindings at `frontend/bindings/monika/`
 - **Version injection**: `internal/version/version.go` vars are set via ldflags at build time
@@ -43,14 +48,17 @@ monika/
 │   └── bindings/monika/     # Auto-generated Wails bindings (DO NOT EDIT)
 ├── internal/                # Go backend — private to this module
 │   ├── agent/               # Agent loop, streaming, compaction, multiple agents
-│   ├── api/                 # Wails services: App, SessionManager, FileService, EventBus
+│   ├── api/                 # Wails services: App, SessionManager, FileService, EventBus, DBManager
 │   ├── bootstrap/           # Provider initialization from config
 │   ├── config/              # YAML/JSON config loader (~/.monika/config.yaml)
+│   ├── dbbridge/            # Bridge scripts for Node.js/Python database drivers
+│   ├── dbdiscovery/         # Database auto-discovery from .env, docker-compose.yml
 │   ├── engines/             # Provider adapters + Skill + MCP engines
 │   ├── permission/          # Tool permission pipeline (hard rules + security model)
 │   ├── tool/                # Tool interface + registry
 │   └── update/              # Self-update logic
 └── pkg/                     # Public packages — reusable outside monika
+    ├── dbdriver/            # Database driver interface + 5 native drivers (PostgreSQL, MySQL, SQLite, Redis, MongoDB)
     ├── engine/              # Engine interface, registry, ChatMessage types
     ├── openai/              # OpenAI-compatible SSE streaming client
     ├── modelsdev/           # models.dev catalog fetcher
@@ -88,9 +96,19 @@ type Tool interface {
 ```
 
 - All builtin tools in `internal/tool/builtin/`, one file per tool
-- `builtin/register.go` has composable registration functions: `RegisterDefaults`, `RegisterTasks`, `RegisterSpawnAgent`, `RegisterSkillTool`, `RegisterSkillManagement`, `RegisterMCPManagement`
+- `builtin/register.go` has composable registration functions: `RegisterDefaults`, `RegisterTasks`, `RegisterSpawnAgent`, `RegisterSkillTool`, `RegisterSkillManagement`, `RegisterMCPManagement`, `RegisterDatabase`
 - Tool lifecycle: created once in `main.go`, registered into `tool.ToolRegistry`, then registry passed to `AgentLoop`
 - Tool names are snake_case and match what the system prompt describes
+
+## Database System
+
+- **Auto-discovery**: scans `.env` files and `docker-compose.yml` for database connection strings at project open
+- **5 supported drivers**: PostgreSQL, MySQL, SQLite, Redis, MongoDB
+- **Bridge pattern**: when a native Go driver is unavailable (e.g. MongoDB), spawns a Node.js/Python subprocess via `internal/dbbridge/` scripts
+- **Go native drivers**: fallback via `pkg/dbdriver/` — pure Go implementations for PostgreSQL (`pgx`), MySQL (`go-sql-driver`), SQLite (`modernc.org/sqlite`)
+- **Tools**: `db_schema` (browse tables, columns, foreign keys) and `db_query` (execute read-only SQL/Redis queries)
+- **Read-only enforcement at three layers**: tool-level (only SELECT/SHOW/EXPLAIN allowed), driver-level (readonly transaction mode), permission-level (hard rule blocks writes)
+- **Key files**: `pkg/dbdriver/` (driver interface + implementations), `internal/dbdiscovery/` (auto-discovery), `internal/dbbridge/` (bridge scripts), `internal/api/db_manager.go` (Wails service)
 
 ## Coding Conventions
 
@@ -133,4 +151,5 @@ type Tool interface {
 - **Wails API surface**: all Go → frontend communication goes through `internal/api/`. The `App` struct is registered as a Wails service. Events flow through `EventBus`.
 - **File operations**: tools are scoped to `projectDir`; `internal/tool/context.go` provides `GetProjectDir` from context.
 - **Session persistence**: JSON files per session, managed by `SessionManager` in `internal/api/session_manager.go`.
+- **Database auto-discovery**: `internal/dbdiscovery/` scans `.env` and `docker-compose.yml` for connection strings; discovered databases are managed by `DBManager` in `internal/api/db_manager.go`
 - **Git integration**: via `go-git/v5`, worktree-aware branch switching.

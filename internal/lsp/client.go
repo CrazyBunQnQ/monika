@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 )
 
@@ -79,9 +78,7 @@ type Client struct {
 func NewClient(ctx context.Context, name string, command string, args []string, workdir string) (*Client, error) {
 	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Dir = workdir
-	if runtime.GOOS == "windows" {
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	}
+	setSysProcAttr(cmd)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

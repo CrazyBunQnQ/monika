@@ -9,6 +9,9 @@ import (
 	"path/filepath"
 )
 
+func CleanupOld(exeDir string) {
+}
+
 func (c *Checker) InstallUpdate() error {
 	exePath, err := os.Executable()
 	if err != nil {

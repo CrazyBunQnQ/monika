@@ -24,6 +24,7 @@ import (
 	agent2 "monika/internal/agent"
 	config2 "monika/internal/config"
 	"monika/internal/dap"
+	"monika/internal/dbdiscovery"
 	"monika/internal/lsp"
 	"monika/internal/permission"
 	tool2 "monika/internal/tool"
@@ -84,6 +85,7 @@ type App struct {
 	trayMgr   *TrayManager
 	tsBridge  *tsBridge
 	bgTaskMgr *BackgroundTaskManager
+	dbMgr     *DBManager
 
 	dapManager *dap.DapManager
 	debugAPI   *DebugAPI
@@ -127,6 +129,10 @@ func NewApp(home, cwd string, cfg config2.Config, providers map[string]engine2.P
 // AppendLoopOption appends a loop option to the internally stored slice.
 func (a *App) AppendLoopOption(opt agent2.LoopOption) {
 	a.loopOpts = append(a.loopOpts, opt)
+}
+
+func (a *App) SetDBManager(m *DBManager) {
+	a.dbMgr = m
 }
 
 // SaveChildSession stores a completed child agent session.
@@ -298,6 +304,9 @@ func (a *App) ServiceShutdown() error {
 	a.eventBus.Close()
 	if a.headWatcher != nil {
 		a.headWatcher.Close()
+	}
+	if a.dbMgr != nil {
+		a.dbMgr.CloseAll()
 	}
 	return nil
 }
@@ -1721,6 +1730,11 @@ func (a *App) ListDrives() []FileNode {
 	return listDrives()
 }
 
+// GetHomePath returns the user's home directory path.
+func (a *App) GetHomePath() string {
+	return a.home
+}
+
 // ListDirectory returns the non-recursive contents of a directory.
 func (a *App) ListDirectory(parentPath string) ([]FileNode, error) {
 	// Canonicalize and reject obviously invalid paths.
@@ -2444,6 +2458,37 @@ func (a *App) DeletePermissionRule(args json.RawMessage) error {
 		return err
 	}
 	return permission.DeleteRule(a.home, a.projectPath(), req.Tool, req.Pattern, req.Source)
+}
+
+func (a *App) ListDatabaseConnections() []ConnectionInfo {
+	if a.dbMgr == nil {
+		return nil
+	}
+	return a.dbMgr.ListConnections()
+}
+
+func (a *App) TestDatabaseConnection(args json.RawMessage) error {
+	if a.dbMgr == nil {
+		return fmt.Errorf("no database connections configured")
+	}
+	var req struct{ Name string }
+	if err := json.Unmarshal(args, &req); err != nil {
+		return err
+	}
+	return a.dbMgr.TestConnection(context.Background(), req.Name)
+}
+
+func (a *App) RescanDatabases() ([]ConnectionInfo, error) {
+	if a.dbMgr == nil {
+		return nil, nil
+	}
+	cwd := a.projectPath()
+	cache, err := dbdiscovery.Scan(cwd)
+	if err != nil {
+		return nil, err
+	}
+	a.dbMgr.Reset(cache)
+	return a.dbMgr.ListConnections(), nil
 }
 
 func (a *App) projectPath() string {
