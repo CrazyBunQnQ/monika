@@ -57,13 +57,6 @@ func (t *memorySearchTool) Execute(ctx context.Context, args json.RawMessage) (t
 	if err != nil {
 		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 	}
-	// auto: try project first, fall back to global
-	if p.Scope == "auto" && len(results) == 0 {
-		results, err = t.store.Search(p.Query, memory.ScopeGlobal, p.Limit)
-		if err != nil {
-			return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
-		}
-	}
 	if len(results) == 0 {
 		return tool.ExecutionResult{Content: "No matching memories found."}, nil
 	}
@@ -71,8 +64,15 @@ func (t *memorySearchTool) Execute(ctx context.Context, args json.RawMessage) (t
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Found %d matching memories:\n\n", len(results)))
 	for i, r := range results {
-		sb.WriteString(fmt.Sprintf("%d. **%s** [%s/%s] confidence: %s\n   path: %s\n\n",
-			i+1, r.Title, r.Scope, r.Category, r.Confidence, r.Path))
+		sb.WriteString(fmt.Sprintf("%d. **%s** [%s/%s] confidence: %s\n   path: %s | chars: %d\n",
+			i+1, r.Title, r.Scope, r.Category, r.Confidence, r.Path, r.CharCount))
+		if len(r.Tags) > 0 {
+			sb.WriteString(fmt.Sprintf("   tags: %s\n", strings.Join(r.Tags, ", ")))
+		}
+		if len(r.LinkedTo) > 0 {
+			sb.WriteString(fmt.Sprintf("   links: %s\n", strings.Join(r.LinkedTo, ", ")))
+		}
+		sb.WriteString("\n")
 	}
 	return tool.ExecutionResult{Content: sb.String()}, nil
 }

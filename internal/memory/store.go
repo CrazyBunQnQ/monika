@@ -149,6 +149,40 @@ func (s *KBStore) Search(query, scope string, limit int) ([]KBFile, error) {
 		limit = 5
 	}
 
+	if scope == ScopeAuto {
+		return s.searchAuto(query, limit)
+	}
+	return s.searchSingle(query, scope, limit)
+}
+
+// searchAuto 合并搜索 project 和 global 两个 DB，project 结果优先。
+func (s *KBStore) searchAuto(query string, limit int) ([]KBFile, error) {
+	proj, err := s.searchSingle(query, ScopeProject, limit)
+	if err != nil {
+		return nil, err
+	}
+	glob, err := s.searchSingle(query, ScopeGlobal, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	seen := map[string]bool{}
+	var merged []KBFile
+	for _, f := range append(proj, glob...) {
+		key := f.Scope + "/" + f.Path
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		merged = append(merged, f)
+	}
+	if len(merged) > limit {
+		merged = merged[:limit]
+	}
+	return merged, nil
+}
+
+func (s *KBStore) searchSingle(query, scope string, limit int) ([]KBFile, error) {
 	if containsCJK(query) {
 		return s.searchLike(query, scope, limit)
 	}
@@ -179,9 +213,21 @@ func (s *KBStore) searchFTS(query, scope string, limit int) ([]KBFile, error) {
 }
 
 // searchLike 使用 LIKE 子串匹配搜索（适用于中文等 FTS5 unicode61 无法正确分词的语言）。
+// 将查询按空白拆分为多个词，每个词分别 LIKE 匹配，用 AND 组合。
 func (s *KBStore) searchLike(query, scope string, limit int) ([]KBFile, error) {
-	likePattern := "%" + likeEscape(query) + "%"
-	args := []any{likePattern, likePattern, limit}
+	words := strings.Fields(query)
+	if len(words) == 0 {
+		return nil, nil
+	}
+
+	var conditions []string
+	var args []any
+	for _, w := range words {
+		likePattern := "%" + likeEscape(w) + "%"
+		conditions = append(conditions, `(f.title LIKE ? ESCAPE '\' OR f.content LIKE ? ESCAPE '\')`)
+		args = append(args, likePattern, likePattern)
+	}
+	args = append(args, limit)
 
 	rows, err := s.dbFor(scope).Query(`
 		SELECT f.id, f.path, f.scope, f.category, f.title, f.tags,
@@ -190,7 +236,7 @@ func (s *KBStore) searchLike(query, scope string, limit int) ([]KBFile, error) {
 		       substr(f.content, 1, 200)
 		FROM file_index f
 		WHERE f.status != 'trash'
-		  AND (f.title LIKE ? ESCAPE '\' OR f.content LIKE ? ESCAPE '\')
+		  AND (`+strings.Join(conditions, " AND ")+`)
 		ORDER BY f.updated_at DESC
 		LIMIT ?
 	`, args...)
@@ -311,6 +357,26 @@ func (s *KBStore) SoftDelete(scope, relPath string) error {
 	}
 	if err := os.Rename(oldPath, filepath.Join(trashPath, filepath.Base(relPath))); err != nil {
 		return fmt.Errorf("soft-delete rename: %w", err)
+	}
+	return nil
+}
+
+// setLinkedTo 把某文件的出链列表写入 DB linked_to 列。
+// 与 addLink 写入 markdown 的「> 关联：[[...]]」行保持同步，让搜索结果能直接返回依赖关系。
+func (s *KBStore) setLinkedTo(scope, relPath string, links []string) error {
+	if links == nil {
+		links = []string{}
+	}
+	linksJSON, err := json.Marshal(links)
+	if err != nil {
+		return fmt.Errorf("marshal linked_to: %w", err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err = s.dbFor(scope).Exec(
+		"UPDATE file_index SET linked_to = ?, updated_at = ? WHERE path = ?",
+		string(linksJSON), now, relPath)
+	if err != nil {
+		return fmt.Errorf("set linked_to: %w", err)
 	}
 	return nil
 }
@@ -491,10 +557,18 @@ func (s *KBStore) ReindexFromDisk(scope string) (int, error) {
 		category := pathToCategory(relPath)
 		tags := parseFMTags(content)
 		confidence := parseFMField(content, "置信度")
+		links := parseFMLinks(content)
 		body := extractMDBody(content)
 
 		if err := s.WriteFile(scope, category, title, body, tags, confidence); err != nil {
 			return nil
+		}
+		// 回填 linked_to：WriteFile 总是写 '[]'，这里把正文里解析到的链接同步进 DB，
+		// 否则历史文件里的「> 关联：[[...]]」对搜索不可见。
+		if len(links) > 0 {
+			if err := s.setLinkedTo(scope, relPath, links); err != nil {
+				return nil
+			}
 		}
 		count++
 		return nil
@@ -555,6 +629,26 @@ func parseFMTags(content string) []string {
 		}
 	}
 	return tags
+}
+
+// parseFMLinks 从 frontmatter 的「> 关联：[[a]] | [[b]]」行抽取所有 [[...]] 链接。
+// addLink 写入文件时把链接追加到该行，parseFMLinks 与之对称，用于回填 DB linked_to 列。
+func parseFMLinks(content string) []string {
+	raw := parseFMField(content, "关联")
+	if raw == "" {
+		return []string{}
+	}
+	links := make([]string, 0, 4)
+	for _, part := range strings.Split(raw, "|") {
+		part = strings.TrimSpace(part)
+		part = strings.TrimPrefix(part, "[[")
+		part = strings.TrimSuffix(part, "]]")
+		part = strings.TrimSpace(part)
+		if part != "" {
+			links = append(links, part)
+		}
+	}
+	return links
 }
 
 func extractMDBody(content string) string {
