@@ -245,3 +245,12 @@ func RegisterLSPListTool(r *tool.ToolRegistry) {
 func RegisterDebug(r *tool.ToolRegistry, manager *dap.DapManager) {
 	r.Register(NewDebugTool(manager))
 }
+
+// RegisterDatabase registers db_schema and db_query tools for database interaction.
+func RegisterDatabase(r *tool.ToolRegistry, dbMgr DBQuerier) {
+	if dbMgr == nil {
+		return
+	}
+	r.Register(NewDBSchema(dbMgr))
+	r.Register(NewDBQuery(dbMgr))
+}

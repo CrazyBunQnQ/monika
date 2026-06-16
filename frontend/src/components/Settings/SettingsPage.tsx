@@ -6,9 +6,10 @@ import McpTab from './McpTab'
 import ModelsTab from './ModelsTab'
 import AboutTab from './AboutTab'
 import LspFormattersTab from './LspFormattersTab'
-import { IconDatabase, IconBot, IconShield, IconStar, IconPlug, IconServer, IconInfo } from '../Icons'
+import DatabasesTab from './DatabasesTab'
+import { IconDatabase, IconBot, IconShield, IconStar, IconPlug, IconServer, IconInfo, IconHardDrive } from '../Icons'
 
-type Tab = 'agents' | 'permissions' | 'skills' | 'mcp' | 'models' | 'lsp-formatters' | 'about'
+type Tab = 'agents' | 'permissions' | 'skills' | 'mcp' | 'models' | 'lsp-formatters' | 'databases' | 'about'
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
     { id: 'models', label: 'Providers', icon: <IconDatabase size={14} /> },
@@ -17,6 +18,7 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
     { id: 'skills', label: 'Skills', icon: <IconStar size={14} /> },
     { id: 'mcp', label: 'MCP', icon: <IconPlug size={14} /> },
     { id: 'lsp-formatters', label: 'LSP & Format', icon: <IconServer size={14} /> },
+    { id: 'databases', label: 'Databases', icon: <IconHardDrive size={14} /> },
     { id: 'about', label: 'About', icon: <IconInfo size={14} /> },
 ]
 
@@ -68,6 +70,7 @@ function SettingsPage({ onClose }: { onClose: () => void }) {
                     {activeTab === 'mcp' && <McpTab />}
                     {activeTab === 'lsp-formatters' && <LspFormattersTab />}
                     {activeTab === 'models' && <ModelsTab />}
+                    {activeTab === 'databases' && <DatabasesTab />}
                     {activeTab === 'about' && <AboutTab />}
                 </main>
             </div>

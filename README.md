@@ -128,20 +128,41 @@ Every tool call passes through a permission pipeline — hard rules plus a secur
 
 Download a prebuilt binary from [Releases](https://github.com/RedTeaLab/monika/releases), or build from source:
 
-```bash
-# Prerequisites: Go 1.25+, Node.js 18+, Wails v3 CLI
-go install github.com/wailsapp/wails/v3/cmd/wails3@latest
+### Prerequisites
 
+| Platform | Requirements |
+|----------|-------------|
+| **macOS** | Go 1.25+, Node.js 18+, Xcode Command Line Tools |
+| **Windows** | Go 1.25+, Node.js 18+, WebView2 |
+
+### Install Wails v3 CLI
+
+```bash
+# Install the CLI version matching this project (v3.0.0-alpha.78)
+go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha.78
+```
+
+### Build from Source
+
+```bash
 git clone https://github.com/RedTeaLab/monika.git
 cd monika
+
+# 1. Install frontend dependencies
 cd frontend && npm install && cd ..
 
-# Dev mode (hot reload)
+# 2. Generate Wails bindings (Go types → TypeScript)
+wails3 generate bindings -ts
+node -e "require('fs').copyFileSync('build/barrel_index.ts','frontend/bindings/monika/index.ts')"
+
+# 3a. Dev mode (hot reload)
 wails3 dev
 
-# Build standalone binary
+# 3b. Or build standalone
 cd frontend && npm run build && cd ..
-go build .
+go build -o monika .
+# macOS: ./monika
+# Windows: .\monika.exe
 ```
 
 ### Configure Provider
@@ -159,6 +180,54 @@ model_providers:
 ```
 
 ---
+
+## Features
+
+### Multi-Panel GUI
+
+Session list, chat area, file tree with CodeMirror 6 editor, console, and status bar — all in one window. Three layout modes (chat, split, files-only) with a draggable divider.
+
+### Multi-Tab Sessions
+
+Up to 8 concurrent session tabs with independent message caching. Sessions are automatically persisted as JSON and restored on next startup.
+
+### Streaming Agent Loop
+
+Real-time text deltas, tool execution cards, and token usage tracking. The agent handles context compaction automatically — when the conversation exceeds the model limit, it summarizes older messages with a separate LLM call.
+
+### Tool Calling
+
+The agent can manipulate your project directly:
+
+| Tool | Description |
+|------|-------------|
+| `file_read` | Read files with precision (offset/limit) |
+| `file_write` | Create or overwrite files |
+| `file_edit` | Exact string replacement |
+| `file_list` | List directory contents |
+| `glob` | Glob pattern file discovery |
+| `grep` | Regex search across files |
+| `bash` | Execute shell commands (cross-platform) |
+| `lsp` | Language Server Protocol — diagnostics, go-to-definition, references, rename, etc. ([docs](docs/lsp.md)) |
+| `db_schema` | Browse database schema (tables, columns, foreign keys) |
+| `db_query` | Execute read-only SQL/Redis queries (SELECT, SHOW, EXPLAIN) |
+
+### Git Integration
+
+File change tracking, diff viewing, local/remote branch listing, branch creation and switching, worktree-aware branch management.
+
+### Skills & MCP
+
+- **Skills** — Supports the [SKILL.md](https://github.com) standard, auto-discovers and loads skills from GitHub repos
+- **MCP** — Model Context Protocol, extends agent capabilities (databases, browser, web search, etc.) via stdio JSON-RPC transport
+
+### Concurrent Sub-Agents
+
+Built-in TaskRunner dispatches up to 4 concurrent child agents via semaphore, ideal for large-scale code search and multi-file modification tasks.
+
+### Permission Safety
+
+Every tool call goes through a complete permission pipeline — hard rules and security model double validation to prevent unauthorized operations.
 
 ## Supported Providers
 
@@ -190,11 +259,14 @@ monika/
 │   ├── api/               # Wails services: App, SessionManager, FileService, EventBus
 │   ├── bootstrap/         # Provider initialization
 │   ├── config/            # YAML/JSON config loader (~/.monika/ + .monika/)
+│   ├── dbbridge/          # Bridge scripts for Node.js/Python database drivers
+│   ├── dbdiscovery/       # Database auto-discovery from .env, docker-compose
 │   ├── engines/           # Provider adapters + Skill + MCP engines
 │   ├── lsp/               # Language Server Protocol client + LSP tool
 │   ├── permission/        # Tool permission pipeline
 │   └── tool/              # Tool interface + registry + builtin tools
 └── pkg/
+    ├── dbdriver/          # Database driver interface + 5 native drivers (PostgreSQL, MySQL, SQLite, Redis, MongoDB)
     ├── engine/            # Public Engine interface + registry
     ├── openai/            # OpenAI-compatible SSE streaming client
     ├── modelsdev/         # models.dev catalog fetcher
@@ -227,7 +299,8 @@ gofmt -w .
 cd frontend && npm run build
 
 # Regenerate Wails bindings (after changing Go API types)
-wails3 generate bindings -f "..." -ts
+wails3 generate bindings -ts
+node -e "require('fs').copyFileSync('build/barrel_index.ts','frontend/bindings/monika/index.ts')"
 
 # Tidy dependencies
 go mod tidy
