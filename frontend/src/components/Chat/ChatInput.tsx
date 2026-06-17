@@ -489,7 +489,6 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
     const COMMANDS: AcItem[] = [
         { name: 'init', detail: 'Create/update AGENTS.md from project analysis', icon: '/', insert: '/init ' },
         { name: 'compact', detail: 'Manually trigger context compaction', icon: '/', insert: '/compact ' },
-        { name: 'memory', detail: 'Extract memories from this session', icon: '/', insert: '/memory ' },
     ]
 
     const getQueryAtCursor = (): { prefix: string; query: string; cursor: number } | null => {
@@ -681,21 +680,6 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
                 s.fillCompactionCard(activeSessionId, { summary: String(err), beforeTokens: 0, afterTokens: 0, compactionNum: 0 })
                 s.removeGeneratingSession(activeSessionId)
                 s.setSessionStatus(activeSessionId, 'pending')
-            })
-            return
-        }
-
-        if (resolved === '/memory') {
-            if (!projectPath || !activeSessionId) return
-            setValue('')
-            const store = useStore.getState()
-            store.appendToSession(activeSessionId, [{ id: crypto.randomUUID(), role: 'assistant', content: '⏳ 正在从当前会话提取记忆...' }])
-            App.TriggerMemorySummarize(projectPath, activeSessionId).then(() => {
-                const s = useStore.getState()
-                s.appendToSession(activeSessionId, [{ id: crypto.randomUUID(), role: 'assistant', content: '✅ 记忆提取完成，请打开设置 → 知识库查看。' }])
-            }).catch((err: unknown) => {
-                const s = useStore.getState()
-                s.appendToSession(activeSessionId, [{ id: crypto.randomUUID(), role: 'assistant', content: `❌ 记忆提取失败: ${String(err)}` }])
             })
             return
         }
