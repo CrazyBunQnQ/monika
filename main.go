@@ -383,35 +383,6 @@ knowledge (preferences/constraints/persistent facts).`
 
 	appService = api.NewApp(home, cwd, pr.Config, pr.Providers, pr.Model, registry, loopOpts, taskStoreAccessor, agentRegistry, taskRunner, mcpRegistry, kbStore)
 
-	if kbStore != nil {
-		llmAdapter := &memory.GoLLMAdapter{
-			ChatFn: func(ctx context.Context, systemPrompt, userMessage string) (string, error) {
-				req := engine2.ChatRequest{
-					Messages: []engine2.ChatMessage{
-						{Role: "system", Content: systemPrompt},
-						{Role: "user", Content: userMessage},
-					},
-				}
-				events, err := defaultProvider.StreamChat(ctx, req)
-				if err != nil {
-					return "", err
-				}
-				var out strings.Builder
-				for ev := range events {
-					if ev.Kind == engine2.EventContentDelta {
-						out.WriteString(ev.Text)
-					}
-				}
-				return out.String(), nil
-			},
-		}
-		hook := &memory.ArchiveHook{
-			Store:         kbStore,
-			LLM:           llmAdapter,
-			CompactionLLM: llmAdapter,
-		}
-		appService.SetMemoryHook(hook)
-	}
 	appService.InitTSBridge(tsBridge)
 	// appService.StartBackgroundTasks() // 后台审查/技能生成，暂不实现
 	appGetProjectPath = appService.GetProjectPath
