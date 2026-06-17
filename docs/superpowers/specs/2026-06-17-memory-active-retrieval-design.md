@@ -185,7 +185,7 @@ r.Register(NewMemoryUpdate(store))
 ## Knowledge Base (Memory)
 
 You have access to a self-evolving knowledge base that persists across sessions.
-Relevant profile and core knowledge is loaded at the start of each session.
+Use memory_search/memory_read to look up relevant knowledge on demand.
 
 **MEMORY USAGE — mandatory task lifecycle:**
 
@@ -200,7 +200,11 @@ Every task MUST follow this closed loop. Skipping steps degrades quality over ti
    - memory_search first to check if a similar memory already exists
    - exists → memory_read full content → merge new insight → memory_update(path, merged)
    - not exists → memory_write(title, content, category)
-
+   
+   For profile (wiki/profile.md) and core knowledge (wiki/knowledge.md), use
+   memory_update with the specific path. These files have character limits
+   (profile: 1500, knowledge: 3000) — the tool warns on overflow, then you
+   must read back and trim.
 **Also:** Before any web search, MCP tool, or asking the user, you MUST first call
 memory_search — only fall back to external sources if no relevant memory exists.
 
@@ -275,112 +279,78 @@ messages[1+]  = filteredMsgs (对话历史，含工具调用)
 **取舍**：放弃"无脑可见"，换取 cache 稳定 + 实时性 + 零结构改动。profile/knowledge 是否被用到，取决于 §4.2 prompt 闭环的执行——但这正是本次改造的核心目标（让 LLM 主动用记忆）。
 ---
 
-### 4.4 profile/knowledge 后台更新（§4 已确认）
+### 4.4 删除归档提取机制，完全工具化
 
-**核心**：复用现有懒归档机制，归档时触发 `OnArchive` 更新 profile/knowledge。
+**决策**：删除整个 ArchiveHook 后台提取链路。profile/knowledge 与其他记忆一样，由 LLM 在 AFTER 阶段主动 memory_write/memory_update。不再有后台/异步/归档触发的提取。
 
-#### 4.4.1 SessionManager 回调注入
+**理由**：
+1. §4.3 已把 profile/knowledge 移出 system prompt，会话中写入不影响 cache
+2. 后台异步写入有风险（LLM 提取质量不可控、panic 难定位、时序不确定）
+3. 完全工具化 = LLM 自主决定 = 实时 + 可控 + 可追溯（每条写入都是 LLM 显式工具调用，对话历史可见）
+4. 减少代码量：删除整套 OnArchive → ExtractMemories → CompactKnowledge 链路及相关胶水代码
 
-**文件**：`internal/api/session_manager.go`
+#### 4.4.1 删除清单
 
-当前懒归档（172-178 行）只改 status 并 Save。改为检测到新归档时调用回调，不修改 `List()` 签名（避免影响 4+ 个调用点：app.go x2、worktree.go、测试 x2）。
+**`internal/memory/hook.go`** — 整文件删除：
+- `ArchiveHook` 结构体
+- `OnArchive` 方法
+- 其内部的 ExtractMemories → Consolidate → WriteFile → CompactKnowledge 全链路
 
-**SessionManager 新增字段**：
-```go
-type SessionManager struct {
-    // ... 现有字段 ...
-    OnLazyArchive func(sessionID string)  // 新增：懒归档回调
-}
-```
+**`internal/api/app.go`**：
+- 删除 `memoryHook` 字段（第 77 行）
+- 删除 `SetMemoryHook` 方法（第 643-645 行）
+- 删除 `TriggerMemorySummarize` 方法（第 647-668 行）
+- 删除 `extractCompactionSummary` 辅助函数（第 615-640 行）
+- 删除 ArchiveSession 内的注释死代码（第 604-609 行）
+- 移除 `import "monika/internal/memory"`（如果该文件不再使用 memory 包）
 
-**懒归档逻辑改造**（172-178 行）：
-```go
-if s.Status == StatusPending && s.LastViewedAt != nil {
-    if time.Since(*s.LastViewedAt) > time.Hour {
-        s.Status = StatusArchived
-        sm.Save(s)
-        if sm.OnLazyArchive != nil {
-            sm.OnLazyArchive(s.ID)  // 新增：通知回调
-        }
-    }
-}
-```
+**`main.go`**：
+- 删除 ArchiveHook 构造（第 392-397 行）
+- 删除 `appService.SetMemoryHook(hook)`（第 397 行）
 
-保持 `SessionManager` 单一职责——只检测并标记 + 通知，不决定"归档后做什么"。`List()` 签名不变。
+**`frontend/src/components/Chat/ChatInput.tsx`**：
+- 删除 `/memory` 命令处理（第 688-701 行）
+- 删除 `App.TriggerMemorySummarize` 调用
 
-#### 4.4.2 app.go 注册回调并触发 hook
+**`internal/memory/compact_knowledge.go`** — 保留：
+- `CompactKnowledge` / `CompactProfile` 函数保留，供 memory_update 工具内部使用（见 4.4.2）
+- 删除文件中仅供 hook.go 使用的 `CompactionLLM` interface（如确认无其他引用）
 
-**文件**：`internal/api/app.go`
+**`internal/memory/extract.go`** / **`consolidate.go`** / **`review.go`** — 保留：
+- 这些是知识提取核心逻辑，当前无引用但后续可能复用（如未来恢复部分自动化）。本次不删除，避免过度清理。
 
-`SetMemoryHook`（643 行）或 session 初始化处，注册回调：
-```go
-func (a *App) SetMemoryHook(hook *memory.ArchiveHook) {
-    a.memoryHook = hook
-    // 新增：为所有已创建的 SessionManager 注册懒归档回调
-    a.sessionManagerFactory = func(home, projectDir string) *SessionManager {
-        sm := NewSessionManager(home, projectDir)
-        sm.OnLazyArchive = func(sessionID string) {
-            if a.memoryHook == nil {
-                return
-            }
-            sm.Lock()
-            s, err := sm.Load(sessionID)
-            sm.Unlock()
-            if err != nil || s == nil || len(s.Messages) == 0 {
-                return
-            }
-            summary := extractCompactionSummary(s)
-            go func() {
-                defer func() {
-                    if r := recover(); r != nil {
-                        fmt.Printf("[memory] OnArchive panic: %v\n", r)
-                    }
-                }()
-                a.memoryHook.OnArchive(context.Background(), memory.ScopeProject, sessionID, summary)
-            }()
-        }
-        return sm
-    }
-}
-```
+#### 4.4.2 memory_update 内置字符上限保护
 
-注意：异步执行 + `defer recover` 防止 hook 内 panic 影响主流程。
+由于不再有后台 CompactKnowledge，LLM 通过 memory_update 写入 profile/knowledge 时可能超出字符上限（knowledge 3000、profile 1500）。
 
-#### 4.4.3 显式归档也触发 hook
+**方案**：memory_update 工具在写入前检查字符数。超限时：
 
-**文件**：`internal/api/app.go:591` `ArchiveSession`
+1. **优先**：写入并返回警告信息，提示 LLM 内容已超限，建议调用 memory_read 后手动精简：
+   ```
+   ⚠️ Content exceeds %s limit (%d/%d chars). Written successfully, but please
+   read it back and trim to fit the limit using memory_update.
+   ```
+   理由：工具不调用 LLM（保持工具无 LLM 依赖原则），让 LLM 自己决定怎么压缩（它的语义理解优于规则压缩）。
 
-```go
-func (a *App) ArchiveSession(projectPath, sessionID string) error {
-    // ... 现有 status 改为 archived 的逻辑 ...
-    
-    // 新增：触发记忆提取
-    if a.memoryHook != nil {
-        s, _ := sm.Load(sessionID)
-        if s != nil && len(s.Messages) > 0 {
-            summary := extractCompactionSummary(s)
-            go a.memoryHook.OnArchive(context.Background(), memory.ScopeProject, sessionID, summary)
-        }
-    }
-    return nil
-}
-```
+2. 字符上限常量复用 `compact_knowledge.go:10-12` 的 `maxKnowledgeChars` / `maxProfileChars`（改为导出：`MaxKnowledgeChars` / `MaxProfileChars`）。
 
-同时删除 `app.go:604-609` 的注释死代码——逻辑已由上面的统一路径覆盖。
+**不自动压缩**：不在工具内调 CompactKnowledge（那需要 LLM 调用，增加复杂度和延迟）。写入放行 + 警告是最简方案，LLM 会自然遵守"看到警告就读回来精简"。
 
-#### 4.4.4 数据流
+#### 4.4.3 数据流（最终）
 
 ```
-用户离开 session → 1h 后前端刷新 List()
-  → SessionManager.List() 检测 pending + idle>1h
-  → status 改 archived，调用 OnLazyArchive 回调
-  → app.go 回调内 go memoryHook.OnArchive(...)
-  → ExtractMemories → 更新 profile/knowledge（后台 LLM，异步）
-  → 下次 session 启动 → BuildMemoryBlock 读到新内容 → 注入 messages[1]
+LLM AFTER 阶段：
+  学到用户偏好/画像 → memory_search("profile") 查重 → memory_update("wiki/profile.md", ...)
+  学到项目事实/约定 → memory_search("knowledge") 查重 → memory_update("wiki/knowledge.md", ...)
+  学到教训/模式 → memory_search 关键词 → memory_write(category) 或 memory_update(path)
+  
+  ↓ 实时写入，立即生效
+  
+下一轮 LLM BEFORE 阶段：
+  memory_search → 命中刚写入的记忆（实时性保证）
 ```
 
-**崩溃恢复**：下次 List() 仍会检测到 idle session 并补归档，不丢数据。
-
+无后台任务、无异步、无归档触发。所有写入都是 LLM 显式工具调用，对话历史可见、可追溯。
 ---
 
 ## 五、涉及文件清单
@@ -396,9 +366,11 @@ func (a *App) ArchiveSession(projectPath, sessionID string) error {
 | `internal/tool/builtin/register.go` | 修改 | 注册新工具 |
 | `main.go` | 修改 | system prompt 替换（§3） |
 | `internal/agent/agent_loop.go` | 修改 | 移除 system prompt 中 BuildMemoryBlock 注入（§4.3） |
-| `internal/memory/inject.go` | 修改 | BuildMemoryBlock 保留但不再被生产代码调用 |
-| `internal/api/session_manager.go` | 修改 | 新增 OnLazyArchive 回调字段；懒归档时调用 |
-| `internal/api/app.go` | 修改 | SetMemoryHook 注册回调；ArchiveSession 触发 hook；删注释死代码 |
+| `internal/memory/hook.go` | **删除** | 整文件删除：ArchiveHook + OnArchive（§4.4） |
+| `internal/api/app.go` | 修改 | 删 memoryHook/SetMemoryHook/TriggerMemorySummarize/extractCompactionSummary；删注释死代码 |
+| `main.go` | 修改 | 删 ArchiveHook 构造 + SetMemoryHook 调用 |
+| `frontend/src/components/Chat/ChatInput.tsx` | 修改 | 删 `/memory` 命令处理 |
+| `internal/memory/compact_knowledge.go` | 修改 | 导出 MaxKnowledgeChars/MaxProfileChars 常量供 memory_update 使用 |
 
 ---
 
@@ -409,9 +381,7 @@ func (a *App) ArchiveSession(projectPath, sessionID string) error {
 | memory_read path 不存在 | 返回错误：`Memory not found at path '%s'.` |
 | memory_update path 不存在 | 返回错误并引导：`Use memory_write to create a new memory.` |
 | memory_read/update path 含 `..` | 由现有 `ReadFile` 路径校验拦截（store.go:305） |
-| OnArchive LLM 调用失败 | hook.go:29 已有处理——打印日志，状态设为"归纳失败"，不阻塞 |
-| OnArchive panic | `go func()` 异步执行，recover 防崩溃（需在 app.go 触发处加 defer/recover） |
-| List() 报错 | 回调不被调用，不影响列表展示 |
+| profile/knowledge 写入超字符上限 | 照常写入 + 返回警告，LLM 自行精简（§4.4.2） |
 
 ---
 
@@ -426,8 +396,8 @@ func (a *App) ArchiveSession(projectPath, sessionID string) error {
 | memory_write 返回含 update 提示 | 单元 | 返回字符串含 "memory_update" |
 | buildMessages 不含 memory_block | 集成 | buildMessages 的 system message 不含 `<global_memory>` |
 | memory_search 可命中 profile/knowledge | 单元 | 写入 profile.md 后，search("用户偏好") 能命中 |
-| OnLazyArchive 回调触发 | 单元 | 构造 idle session，List 后 OnLazyArchive 被调用 |
-| ArchiveSession 触发 hook | 集成 | 调用后 memoryHook.OnArchive 被调用（mock 验证） |
+| memory_update 超 profile/knowledge 上限 | 单元 | 写入 profile 超 1500 字符，返回含警告 |
+| ArchiveHook 已删除 | 集成 | app.go 编译通过，无 memoryHook/SetMemoryHook 残留引用 |
 
 ---
 
@@ -436,4 +406,4 @@ func (a *App) ArchiveSession(projectPath, sessionID string) error {
 - LLM query 改写（提升 memory_search 精度）——后续优化
 - 记忆使用率指标采集——后续观测
 - 前端 memory 管理界面——独立需求
-- ArchiveHook 内部逻辑改造——保持现状
+- ArchiveHook 内部逻辑——已整体删除（§4.4），不再保留
