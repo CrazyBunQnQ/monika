@@ -286,7 +286,6 @@ knowledge (preferences/constraints/persistent facts).`
 		agent.WithModel(pr.Model),
 		agent.WithSystemPrompt(systemPrompt),
 		agent.WithHomeDir(home),
-		agent.WithKBStore(kbStore),
 	}
 
 	// Wire permission pipeline

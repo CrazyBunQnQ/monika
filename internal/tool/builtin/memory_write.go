@@ -57,6 +57,7 @@ func (t *memoryWriteTool) Execute(ctx context.Context, args json.RawMessage) (to
 		"lesson":           memory.CategoryLesson,
 		"topic":            memory.CategoryTopic,
 		"knowledge_update": memory.CategoryKnowledge,
+		"knowledge":        memory.CategoryKnowledge,
 		"profile":          memory.CategoryProfile,
 	}
 	cat, ok := catMap[p.Category]

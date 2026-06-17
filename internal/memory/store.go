@@ -331,14 +331,26 @@ func (s *KBStore) UpdateFile(scope, relPath, content string) error {
 	// file_index.path 以正斜杠存储（categoryPath 用 path.Join），Windows 上
 	// filepath.Clean 会产生反斜杠导致 WHERE path = ? 匹配不到行，需归一化。
 	dbPath := filepath.ToSlash(cleanPath)
+	title := extractTitleFromContent(content)
 	_, err := s.dbFor(scope).Exec(`
-		UPDATE file_index SET content = ?, char_count = ?, updated_at = ?
+		UPDATE file_index SET content = ?, title = ?, char_count = ?, updated_at = ?
 		WHERE path = ?
-	`, content, charCount, now, dbPath)
+	`, content, title, charCount, now, dbPath)
 	if err != nil {
 		return fmt.Errorf("update index: %w", err)
 	}
 	return nil
+}
+
+// extractTitleFromContent 从 markdown 内容中提取标题（第一个 # 开头的行）。
+// 供 UpdateFile 刷新 DB title 列使用，避免 search/index 显示旧标题。
+func extractTitleFromContent(content string) string {
+	for _, line := range strings.Split(content, "\n") {
+		if strings.HasPrefix(line, "# ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "# "))
+		}
+	}
+	return ""
 }
 
 func (s *KBStore) ListFiles(scope, category string) ([]KBFile, error) {

@@ -10,7 +10,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"monika/internal/memory"
 	"monika/internal/permission"
 	"monika/internal/tool"
 	"monika/pkg/engine"
@@ -263,7 +262,6 @@ type AgentLoop struct {
 	pipeline          *permission.Pipeline
 	projectDir        string
 	homeDir           string
-	kbStore           *memory.KBStore
 	model             string
 	modelContextLimit int64
 	modelOutputLimit  int64
@@ -303,10 +301,6 @@ func WithProjectDir(dir string) LoopOption {
 
 func WithHomeDir(dir string) LoopOption {
 	return func(a *AgentLoop) { a.homeDir = dir }
-}
-
-func WithKBStore(store *memory.KBStore) LoopOption {
-	return func(a *AgentLoop) { a.kbStore = store }
 }
 
 func WithModel(model string) LoopOption {
