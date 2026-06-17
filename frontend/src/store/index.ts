@@ -251,7 +251,6 @@ interface AppState {
     removeShellExecutingSession: (sessionId: string) => void
     setSessionStatus: (sessionId: string, status: string) => void
     setSessionError: (sessionId: string, error: string) => void
-    setSelectedModel: (model: string) => void
     setLastAssistantMeta: (sessionId: string, meta: { model?: string; duration?: number }) => void
     addTokens: (sid: string, tokens: number, max?: number) => void
     fillCompactionCard: (sid: string, card: { summary: string; beforeTokens: number; afterTokens: number; compactionNum: number }) => void
@@ -292,7 +291,6 @@ interface AppState {
     loadRecentProjects: () => Promise<void>
     loadBranches: () => Promise<void>
     loadProviders: () => Promise<void>
-    setSelectedProvider: (providerId: string) => Promise<void>
     applySessionBinding: (id: string, provider?: string, model?: string) => void
     setActiveSessionModel: (providerId: string, modelId: string) => Promise<void>
     setDefaultModelGlobal: (providerId: string, modelId: string) => Promise<void>
@@ -632,7 +630,7 @@ export const useStore = create<AppState>((set, get) => ({
                 return { sessionBindings: bindings }
             }
             const models = s.modelsByProvider[provider] || []
-            const m = models.find((mm: any) => mm.ID === model) as any
+            const m = models.find((mm) => mm.ID === model) as (ModelInfo & { ContextLimit?: number }) | undefined
             const newMax = m?.ContextLimit ?? 0
             const current = s.sessionTokens[id]
             return {
@@ -643,24 +641,6 @@ export const useStore = create<AppState>((set, get) => ({
                     ? {
                         tokenMax: newMax,
                         sessionTokens: { ...s.sessionTokens, [id]: { count: current?.count ?? 0, max: newMax } },
-                    }
-                    : {}),
-            }
-        })
-    },
-    setSelectedModel: (model) => {
-        set((s) => {
-            const models = s.modelsByProvider[s.selectedProvider] || []
-            const m = models.find((m: any) => m.ID === model) as any
-            const newMax = m?.ContextLimit ?? 0
-            const sid = s.activeSessionId
-            const current = s.sessionTokens[sid]
-            return {
-                selectedModel: model,
-                ...(newMax > 0 && sid
-                    ? {
-                        tokenMax: newMax,
-                        sessionTokens: { ...s.sessionTokens, [sid]: { count: current?.count ?? 0, max: newMax } },
                     }
                     : {}),
             }
@@ -974,7 +954,7 @@ export const useStore = create<AppState>((set, get) => ({
             const binding = s.sessionBindings[id]
             const restProvider = binding?.provider || s.defaultProvider
             const restModel = binding?.model || s.defaultModel
-            const updates: Record<string, unknown> = {
+            const updates: Partial<AppState> = {
                 activeSessionId: id,
                 sessionMessages: currentCache,
                 messages: restored,
@@ -1278,11 +1258,6 @@ export const useStore = create<AppState>((set, get) => ({
         if (providers.length > 0) {
             await get().loadModelsForProvider(validProvider);
         }
-    },
-
-    setSelectedProvider: async (providerId: string) => {
-        set({ selectedProvider: providerId });
-        await get().loadModelsForProvider(providerId);
     },
 
     loadModelsForProvider: async (providerId: string) => {
