@@ -197,3 +197,30 @@ func TestReindexFromDisk(t *testing.T) {
 		t.Errorf("got title '%s'", results[0].Title)
 	}
 }
+func TestKBStoreSearchReturnsSnippet(t *testing.T) {
+	homeDir := t.TempDir()
+	projectDir := t.TempDir()
+
+	store, err := NewKBStore(homeDir, projectDir)
+	if err != nil {
+		t.Fatalf("NewKBStore: %v", err)
+	}
+	defer store.Close()
+
+	err = store.WriteFile(ScopeProject, CategoryLesson, "Snippet Test",
+		"This lesson talks about goroutine leak detection patterns.", []string{"go"}, "high")
+	if err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	results, err := store.Search("goroutine leak", ScopeProject, 5)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Snippet == "" {
+		t.Errorf("expected non-empty Snippet, got empty")
+	}
+}

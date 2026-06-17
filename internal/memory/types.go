@@ -33,6 +33,7 @@ type KBFile struct {
 	Status     string    `json:"status"`
 	CharCount  int       `json:"char_count"`
 	LinkedTo   []string  `json:"linked_to,omitempty"`
+	Snippet    string    `json:"snippet,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
 }

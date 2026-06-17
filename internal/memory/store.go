@@ -486,6 +486,7 @@ func scanKBFiles(rows *sql.Rows) ([]KBFile, error) {
 		json.Unmarshal([]byte(linkedJSON), &f.LinkedTo)
 		f.CreatedAt, _ = time.Parse(time.RFC3339, ca)
 		f.UpdatedAt, _ = time.Parse(time.RFC3339, ua)
+		f.Snippet = snippet
 		results = append(results, f)
 	}
 	if results == nil {
