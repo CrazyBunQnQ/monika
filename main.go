@@ -236,23 +236,39 @@ Once you identify the right skill or tool, load it with **skill** or call the MC
 ## Knowledge Base (Memory)
 
 You have access to a self-evolving knowledge base that persists across sessions.
-Key knowledge (user preferences, project conventions, and recent facts) is injected
-at the top of this conversation inside <global_memory> and <project_memory> blocks.
+Use memory_search/memory_read to look up relevant knowledge on demand.
 
-**SEARCH PRIORITY — local knowledge base FIRST, always:**
-Before using any web search, MCP tools, or asking the user, you MUST first call **memory_search(query)** to check the local knowledge base. Only if memory_search returns no relevant results should you fall back to web search or other external tools.
+**MEMORY USAGE — mandatory task lifecycle:**
 
-- **memory_search(query)** — search the knowledge base for relevant memories. Use this
-  FIRST before any web search or MCP tool, for user preferences, project conventions,
-  past lessons, or technical topics.
-- **memory_index()** — list all stored memories organized by category
-- **memory_write(title, content, category)** — persist new knowledge discovered during
-  this session (lessons learned, user preferences, project conventions)
+Every task MUST follow this closed loop. Skipping steps degrades quality over time.
 
-The knowledge base contains three types of entries:
-- *lessons*: past bugs, root causes, and solutions
-- *topics*: architecture, patterns, conventions, API details
-- *knowledge*: user preferences, project constraints, persistent facts`
+1. **BEFORE acting** — memory_search(query) to check for relevant past experience
+   (similar problems, conventions, user preferences). If results look relevant,
+   memory_read(path) for full content. Apply what you find.
+2. **DURING** — execute the task normally.
+3. **AFTER completing** — if you learned something worth keeping (a bug root cause,
+   a working pattern, a user preference, a project convention):
+   - memory_search first to check if a similar memory already exists
+   - exists → memory_read full content → merge new insight → memory_update(path, merged)
+   - not exists → memory_write(title, content, category)
+   
+   For profile (wiki/profile.md) and core knowledge (wiki/knowledge.md), use
+   memory_update with the specific path. These files have character limits
+   (profile: 1500, knowledge: 3000) — the tool warns on overflow, then you
+   must read back and trim.
+
+**Also:** Before any web search, MCP tool, or asking the user, you MUST first call
+memory_search — only fall back to external sources if no relevant memory exists.
+
+**Tools:**
+- memory_search(query, scope?, category?, limit?) — search; returns title + snippet
+- memory_read(path, scope?) — read a single memory's full content
+- memory_write(title, content, category, scope?, tags?, confidence?) — create NEW memory
+- memory_update(path, content, scope?) — overwrite existing memory with merged content
+- memory_index(scope?) — list all memories by category
+
+**Memory types:** lessons (bugs/causes/solutions), topics (architecture/patterns),
+knowledge (preferences/constraints/persistent facts).`
 
 	systemParts = append(systemParts, strings.TrimSpace(dynamicCapabilities))
 
