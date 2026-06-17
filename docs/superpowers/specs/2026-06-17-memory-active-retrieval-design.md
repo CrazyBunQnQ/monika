@@ -249,9 +249,13 @@ if a.kbStore != nil {
 2. compaction 会截断 messages（CompactionFrom），状态标记会导致截断后 memory_block 永久丢失；无状态方案每次重建自动恢复
 3. messages 序列对 LLM provider 一致
 
-注入位置：`buildMessages`（agent_loop.go:1130），在现有 system prompt 消息（messages[0]）append 之后、`messages = append(messages, filteredMsgs...)` 之前：
+注入位置：`buildMessages`（agent_loop.go:1130），在 reminder 追加逻辑（agent_loop.go:1193-1201）**之后**、`messages = append(messages, filteredMsgs...)`（agent_loop.go:1203）**之前**。
+
+**关键约束 — 必须在 reminder 之后**：reminder 逻辑（1193-1200）是"向后查找最后一条 system 消息并追加内容"。如果 memory_block 插在 reminder 之前，reminder 会错误地追加到 memory_block 上，污染记忆内容。因此 memory_block 必须在 reminder 逻辑完成后插入：
 ```go
-// 在现有 system prompt 消息 append 之后
+// --- 现有 reminder 逻辑结束（agent_loop.go:1201）---
+
+// 新增：memory_block 注入（无条件，只要 kbStore 可用）
 if a.kbStore != nil {
     if block := a.kbStore.BuildMemoryBlock(); block != "" {
         messages = append(messages, engine.ChatMessage{
@@ -260,17 +264,19 @@ if a.kbStore != nil {
         })
     }
 }
-// 然后追加 filteredMsgs
+
+// --- 现有 filteredMsgs 追加（agent_loop.go:1203）---
 ```
 
-**消息角色**：用 `system`。memory_block 是系统注入的上下文（非用户发言、非 assistant 回复）。现有代码已支持多 system 消息（agent_loop.go:1193-1200 在尾部追加 system reminder）。
+**消息角色**：用 `system`。memory_block 是系统注入的上下文（非用户发言、非 assistant 回复）。现有代码已支持多 system 消息。
 
 **消息序列**：
 ```
-messages[0] = system (agent 基础提示 + 闭环指令 + tools，完全稳定)
-messages[1] = system (<memory_block>，session 级稳定)
-messages[2+] = filteredMsgs (对话历史)
+messages[0]   = system (agent 基础提示 + 闭环指令 + reminder，完全稳定)
+messages[1]   = system (<global_memory>/<project_memory>，session 级稳定)
+messages[2+]  = filteredMsgs (user/assistant/tool 对话历史)
 ```
+
 
 **缓存影响分析**：
 
