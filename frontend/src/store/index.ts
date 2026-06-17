@@ -1497,10 +1497,6 @@ export const useStore = create<AppState>((set, get) => ({
     },
 
     loadAvailableProviders: async () => {
-        // Return cached data if already loaded
-        if (get().availableProvidersCatalog.length > 0) {
-            return get().availableProvidersCatalog
-        }
         try {
             const providers = await Call.ByName('monika/internal/api.App.GetAvailableProviders') as AvailableProviderInfo[]
             set({ availableProvidersCatalog: providers || [] })
