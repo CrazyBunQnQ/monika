@@ -72,6 +72,9 @@ func (t *memorySearchTool) Execute(ctx context.Context, args json.RawMessage) (t
 		if len(r.LinkedTo) > 0 {
 			sb.WriteString(fmt.Sprintf("   links: %s\n", strings.Join(r.LinkedTo, ", ")))
 		}
+		if r.Snippet != "" {
+			sb.WriteString(fmt.Sprintf("   snippet: %s\n", r.Snippet))
+		}
 		sb.WriteString("\n")
 	}
 	return tool.ExecutionResult{Content: sb.String()}, nil
