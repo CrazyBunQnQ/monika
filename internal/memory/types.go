@@ -62,6 +62,7 @@ func KBSubdirs() []string {
 // 如果不是 git 仓库，返回原始目录。
 func ResolveWorkspaceRoot(dir string) string {
 	cmd := exec.Command("git", "-C", dir, "rev-parse", "--git-common-dir")
+	hideWindow(cmd)
 	out, err := cmd.Output()
 	if err != nil {
 		return dir
