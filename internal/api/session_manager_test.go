@@ -191,3 +191,38 @@ func TestSessionInfoIncludesWorktree(t *testing.T) {
 		t.Fatal("session not found in List()")
 	}
 }
+
+func TestSessionModelProviderMutationRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	sm := NewSessionManager(dir, dir)
+
+	s, err := sm.New("gpt-4", "openai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sm.Save(s); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate what SetSessionModel does: load, mutate provider+model, save.
+	loaded, err := sm.Load(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded.Provider = "deepseek"
+	loaded.Model = "deepseek-chat"
+	if err := sm.Save(loaded); err != nil {
+		t.Fatal(err)
+	}
+
+	again, err := sm.Load(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Provider != "deepseek" {
+		t.Errorf("provider did not persist: got %q, want deepseek", again.Provider)
+	}
+	if again.Model != "deepseek-chat" {
+		t.Errorf("model did not persist: got %q, want deepseek-chat", again.Model)
+	}
+}
