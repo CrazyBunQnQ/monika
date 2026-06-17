@@ -558,6 +558,19 @@ func (a *App) SetSessionPinned(projectPath, sessionID string, pinned bool) error
 	return sm.Save(s)
 }
 
+func (a *App) SetSessionModel(projectPath, sessionID, providerID, model string) error {
+	sm := a.getSessionManager(projectPath)
+	sm.Lock()
+	defer sm.Unlock()
+	s, err := sm.Load(sessionID)
+	if err != nil {
+		return err
+	}
+	s.Provider = providerID
+	s.Model = model
+	return sm.Save(s)
+}
+
 func (a *App) RenameSession(projectPath, sessionID, newTitle string) error {
 	runes := []rune(newTitle)
 	if len(runes) > 40 {
@@ -825,6 +838,8 @@ func (a *App) SendMessage(projectPath, sessionID, text, providerID, model string
 		s.TokenMax = conv.TokenMax
 		s.CompactionCount = conv.CompactionCount
 		s.CompactionFrom = conv.CompactionFrom
+		s.Provider = providerID
+		s.Model = model
 		sm.SetTitle(s)
 
 		// Debug: log compaction state before save

@@ -1,7 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useStore } from '../../store'
-import { App } from '../../../bindings/monika'
-import { logger } from '../../lib/logger'
 import type { ProviderInfo, ModelInfo } from '../../../bindings/monika'
 import { IconChevronDown, IconCheck } from '../Icons'
 
@@ -10,8 +8,11 @@ function ModelPicker() {
   const selectedProvider = useStore((s) => s.selectedProvider)
   const selectedModel = useStore((s) => s.selectedModel)
   const modelsByProvider = useStore((s) => s.modelsByProvider)
-  const setSelectedProvider = useStore((s) => s.setSelectedProvider)
+  const setActiveSessionModel = useStore((s) => s.setActiveSessionModel)
   const loadModelsForProvider = useStore((s) => s.loadModelsForProvider)
+  const generatingSessionIds = useStore((s) => s.generatingSessionIds)
+  const activeSessionId = useStore((s) => s.activeSessionId)
+  const isGenerating = generatingSessionIds.includes(activeSessionId)
 
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -107,14 +108,11 @@ function ModelPicker() {
 
   const handleSelect = useCallback(
     async (providerId: string, modelId: string) => {
-      if (providerId !== selectedProvider) {
-        await setSelectedProvider(providerId)
-      }
-      useStore.getState().setSelectedModel(modelId)
+      if (isGenerating) return
+      await setActiveSessionModel(providerId, modelId)
       setOpen(false)
-      App.PersistSelection(providerId, modelId).catch((e: unknown) => { logger.error('PersistSelection failed:', e) })
     },
-    [selectedProvider, setSelectedProvider],
+    [setActiveSessionModel, isGenerating],
   )
 
   // No providers state
@@ -133,12 +131,15 @@ function ModelPicker() {
     <div ref={ref} style={{ position: 'relative' }}>
       <button
         onClick={() => setOpen((v) => !v)}
+        disabled={isGenerating}
         className="text-[11px] px-2 py-0.5 rounded cursor-pointer flex items-center gap-1"
         style={{
           background: 'var(--bg-elevated)',
           border: '1px solid var(--border)',
           color: 'var(--text-primary)',
           fontFamily: 'inherit',
+          opacity: isGenerating ? 0.5 : 1,
+          cursor: isGenerating ? 'not-allowed' : 'pointer',
         }}
       >
         <span style={{ fontWeight: 600 }}>{providerAbbr}</span>
