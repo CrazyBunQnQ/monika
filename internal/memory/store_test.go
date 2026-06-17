@@ -264,6 +264,18 @@ func TestKBStoreUpdateFile(t *testing.T) {
 		t.Errorf("content not updated, got: %s", content)
 	}
 
+	// 验证 DB 索引和 FTS 也已刷新（UpdateFile 的核心功能）
+	searchResults, err := store.Search("Updated content here.", ScopeProject, 1)
+	if err != nil {
+		t.Fatalf("Search after update: %v", err)
+	}
+	if len(searchResults) != 1 {
+		t.Fatalf("expected 1 search result after update, got %d", len(searchResults))
+	}
+	if searchResults[0].Path != path {
+		t.Errorf("search returned wrong path: got %s, want %s", searchResults[0].Path, path)
+	}
+
 	// 不存在的路径
 	err = store.UpdateFile(ScopeProject, "wiki/lessons/nonexistent.md", "content")
 	if err == nil {
