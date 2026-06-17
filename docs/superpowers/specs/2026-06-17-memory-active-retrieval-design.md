@@ -228,13 +228,19 @@ knowledge (preferences/constraints/persistent facts).
 
 ---
 
-### 4.3 profile/knowledge 注入改造（§4 已确认）
+### 4.3 profile/knowledge 不再注入，改由 LLM 自主检索
 
-**改动 1**：`internal/memory/inject.go` — `BuildMemoryBlock()` 方法保留，但不再在 system prompt 构建时调用。改为由 session 启动 hook 注入为 msg0。
+**决策**：删除 `BuildMemoryBlock` 在 system prompt 中的注入。profile/knowledge 与 lessons/topics 一样，通过 `memory_search` / `memory_read` 由 LLM 主动检索。
 
-**改动 2**：`internal/agent/agent_loop.go:1181-1185` — 移除 `BuildMemoryBlock` 注入到 system prompt 的逻辑：
+**可行性依据**（已验证）：
+- `store.go:147` `Search(query, scope, limit)` 无 category 过滤参数
+- 底层 `searchFTS` / `searchLike` 的 SQL 仅过滤 `status != 'trash'`，不过滤 category
+- `memory_search` 工具的 `category` 参数实际未传给 store（dead 参数），默认搜全部
+- 因此 `memory_search("用户偏好")` / `memory_search("技术栈")` 等查询天然能命中 profile.md / knowledge.md
+
+**改动 1**：`internal/agent/agent_loop.go:1181-1185` — 移除 system prompt 注入：
 ```go
-// 删除：
+// 删除整段：
 if a.kbStore != nil {
     if block := a.kbStore.BuildMemoryBlock(); block != "" {
         parts = append(parts, block)
@@ -242,51 +248,31 @@ if a.kbStore != nil {
 }
 ```
 
-**改动 3**：每次 `buildMessages` 时，在 system prompt 消息之后、filteredMsgs 之前，插入一条独立的 system 消息作为 memory_block。
+**改动 2**：`internal/memory/inject.go` — `BuildMemoryBlock` 函数保留（`store_test.go:57` 仍有单元测试覆盖），但不再被生产代码调用。后续如确认无其他引用可删除。
 
-**设计决策（无状态注入）**：不使用 `memoryBlockInjected` 等状态标记。每次 `buildMessages` 都重新插入。理由：
-1. 内容在同一 session 内不变（profile/knowledge 后台更新下次 session 才生效），重复读取无副作用
-2. compaction 会截断 messages（CompactionFrom），状态标记会导致截断后 memory_block 永久丢失；无状态方案每次重建自动恢复
-3. messages 序列对 LLM provider 一致
+**为什么不引入"多 system 消息"方案**（已否决）：
+- `sanitizeMessageSequence`（agent_loop.go:1286-1294）硬编码 `append(messages[:1], ...)` 只保留 messages[0]，第二条 system 会被 trim 掉
+- Claude 原生 API 明令禁止连续 system 消息
+- OpenAI 兼容实现（textgen 等）会后者覆盖前者
+- sanitizer 改造属于共享代码风险，且需实测多 provider 兼容性
 
-注入位置：`buildMessages`（agent_loop.go:1130），在 reminder 追加逻辑（agent_loop.go:1193-1201）**之后**、`messages = append(messages, filteredMsgs...)`（agent_loop.go:1203）**之前**。
+**§4.2 Prompt 闭环已覆盖此场景**：BEFORE 阶段的 `memory_search(query)` 自然包含 profile/knowledge 内容。LLM 搜到相关 profile/knowledge 后调 `memory_read(path)` 看全文。
 
-**关键约束 — 必须在 reminder 之后**：reminder 逻辑（1193-1200）是"向后查找最后一条 system 消息并追加内容"。如果 memory_block 插在 reminder 之前，reminder 会错误地追加到 memory_block 上，污染记忆内容。因此 memory_block 必须在 reminder 逻辑完成后插入：
-```go
-// --- 现有 reminder 逻辑结束（agent_loop.go:1201）---
-
-// 新增：memory_block 注入（无条件，只要 kbStore 可用）
-if a.kbStore != nil {
-    if block := a.kbStore.BuildMemoryBlock(); block != "" {
-        messages = append(messages, engine.ChatMessage{
-            Role:    "system",
-            Content: block,
-        })
-    }
-}
-
-// --- 现有 filteredMsgs 追加（agent_loop.go:1203）---
+**消息序列**（最终，无 memory_block 注入）：
+```
+messages[0]   = system (基础提示 + 闭环指令 + reminder，完全稳定)
+messages[1+]  = filteredMsgs (对话历史，含工具调用)
 ```
 
-**消息角色**：用 `system`。memory_block 是系统注入的上下文（非用户发言、非 assistant 回复）。现有代码已支持多 system 消息。
-
-**消息序列**：
-```
-messages[0]   = system (agent 基础提示 + 闭环指令 + reminder，完全稳定)
-messages[1]   = system (<global_memory>/<project_memory>，session 级稳定)
-messages[2+]  = filteredMsgs (user/assistant/tool 对话历史)
-```
-
-
-**缓存影响分析**：
+**缓存影响**：
 
 | 部分 | 变更前 | 变更后 |
 |------|--------|--------|
-| system prompt 内容 | 每轮可能变（BuildMemoryBlock 拼入） | 完全稳定 |
+| system prompt 内容 | 含 profile/knowledge（变更即失效） | 完全稳定 |
 | system prompt cache | profile/knowledge 变更即失效 | 跨 session 始终命中 ✅ |
-| messages[1] | N/A | session 级稳定（同一 session 内不变） |
-| messages[1] cache | N/A | 同 session 内命中；跨 session 可能变（可接受） |
+| profile/knowledge 可见性 | 被动注入（会话内可见） | 主动检索（LLM 调 search 时可见） |
 
+**取舍**：放弃"无脑可见"，换取 cache 稳定 + 实时性 + 零结构改动。profile/knowledge 是否被用到，取决于 §4.2 prompt 闭环的执行——但这正是本次改造的核心目标（让 LLM 主动用记忆）。
 ---
 
 ### 4.4 profile/knowledge 后台更新（§4 已确认）
@@ -409,7 +395,8 @@ func (a *App) ArchiveSession(projectPath, sessionID string) error {
 | `internal/tool/builtin/memory_write.go` | 修改 | Description + 返回提示 |
 | `internal/tool/builtin/register.go` | 修改 | 注册新工具 |
 | `main.go` | 修改 | system prompt 替换（§3） |
-| `internal/agent/agent_loop.go` | 修改 | 移除 system prompt 注入，改为 messages[1] 无状态注入 |
+| `internal/agent/agent_loop.go` | 修改 | 移除 system prompt 中 BuildMemoryBlock 注入（§4.3） |
+| `internal/memory/inject.go` | 修改 | BuildMemoryBlock 保留但不再被生产代码调用 |
 | `internal/api/session_manager.go` | 修改 | 新增 OnLazyArchive 回调字段；懒归档时调用 |
 | `internal/api/app.go` | 修改 | SetMemoryHook 注册回调；ArchiveSession 触发 hook；删注释死代码 |
 
@@ -437,8 +424,8 @@ func (a *App) ArchiveSession(projectPath, sessionID string) error {
 | memory_read 正常/不存在/路径穿越 | 单元 | 三种场景返回正确 |
 | memory_update 正常/不存在 | 单元 | 不存在时返回引导错误 |
 | memory_write 返回含 update 提示 | 单元 | 返回字符串含 "memory_update" |
-| BuildMemoryBlock 不在 system prompt | 集成 | buildMessages 的 system message 不含 `<global_memory>` |
-| messages[1] 注入 memory_block | 集成 | buildMessages 返回的第二条消息含 `<global_memory>` |
+| buildMessages 不含 memory_block | 集成 | buildMessages 的 system message 不含 `<global_memory>` |
+| memory_search 可命中 profile/knowledge | 单元 | 写入 profile.md 后，search("用户偏好") 能命中 |
 | OnLazyArchive 回调触发 | 单元 | 构造 idle session，List 后 OnLazyArchive 被调用 |
 | ArchiveSession 触发 hook | 集成 | 调用后 memoryHook.OnArchive 被调用（mock 验证） |
 
