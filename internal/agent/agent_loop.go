@@ -1178,11 +1178,6 @@ func (a *AgentLoop) buildMessages(conv *Conversation) []engine.ChatMessage {
 				parts = append(parts, b.String())
 			}
 		}
-		if a.kbStore != nil {
-			if block := a.kbStore.BuildMemoryBlock(); block != "" {
-				parts = append(parts, block)
-			}
-		}
 
 		messages = append(messages, engine.ChatMessage{
 			Role:    "system",
