@@ -259,6 +259,8 @@ func RegisterDatabase(r *tool.ToolRegistry, dbMgr DBQuerier) {
 // RegisterMemory registers the memory search/write/index/reindex tools.
 func RegisterMemory(r *tool.ToolRegistry, store *memory.KBStore) {
 	r.Register(NewMemorySearch(store))
+	r.Register(NewMemoryRead(store))
+	r.Register(NewMemoryUpdate(store))
 	r.Register(NewMemoryWrite(store))
 	r.Register(NewMemoryIndex(store))
 	r.Register(NewMemoryReindex(store))
