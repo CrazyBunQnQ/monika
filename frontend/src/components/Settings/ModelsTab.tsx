@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useStore, AvailableProviderInfo } from '../../store'
-import { Call } from '@wailsio/runtime'
 import Modal, { ModalHeader, ModalBody, ModalFooter, ModalButton } from '../ui/Modal'
 import ConfirmModal from '../Chat/ConfirmModal'
 import { IconDatabase, IconEdit, IconPlus, IconTrash, IconChevronDown } from '../Icons'
@@ -112,10 +111,9 @@ export default function ModelsTab() {
   const loadAvailableProviders = useStore((s) => s.loadAvailableProviders)
   const saveProvider = useStore((s) => s.saveProviderDetail)
   const deleteProvider = useStore((s) => s.deleteProviderDetail)
-  const selectedProvider = useStore((s) => s.selectedProvider)
-  const selectedModel = useStore((s) => s.selectedModel)
-  const setSelectedProvider = useStore((s) => s.setSelectedProvider)
-  const setSelectedModel = useStore((s) => s.setSelectedModel)
+  const selectedProvider = useStore((s) => s.defaultProvider)
+  const selectedModel = useStore((s) => s.defaultModel)
+  const setDefaultModelGlobal = useStore((s) => s.setDefaultModelGlobal)
 
   const [editingId, setEditingId] = useState<string | null>(null)
   const [isAdding, setIsAdding] = useState(false)
@@ -210,10 +208,8 @@ export default function ModelsTab() {
   }, [deleteTarget, deleteProvider])
 
   const setDefaultModel = useCallback(async (providerId: string, modelId: string) => {
-    setSelectedProvider(providerId)
-    setSelectedModel(modelId)
-    try { await Call.ByName('monika/internal/api.App.SetDefaultModel', providerId, modelId) } catch { /* best effort */ }
-  }, [setSelectedProvider, setSelectedModel])
+    await setDefaultModelGlobal(providerId, modelId)
+  }, [setDefaultModelGlobal])
 
   const inputCls = 'w-full px-3 py-2 text-[12px] rounded-md border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-primary)] placeholder-[var(--text-dim)] focus:outline-none focus:border-[var(--border-strong)] form-input-glow transition-colors duration-150'
   const labelCls = 'block text-[11px] font-medium text-[var(--text-secondary)] mb-1.5'

@@ -197,6 +197,9 @@ interface AppState {
     selectedProvider: string
     modelsByProvider: Record<string, ModelInfo[]>
     selectedModel: string
+    sessionBindings: Record<string, { provider: string; model: string }>
+    defaultProvider: string
+    defaultModel: string
     pendingPermission: PermissionRequiredEvent | null
     pendingAskUser: AskUserEvent | null
     permissionMode: 'auto' | 'manual'
@@ -248,7 +251,6 @@ interface AppState {
     removeShellExecutingSession: (sessionId: string) => void
     setSessionStatus: (sessionId: string, status: string) => void
     setSessionError: (sessionId: string, error: string) => void
-    setSelectedModel: (model: string) => void
     setLastAssistantMeta: (sessionId: string, meta: { model?: string; duration?: number }) => void
     addTokens: (sid: string, tokens: number, max?: number) => void
     fillCompactionCard: (sid: string, card: { summary: string; beforeTokens: number; afterTokens: number; compactionNum: number }) => void
@@ -291,7 +293,9 @@ interface AppState {
     loadRecentProjects: () => Promise<void>
     loadBranches: () => Promise<void>
     loadProviders: () => Promise<void>
-    setSelectedProvider: (providerId: string) => Promise<void>
+    applySessionBinding: (id: string, provider?: string, model?: string) => void
+    setActiveSessionModel: (providerId: string, modelId: string) => Promise<void>
+    setDefaultModelGlobal: (providerId: string, modelId: string) => Promise<void>
     loadModelsForProvider: (providerId: string) => Promise<void>
     setChangeStats: (st: Partial<{ stats: ChangeStat[]; loading: boolean; error: string }>) => void
     loadCommitHistory: (path?: string) => void
@@ -392,6 +396,9 @@ export const useStore = create<AppState>((set, get) => ({
     selectedProvider: '',
     modelsByProvider: {},
     selectedModel: '',
+    sessionBindings: {} as Record<string, { provider: string; model: string }>,
+    defaultProvider: '',
+    defaultModel: '',
     pendingPermission: null as PermissionRequiredEvent | null,
     pendingAskUser: null as AskUserEvent | null,
     permissionMode: 'auto',
@@ -618,23 +625,52 @@ export const useStore = create<AppState>((set, get) => ({
         set((s) => ({ sessionStatuses: { ...s.sessionStatuses, [sessionId]: status } })),
     setSessionError: (sessionId, error) =>
         set((s) => ({ sessionErrors: { ...s.sessionErrors, [sessionId]: error } })),
-    setSelectedModel: (model) => {
+    applySessionBinding: (id, provider, model) => {
+        if (!provider || !model) return
         set((s) => {
-            const models = s.modelsByProvider[s.selectedProvider] || []
-            const m = models.find((m: any) => m.ID === model) as any
+            const bindings = { ...s.sessionBindings, [id]: { provider, model } }
+            if (id !== s.activeSessionId) {
+                return { sessionBindings: bindings }
+            }
+            const models = s.modelsByProvider[provider] || []
+            const m = models.find((mm) => mm.ID === model) as (ModelInfo & { ContextLimit?: number }) | undefined
             const newMax = m?.ContextLimit ?? 0
-            const sid = s.activeSessionId
-            const current = s.sessionTokens[sid]
+            const current = s.sessionTokens[id]
             return {
+                sessionBindings: bindings,
+                selectedProvider: provider,
                 selectedModel: model,
-                ...(newMax > 0 && sid
+                ...(newMax > 0
                     ? {
                         tokenMax: newMax,
-                        sessionTokens: { ...s.sessionTokens, [sid]: { count: current?.count ?? 0, max: newMax } },
+                        sessionTokens: { ...s.sessionTokens, [id]: { count: current?.count ?? 0, max: newMax } },
                     }
                     : {}),
             }
         })
+    },
+    setActiveSessionModel: async (providerId, modelId) => {
+        const sid = get().activeSessionId
+        if (!sid) return
+        if (providerId !== get().selectedProvider) {
+            await get().loadModelsForProvider(providerId)
+        }
+        get().applySessionBinding(sid, providerId, modelId)
+        const project = get().projectPath
+        if (project) {
+            Call.ByName('monika/internal/api.App.SetSessionModel', project, sid, providerId, modelId).catch((e: unknown) => {
+                console.error('[monika] SetSessionModel failed:', e)
+            })
+        }
+    },
+
+    setDefaultModelGlobal: async (providerId, modelId) => {
+        set({ defaultProvider: providerId, defaultModel: modelId })
+        try {
+            await Call.ByName('monika/internal/api.App.SetDefaultModel', providerId, modelId)
+        } catch (e) {
+            console.error('[monika] SetDefaultModel failed:', e)
+        }
     },
     setPermissionMode: (mode) => {
         set({ permissionMode: mode })
@@ -848,6 +884,9 @@ export const useStore = create<AppState>((set, get) => ({
                     ...(session?.worktree_path ? { sessionWorktrees: { ...s.sessionWorktrees, [id]: session.worktree_path } } : {}),
                 }
             })
+            if (session?.provider && session?.model) {
+                get().applySessionBinding(id, session.provider, session.model)
+            }
         } catch {
             set((s) => {
                 if (s.activeSessionId !== id) {
@@ -916,7 +955,10 @@ export const useStore = create<AppState>((set, get) => ({
                 currentCache[s.activeSessionId] = bgUpdated || s.messages
             }
             const restored = currentCache[id] || []
-            const updates = {
+            const binding = s.sessionBindings[id]
+            const restProvider = binding?.provider || s.defaultProvider
+            const restModel = binding?.model || s.defaultModel
+            const updates: Partial<AppState> = {
                 activeSessionId: id,
                 sessionMessages: currentCache,
                 messages: restored,
@@ -924,6 +966,8 @@ export const useStore = create<AppState>((set, get) => ({
                 tokenCount: s.sessionTokens[id]?.count ?? 0,
                 tokenMax: s.sessionTokens[id]?.max ?? 0,
                 sessionParents: s.sessionParents,
+                selectedProvider: restProvider,
+                selectedModel: restModel,
             }
             // Mark session as viewed when user switches to it
             const project = s.projectPath
@@ -986,6 +1030,9 @@ export const useStore = create<AppState>((set, get) => ({
                 sessionTokens: { ...s.sessionTokens, [subagentId]: tokData },
                 ...(session?.worktree_path ? { sessionWorktrees: { ...s.sessionWorktrees, [subagentId]: session.worktree_path } } : {}),
             }))
+            if (session?.provider && session?.model) {
+                get().applySessionBinding(subagentId, session.provider, session.model)
+            }
         } catch {
             set((s) => ({
                 sessionMessages: { ...s.sessionMessages, [subagentId]: [{ id: crypto.randomUUID(), role: "error" as const, content: "Failed to load subagent session." }] },
@@ -1027,6 +1074,9 @@ export const useStore = create<AppState>((set, get) => ({
                     ),
                     ...(session?.worktree_path ? { sessionWorktrees: { ...s.sessionWorktrees, [tab.id]: session.worktree_path } } : {}),
                 }))
+                if (session?.provider && session?.model) {
+                    get().applySessionBinding(tab.id, session.provider, session.model)
+                }
             } catch {
                 set((s) => ({
                     sessionMessages: { ...s.sessionMessages, [tab.id]: [] },
@@ -1085,6 +1135,9 @@ export const useStore = create<AppState>((set, get) => ({
                         ),
                         ...(session?.worktree_path ? { sessionWorktrees: { ...prev.sessionWorktrees, [s.id]: session.worktree_path } } : {}),
                     }))
+                    if (session?.provider && session?.model) {
+                        get().applySessionBinding(s.id, session.provider, session.model)
+                    }
                 } catch {
                     set((prev) => ({
                         sessionMessages: { ...prev.sessionMessages, [s.id]: [] },
@@ -1203,16 +1256,12 @@ export const useStore = create<AppState>((set, get) => ({
         set({
             availableProviders: providers,
             selectedProvider: validProvider,
-            ...(persistedModel ? { selectedModel: persistedModel } : {}),
+            defaultProvider: validProvider,
+            ...(persistedModel ? { selectedModel: persistedModel, defaultModel: persistedModel } : {}),
         });
         if (providers.length > 0) {
             await get().loadModelsForProvider(validProvider);
         }
-    },
-
-    setSelectedProvider: async (providerId: string) => {
-        set({ selectedProvider: providerId });
-        await get().loadModelsForProvider(providerId);
     },
 
     loadModelsForProvider: async (providerId: string) => {
