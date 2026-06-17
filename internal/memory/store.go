@@ -312,6 +312,32 @@ func (s *KBStore) ReadFile(scope, relPath string) (string, error) {
 	return string(data), nil
 }
 
+// UpdateFile 按路径覆盖写入已有记忆，刷新索引和时间戳。
+// 调用前应通过 ReadFile 确认路径存在。content 为完整的文件内容（含 frontmatter）。
+func (s *KBStore) UpdateFile(scope, relPath, content string) error {
+	cleanPath := filepath.Clean(relPath)
+	if strings.Contains(cleanPath, "..") {
+		return fmt.Errorf("invalid path: %s", relPath)
+	}
+	fullPath := filepath.Join(s.rootFor(scope), cleanPath)
+	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+		return fmt.Errorf("memory not found at path: %s", relPath)
+	}
+	if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
+		return err
+	}
+	charCount := len([]rune(content))
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.dbFor(scope).Exec(`
+		UPDATE file_index SET content = ?, char_count = ?, updated_at = ?
+		WHERE path = ?
+	`, content, charCount, now, cleanPath)
+	if err != nil {
+		return fmt.Errorf("update index: %w", err)
+	}
+	return nil
+}
+
 func (s *KBStore) ListFiles(scope, category string) ([]KBFile, error) {
 	var rows *sql.Rows
 	var err error
