@@ -328,10 +328,13 @@ func (s *KBStore) UpdateFile(scope, relPath, content string) error {
 	}
 	charCount := len([]rune(content))
 	now := time.Now().UTC().Format(time.RFC3339)
+	// file_index.path 以正斜杠存储（categoryPath 用 path.Join），Windows 上
+	// filepath.Clean 会产生反斜杠导致 WHERE path = ? 匹配不到行，需归一化。
+	dbPath := filepath.ToSlash(cleanPath)
 	_, err := s.dbFor(scope).Exec(`
 		UPDATE file_index SET content = ?, char_count = ?, updated_at = ?
 		WHERE path = ?
-	`, content, charCount, now, cleanPath)
+	`, content, charCount, now, dbPath)
 	if err != nil {
 		return fmt.Errorf("update index: %w", err)
 	}
