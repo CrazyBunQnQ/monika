@@ -35,8 +35,8 @@ function SessionList(props: IDockviewPanelProps) {
     const setMessages = useStore((s) => s.setMessages)
     const openSessionTab = useStore((s) => s.openSessionTab)
     const openSessions = useStore((s) => s.openSessions)
-    const selectedModel = useStore((s) => s.selectedModel)
-    const selectedProvider = useStore((s) => s.selectedProvider)
+    const defaultModel = useStore((s) => s.defaultModel)
+    const defaultProvider = useStore((s) => s.defaultProvider)
     const bumpSessionListVersion = useStore((s) => s.bumpSessionListVersion)
     const renameSession = useStore((s) => s.renameSession)
 
@@ -77,7 +77,7 @@ function SessionList(props: IDockviewPanelProps) {
     const handleNewSession = async () => {
         if (!projectPath) return
         try {
-            const info = await App.NewSession(projectPath, selectedProvider, selectedModel)
+            const info = await App.NewSession(projectPath, defaultProvider, defaultModel)
             if (!info) return
             bumpSessionListVersion()
             const title = info.title || 'Untitled'
