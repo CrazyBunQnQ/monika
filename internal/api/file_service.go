@@ -556,47 +556,65 @@ func computeUnifiedDiff(filePath string, old, new string) []string {
 }
 
 func (f *FileService) ListChangeStats() ([]ChangeStat, error) {
-	// Tracked changes via numstat
-	cmd := command("git", "diff", "--numstat")
-	cmd.Dir = f.projectDir
-	out, err := cmd.Output()
-	if err != nil {
-		return []ChangeStat{}, nil
-	}
-
 	stats := make([]ChangeStat, 0)
-	for _, line := range strings.Split(string(out), "\n") {
-		if line == "" {
-			continue
+
+	// 1. Unstaged tracked changes
+	unstagedCmd := command("git", "diff", "--numstat")
+	unstagedCmd.Dir = f.projectDir
+	if out, err := unstagedCmd.Output(); err == nil {
+		for _, line := range strings.Split(string(out), "\n") {
+			if line == "" {
+				continue
+			}
+			fields := strings.Fields(line)
+			if len(fields) < 3 {
+				continue
+			}
+			added, _ := strconv.Atoi(fields[0])
+			deleted, _ := strconv.Atoi(fields[1])
+			if added == 0 && deleted == 0 && fields[0] == "-" && fields[1] == "-" {
+				continue
+			}
+			stats = append(stats, ChangeStat{
+				Path: fields[2], Added: added, Deleted: deleted,
+				Status: "modified", Staged: false,
+			})
 		}
-		fields := strings.Fields(line)
-		if len(fields) < 3 {
-			continue
-		}
-		added, _ := strconv.Atoi(fields[0])
-		deleted, _ := strconv.Atoi(fields[1])
-		if added == 0 && deleted == 0 && fields[0] == "-" && fields[1] == "-" {
-			continue
-		}
-		stats = append(stats, ChangeStat{
-			Path:    fields[2],
-			Added:   added,
-			Deleted: deleted,
-		})
 	}
 
-	// Untracked files via status --porcelain
+	// 2. Staged changes
+	stagedCmd := command("git", "diff", "--cached", "--numstat")
+	stagedCmd.Dir = f.projectDir
+	if out, err := stagedCmd.Output(); err == nil {
+		for _, line := range strings.Split(string(out), "\n") {
+			if line == "" {
+				continue
+			}
+			fields := strings.Fields(line)
+			if len(fields) < 3 {
+				continue
+			}
+			added, _ := strconv.Atoi(fields[0])
+			deleted, _ := strconv.Atoi(fields[1])
+			if added == 0 && deleted == 0 && fields[0] == "-" && fields[1] == "-" {
+				continue
+			}
+			stats = append(stats, ChangeStat{
+				Path: fields[2], Added: added, Deleted: deleted,
+				Status: "modified", Staged: true,
+			})
+		}
+	}
+
+	// 3. Untracked and unmerged files via status --porcelain
 	statusCmd := command("git", "status", "--porcelain", "-uall")
 	statusCmd.Dir = f.projectDir
-	statusOut, statusErr := statusCmd.Output()
-	if statusErr == nil {
+	if statusOut, err := statusCmd.Output(); err == nil {
 		for _, line := range strings.Split(string(statusOut), "\n") {
 			if len(line) < 3 {
 				continue
 			}
-			if line[0:2] != "??" {
-				continue
-			}
+			xy := line[0:2]
 			filename := strings.TrimSpace(line[3:])
 			if idx := strings.Index(filename, " -> "); idx >= 0 {
 				filename = filename[idx+4:]
@@ -604,24 +622,92 @@ func (f *FileService) ListChangeStats() ([]ChangeStat, error) {
 			if filename == "" {
 				continue
 			}
-			// Skip directories (only count files)
+
+			// Skip directories
 			absPath := filepath.Join(f.projectDir, filename)
-			if info, err := os.Stat(absPath); err != nil || info.IsDir() {
+			if info, err2 := os.Stat(absPath); err2 != nil || info.IsDir() {
 				continue
 			}
-			// Count lines for new file
-			data, err := os.ReadFile(absPath)
-			total := 0
-			if err == nil {
-				total = len(strings.Split(string(data), "\n"))
+
+			// Handle unmerged (conflicts)
+			if xy[0] == 'U' || xy[1] == 'U' {
+				stats = append(stats, ChangeStat{
+					Path: filename, Added: 0, Deleted: 0,
+					Status: "unmerged", Staged: false,
+				})
+				continue
 			}
-			stats = append(stats, ChangeStat{
-				Path:    filename,
-				Added:   total,
-				Deleted: 0,
-			})
+
+			// Handle untracked
+			if xy == "??" {
+				data, err2 := os.ReadFile(absPath)
+				total := 0
+				if err2 == nil {
+					total = len(strings.Split(string(data), "\n"))
+				}
+				stats = append(stats, ChangeStat{
+					Path: filename, Added: total, Deleted: 0,
+					Status: "untracked", Staged: false,
+				})
+			}
 		}
 	}
 
 	return stats, nil
+}
+
+func (f *FileService) StageFiles(paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	args := []string{"add", "--"}
+	args = append(args, paths...)
+	cmd := command("git", args...)
+	cmd.Dir = f.projectDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to stage: %s. %s", err.Error(), strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func (f *FileService) UnstageFiles(paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	args := []string{"reset", "HEAD", "--"}
+	args = append(args, paths...)
+	cmd := command("git", args...)
+	cmd.Dir = f.projectDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to unstage: %s. %s", err.Error(), strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func (f *FileService) GetStagedDiff(filePath string) (DiffResult, error) {
+	stagedCmd := command("git", "show", ":"+filePath)
+	stagedCmd.Dir = f.projectDir
+	stagedOut, stagedErr := stagedCmd.Output()
+	stagedContent := ""
+	if stagedErr == nil {
+		stagedContent = string(stagedOut)
+	}
+
+	headCmd := command("git", "show", "HEAD:"+filePath)
+	headCmd.Dir = f.projectDir
+	headOut, headErr := headCmd.Output()
+	headContent := ""
+	if headErr == nil {
+		headContent = string(headOut)
+	}
+
+	lines := computeUnifiedDiff(filePath, headContent, stagedContent)
+	return DiffResult{
+		FilePath: filePath,
+		Lines:    lines,
+		Old:      headContent,
+		New:      stagedContent,
+	}, nil
 }

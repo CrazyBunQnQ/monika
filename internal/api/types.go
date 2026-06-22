@@ -109,10 +109,20 @@ type DiffResult struct {
 	Lines    []string `json:"lines"`
 }
 
+type CommitDetail struct {
+	Hash    string       `json:"hash"`
+	Author  string       `json:"author"`
+	Date    string       `json:"date"`
+	Message string       `json:"message"`
+	Files   []ChangeStat `json:"files"`
+}
+
 type ChangeStat struct {
 	Path    string `json:"path"`
 	Added   int    `json:"added"`
 	Deleted int    `json:"deleted"`
+	Status  string `json:"status"`
+	Staged  bool   `json:"staged"`
 }
 
 type CommitInfo struct {

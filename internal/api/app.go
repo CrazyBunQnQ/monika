@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1836,6 +1837,175 @@ func (a *App) ListBranches(projectPath string) ([]BranchInfo, error) {
 		}
 	}
 	return branches, nil
+}
+
+func (a *App) StageFiles(projectPath string, paths []string) error {
+	fs := a.getFileService(projectPath)
+	return fs.StageFiles(paths)
+}
+
+func (a *App) UnstageFiles(projectPath string, paths []string) error {
+	fs := a.getFileService(projectPath)
+	return fs.UnstageFiles(paths)
+}
+
+func (a *App) GetStagedFileDiff(projectPath, filePath string) (*DiffResult, error) {
+	fs := a.getFileService(projectPath)
+	dr, err := fs.GetStagedDiff(filePath)
+	if err != nil {
+		return nil, err
+	}
+	return &dr, nil
+}
+
+func (a *App) Commit(projectPath string, message string) error {
+	if strings.TrimSpace(message) == "" {
+		return fmt.Errorf("commit message must not be empty")
+	}
+	cmd := command("git", "commit", "-m", message)
+	cmd.Dir = projectPath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("commit failed: %s. %s", err.Error(), strings.TrimSpace(string(out)))
+	}
+	a.emitCommitHistoryChangedIfChanged()
+	return nil
+}
+
+func (a *App) CommitAndPush(projectPath string, message string) error {
+	if err := a.Commit(projectPath, message); err != nil {
+		return err
+	}
+	cmd := command("git", "push")
+	cmd.Dir = projectPath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("push failed (commit succeeded): %s. %s", err.Error(), strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func (a *App) GitShow(projectPath, hash string) (*CommitDetail, error) {
+	cmd := command("git", "show", "--numstat", "--pretty=format:%H%n%an%n%ar%n%s", "--no-color", hash)
+	cmd.Dir = projectPath
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git show failed: %s. %s", err.Error(), string(out))
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) < 4 {
+		return nil, fmt.Errorf("unexpected git show output")
+	}
+
+	detail := &CommitDetail{
+		Hash:    lines[0],
+		Author:  lines[1],
+		Date:    lines[2],
+		Message: lines[3],
+		Files:   make([]ChangeStat, 0),
+	}
+
+	for i := 4; i < len(lines); i++ {
+		line := lines[i]
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		added, _ := strconv.Atoi(fields[0])
+		deleted, _ := strconv.Atoi(fields[1])
+		path := fields[2]
+		if added == 0 && deleted == 0 && fields[0] == "-" && fields[1] == "-" {
+			continue
+		}
+		detail.Files = append(detail.Files, ChangeStat{
+			Path: path, Added: added, Deleted: deleted,
+		})
+	}
+
+	return detail, nil
+}
+
+func (a *App) GetCommitFileDiff(projectPath, hash, filePath string) (*DiffResult, error) {
+	oldCmd := command("git", "show", hash+"^:"+filePath)
+	oldCmd.Dir = projectPath
+	oldOut, oldErr := oldCmd.Output()
+	oldContent := ""
+	if oldErr == nil {
+		oldContent = string(oldOut)
+	}
+
+	newCmd := command("git", "show", hash+":"+filePath)
+	newCmd.Dir = projectPath
+	newOut, newErr := newCmd.Output()
+	newContent := ""
+	if newErr == nil {
+		newContent = string(newOut)
+	}
+
+	lines := computeUnifiedDiff(filePath, oldContent, newContent)
+	return &DiffResult{
+		FilePath: filePath,
+		Lines:    lines,
+		Old:      oldContent,
+		New:      newContent,
+	}, nil
+}
+
+func (a *App) CheckoutCommit(projectPath, hash string) error {
+	if files := hasUnmergedFiles(projectPath); len(files) > 0 {
+		return fmt.Errorf("UNMERGED_FILES:%s", strings.Join(files, ","))
+	}
+
+	stashed, err := autoStash(projectPath)
+	if err != nil {
+		return err
+	}
+
+	cmd := command("git", "checkout", hash)
+	cmd.Dir = projectPath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		if stashed {
+			_ = autoStashPop(projectPath)
+		}
+		return fmt.Errorf("checkout failed: %s. %s", err.Error(), strings.TrimSpace(string(out)))
+	}
+
+	a.setProjectBranch(projectPath, hash[:7])
+	if stashed {
+		_ = autoStashPop(projectPath)
+	}
+	return nil
+}
+
+func (a *App) CreateTag(projectPath, hash, tagName string) error {
+	if tagName == "" {
+		return fmt.Errorf("tag name must not be empty")
+	}
+	cmd := command("git", "tag", tagName, hash)
+	cmd.Dir = projectPath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to create tag: %s. %s", err.Error(), strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func (a *App) CreateBranchAt(projectPath, hash, branchName string) error {
+	if err := validateBranchName(branchName); err != nil {
+		return err
+	}
+	cmd := command("git", "branch", branchName, hash)
+	cmd.Dir = projectPath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to create branch: %s. %s", err.Error(), strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // GitLog returns recent git commits with graph topology for the given project.
