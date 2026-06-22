@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	_ "modernc.org/sqlite"
 )
@@ -124,13 +125,14 @@ func (s *KBStore) autoReindex(scope string) {
 // sanitizeFTSQuery 转义 FTS5 查询中的特殊字符。
 // FTS5 的 MATCH 操作符将 *, (), :, "", AND/OR/NOT 等视为语法元素。
 // 将每个词用双引号包裹，使其成为短语查询，避免语法错误。
+// 词间用 OR 连接，提升召回率（单词命中即可），由 bm25 排序保证精度。
 func sanitizeFTSQuery(query string) string {
 	words := strings.Fields(query)
 	for i, w := range words {
 		w = strings.ReplaceAll(w, `"`, `""`)
 		words[i] = `"` + w + `"`
 	}
-	return strings.Join(words, " ")
+	return strings.Join(words, " OR ")
 }
 
 func containsCJK(s string) bool {
@@ -236,7 +238,7 @@ func (s *KBStore) searchLike(query, scope string, limit int) ([]KBFile, error) {
 		       substr(f.content, 1, 200)
 		FROM file_index f
 		WHERE f.status != 'trash'
-		  AND (`+strings.Join(conditions, " AND ")+`)
+		  AND (`+strings.Join(conditions, " OR ")+`)
 		ORDER BY f.updated_at DESC
 		LIMIT ?
 	`, args...)
@@ -499,7 +501,7 @@ func titleToSlug(title string) string {
 	slug = strings.ReplaceAll(slug, " ", "-")
 	var c strings.Builder
 	for _, r := range slug {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' {
 			c.WriteRune(r)
 		}
 	}
