@@ -583,26 +583,76 @@ function HistoryTab({ active, effectivePath }: { active: boolean; effectivePath:
 }
 
 function CommitRow({ commit, onClick, onContextMenu }: { commit: CommitInfo; onClick: () => void; onContextMenu: (e: React.MouseEvent) => void }) {
+    const [hover, setHover] = useState(false)
+    const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 })
+    const rowRef = useRef<HTMLDivElement>(null)
+
+    const handleMouseEnter = () => {
+        if (rowRef.current) {
+            const rect = rowRef.current.getBoundingClientRect()
+            setTooltipPos({ x: rect.left + 8, y: rect.bottom + 4 })
+        }
+        setHover(true)
+    }
+
     return (
-        <div
-            className="flex items-center gap-1 text-[12px] leading-[22px] rounded-md transition-colors duration-150 px-1 cursor-pointer hover:bg-[var(--bg-hover)]"
-            style={{ fontFamily: 'var(--font-sans)', color: 'var(--text-secondary)' }}
-            onClick={onClick}
-            onContextMenu={onContextMenu}
-        >
-            <span className="flex-shrink-0 select-none" style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-dim)', whiteSpace: 'pre', lineHeight: '22px', fontSize: '11px' }}>
-                {commit.graph_line}
-            </span>
-            <span className="flex-shrink-0" style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)', fontSize: '11px', width: '8ch' }}>
-                {commit.hash.slice(0, 7)}
-            </span>
-            {commit.refs && <RefTags refs={commit.refs} />}
-            <span className="truncate flex-1 min-w-0" style={{ color: 'var(--text-primary)' }}>{commit.message}</span>
-            <span className="flex-shrink-0 flex items-center" style={{ color: 'var(--text-dim)', fontSize: '11px', width: '25ch' }}>
-                <span>{commit.author}</span>
-                <span className="ml-auto">{commit.date}</span>
-            </span>
-        </div>
+        <>
+            <div
+                ref={rowRef}
+                className="flex items-center gap-1 text-[12px] leading-[22px] rounded-md transition-colors duration-150 px-1 cursor-pointer hover:bg-[var(--bg-hover)]"
+                style={{ fontFamily: 'var(--font-sans)', color: 'var(--text-secondary)' }}
+                onClick={onClick}
+                onContextMenu={onContextMenu}
+                onMouseEnter={handleMouseEnter}
+                onMouseLeave={() => setHover(false)}
+            >
+                <span className="flex-shrink-0 select-none" style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-dim)', whiteSpace: 'pre', lineHeight: '22px', fontSize: '11px' }}>
+                    {commit.graph_line}
+                </span>
+                <span className="flex-shrink-0" style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)', fontSize: '11px', width: '8ch' }}>
+                    {commit.hash.slice(0, 7)}
+                </span>
+                {commit.refs && <RefTags refs={commit.refs} />}
+                <span className="truncate flex-1 min-w-0" style={{ color: 'var(--text-primary)' }}>{commit.message}</span>
+                <span className="flex-shrink-0 flex items-center" style={{ color: 'var(--text-dim)', fontSize: '11px', width: '25ch' }}>
+                    <span>{commit.author}</span>
+                    <span className="ml-auto">{commit.date}</span>
+                </span>
+            </div>
+            {hover && createPortal(
+                <div
+                    className="fixed"
+                    style={{
+                        left: tooltipPos.x,
+                        top: tooltipPos.y,
+                        zIndex: 1500,
+                        background: 'var(--bg-elevated)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 'var(--radius-md)',
+                        padding: '8px 12px',
+                        maxWidth: '480px',
+                        boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+                        fontSize: '12px',
+                        fontFamily: 'var(--font-sans)',
+                        pointerEvents: 'none',
+                    }}
+                >
+                    <div className="flex items-center gap-2 mb-1">
+                        <span style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)', fontSize: '11px' }}>{commit.hash.slice(0, 7)}</span>
+                        {commit.refs && <span style={{ color: 'var(--text-dim)', fontSize: '11px' }}>{commit.refs}</span>}
+                    </div>
+                    <div style={{ color: 'var(--text-primary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: '1.5' }}>
+                        {commit.message}
+                    </div>
+                    <div className="flex items-center gap-2 mt-1" style={{ color: 'var(--text-dim)', fontSize: '11px' }}>
+                        <span>{commit.author}</span>
+                        <span>·</span>
+                        <span>{commit.date}</span>
+                    </div>
+                </div>,
+                document.body
+            )}
+        </>
     )
 }
 
