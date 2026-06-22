@@ -606,17 +606,15 @@ function CommitRow({ commit, onClick, onContextMenu }: { commit: CommitInfo; onC
                 onMouseEnter={handleMouseEnter}
                 onMouseLeave={() => setHover(false)}
             >
-                <span className="flex-shrink-0 select-none" style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-dim)', whiteSpace: 'pre', lineHeight: '22px', fontSize: '11px' }}>
-                    {commit.graph_line}
-                </span>
-                <span className="flex-shrink-0" style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)', fontSize: '11px', width: '8ch' }}>
+                <GraphLine line={commit.graph_line} />
+                <span className="flex-shrink-0" style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)', fontSize: '11px', width: '7ch' }}>
                     {commit.hash.slice(0, 7)}
                 </span>
                 {commit.refs && <RefTags refs={commit.refs} />}
                 <span className="truncate flex-1 min-w-0" style={{ color: 'var(--text-primary)' }}>{commit.message}</span>
-                <span className="flex-shrink-0 flex items-center" style={{ color: 'var(--text-dim)', fontSize: '11px', width: '25ch' }}>
-                    <span>{commit.author}</span>
-                    <span className="ml-auto">{commit.date}</span>
+                <span className="flex-shrink-0 flex items-center gap-1.5" style={{ color: 'var(--text-dim)', fontSize: '11px', width: '22ch' }}>
+                    <span className="truncate" style={{ minWidth: 0 }}>{commit.author}</span>
+                    <span className="flex-shrink-0">{commit.date}</span>
                 </span>
             </div>
             {hover && createPortal(
@@ -754,5 +752,37 @@ function InputModal({ config, onCancel }: { config: { title: string; label: stri
                 </ModalButton>
             </ModalFooter>
         </Modal>
+    )
+}
+
+const GRAPH_COLORS = [
+    '#e06c75', '#61afef', '#98c379', '#e5c07b',
+    '#c678dd', '#56b6c2', '#d19a66', '#be5046',
+    '#61d4d4', '#a0e060', '#e0a060', '#80a0ff',
+]
+
+function GraphLine({ line }: { line: string }) {
+    const chars = line.split('')
+    return (
+        <span className="flex-shrink-0 select-none inline-flex" style={{ fontFamily: 'var(--font-mono)', lineHeight: '22px', fontSize: '11px' }}>
+            {chars.map((ch, i) => {
+                const lane = Math.floor(i / 2)
+                const color = GRAPH_COLORS[lane % GRAPH_COLORS.length]
+                let display = ch
+                switch (ch) {
+                    case '*': display = '●'; break
+                    case '|': display = '│'; break
+                    case '/': display = '╱'; break
+                    case '\\': display = '╲'; break
+                    default: display = ch
+                }
+                const isGraph = ch === '*' || ch === '|' || ch === '/' || ch === '\\'
+                return (
+                    <span key={i} style={{ color: isGraph ? color : undefined, width: '0.6em', textAlign: 'center' }}>
+                        {display}
+                    </span>
+                )
+            })}
+        </span>
     )
 }
