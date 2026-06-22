@@ -1,5 +1,5 @@
 export { App } from "./internal/api/index.js";
-export { BranchInfo, ChangeStat, CommitInfo, DiffResult, FileChange, FileChangeEvent, FileContent, FileNode, ProjectInfo, ProviderInfo, RecentProject, Session, SessionInfo, StreamEvent, WorktreeInfo } from "./internal/api/models.js";
+export { BranchInfo, ChangeStat, CommitDetail, CommitInfo, DiffResult, FileChange, FileChangeEvent, FileContent, FileNode, ProjectInfo, ProviderInfo, RecentProject, Session, SessionInfo, StreamEvent, WorktreeInfo } from "./internal/api/models.js";
 export { Model as ModelInfo } from "./pkg/engine/models.js";
 export { ChatMessage, Model, SkillMeta, ToolCall, ToolCallFunc } from "./pkg/engine/models.js";
 export { ChildSession, CompactionEvent, TaskItem, ToolEvent, UsageEvent } from "./internal/agent/models.js";
