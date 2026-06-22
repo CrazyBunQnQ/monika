@@ -2008,6 +2008,63 @@ func (a *App) CreateBranchAt(projectPath, hash, branchName string) error {
 	return nil
 }
 
+// RevertCommit creates a new commit that reverses the specified commit.
+func (a *App) RevertCommit(projectPath, hash string) error {
+	cmd := command("git", "revert", "--no-edit", hash)
+	cmd.Dir = projectPath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("revert failed: %s. %s", err.Error(), strings.TrimSpace(string(out)))
+	}
+	a.emitCommitHistoryChangedIfChanged()
+	return nil
+}
+
+// CherryPickCommit applies the changes from the specified commit onto the current branch.
+func (a *App) CherryPickCommit(projectPath, hash string) error {
+	cmd := command("git", "cherry-pick", hash)
+	cmd.Dir = projectPath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("cherry-pick failed: %s. %s", err.Error(), strings.TrimSpace(string(out)))
+	}
+	a.emitCommitHistoryChangedIfChanged()
+	return nil
+}
+
+// ResetToCommit resets the current branch to the specified commit.
+// mode must be "soft", "mixed", or "hard".
+func (a *App) ResetToCommit(projectPath, hash, mode string) error {
+	switch mode {
+	case "soft", "mixed", "hard":
+	default:
+		return fmt.Errorf("invalid reset mode: %s (use soft, mixed, or hard)", mode)
+	}
+	cmd := command("git", "reset", "--"+mode, hash)
+	cmd.Dir = projectPath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("reset failed: %s. %s", err.Error(), strings.TrimSpace(string(out)))
+	}
+	a.emitCommitHistoryChangedIfChanged()
+	return nil
+}
+
+// AmendMessage amends the HEAD commit's message.
+func (a *App) AmendMessage(projectPath, message string) error {
+	if strings.TrimSpace(message) == "" {
+		return fmt.Errorf("commit message must not be empty")
+	}
+	cmd := command("git", "commit", "--amend", "-m", message)
+	cmd.Dir = projectPath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("amend failed: %s. %s", err.Error(), strings.TrimSpace(string(out)))
+	}
+	a.emitCommitHistoryChangedIfChanged()
+	return nil
+}
+
 // GitLog returns recent git commits with graph topology for the given project.
 // It executes git log --graph --all with structured output, parsing each line
 // into graph prefix, hash, author, date, message, and ref decorations.
