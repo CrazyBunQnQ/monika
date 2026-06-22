@@ -1378,6 +1378,7 @@ export const useStore = create<AppState>((set, get) => ({
         if (!projectPath) return
         try {
             const detail = await App.GitShow(projectPath, hash)
+            if (!detail) return
             set({
                 preview: {
                     mode: 'commit',
@@ -1403,6 +1404,7 @@ export const useStore = create<AppState>((set, get) => ({
         if (!projectPath || !preview.commitHash) return
         try {
             const result = await App.GetCommitFileDiff(projectPath, preview.commitHash, filePath)
+            if (!result) return
             set({
                 preview: {
                     ...preview,
