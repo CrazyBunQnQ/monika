@@ -4,7 +4,7 @@ import { IDockviewPanelProps } from 'dockview'
 import { App as MonikaApp } from '../../../bindings/monika'
 import type { ChangeStat, CommitInfo } from '../../../bindings/monika'
 import { useStore } from '../../store'
-import { GitBranch, GitCommitHorizontal, Copy, Clipboard, Tag, GitPullRequestArrow, RotateCcw, UndoDot, Pencil, Eye } from 'lucide-react'
+import { GitBranch, GitCommitHorizontal, Copy, Clipboard, Tag, GitPullRequestArrow, RotateCcw, UndoDot, Pencil, Eye, Circle, CircleCheck } from 'lucide-react'
 import ConfirmModal from '../Chat/ConfirmModal'
 import Modal, { ModalHeader, ModalBody, ModalFooter, ModalButton } from '../ui/Modal'
 
@@ -232,13 +232,14 @@ function ChangesTab({ effectivePath }: { effectivePath: string }) {
                                 style={{ color: 'var(--text-secondary)', background: selected ? 'var(--bg-active)' : 'transparent' }}
                                 onDoubleClick={() => { stageFiles([stat.path]); }}
                             >
-                                <input
-                                    type="checkbox"
-                                    checked={selected}
-                                    onChange={() => toggleUnstaged(stat.path)}
-                                    onClick={(e) => e.stopPropagation()}
-                                    style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
-                                />
+                                <span
+                                    onClick={(e) => { e.stopPropagation(); toggleUnstaged(stat.path) }}
+                                    style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', flexShrink: 0 }}
+                                >
+                                    {selected
+                                        ? <CircleCheck size={14} style={{ color: 'var(--accent)' }} strokeWidth={1.5} />
+                                        : <Circle size={14} style={{ color: 'var(--text-dim)' }} strokeWidth={1.5} />}
+                                </span>
                                 <span className="truncate flex-1" onClick={() => handleFileClick(stat)} title={stat.path}>
                                     {basenameFn(stat.path)}
                                 </span>
@@ -273,13 +274,14 @@ function ChangesTab({ effectivePath }: { effectivePath: string }) {
                                 style={{ color: 'var(--text-secondary)', background: selected ? 'var(--bg-active)' : 'transparent' }}
                                 onDoubleClick={() => { unstageFiles([stat.path]); }}
                             >
-                                <input
-                                    type="checkbox"
-                                    checked={selected}
-                                    onChange={() => toggleStaged(stat.path)}
-                                    onClick={(e) => e.stopPropagation()}
-                                    style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
-                                />
+                                <span
+                                    onClick={(e) => { e.stopPropagation(); toggleStaged(stat.path) }}
+                                    style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', flexShrink: 0 }}
+                                >
+                                    {selected
+                                        ? <CircleCheck size={14} style={{ color: 'var(--accent)' }} strokeWidth={1.5} />
+                                        : <Circle size={14} style={{ color: 'var(--text-dim)' }} strokeWidth={1.5} />}
+                                </span>
                                 <span className="truncate flex-1" onClick={() => handleFileClick(stat)} title={stat.path}>
                                     {basenameFn(stat.path)}
                                 </span>
