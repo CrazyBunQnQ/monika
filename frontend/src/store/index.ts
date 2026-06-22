@@ -3,7 +3,7 @@ import { create } from 'zustand'
 import { useNotificationStore, setMainWindowVisible } from './notificationStore'
 import { Events, Call } from '@wailsio/runtime'
 import { App, StreamEvent } from '../../bindings/monika'
-import type { RecentProject, BranchInfo, ModelInfo, ProviderInfo, ChangeStat, SessionInfo, CommitInfo } from '../../bindings/monika'
+import type { RecentProject, BranchInfo, ModelInfo, ProviderInfo, ChangeStat, SessionInfo, CommitInfo, CommitDetail } from '../../bindings/monika'
 import type { DockviewApi } from 'dockview'
 import { lspService, LspDiagnostic, LspSymbol } from '../lib/lspService'
 
@@ -94,13 +94,16 @@ interface SessionTabInfo {
 }
 
 interface PreviewState {
-    mode: 'file' | 'diff' | 'task' | null
+    mode: 'file' | 'diff' | 'task' | 'commit' | null
     filePath: string | null
     fileName: string | null
     fileContent: string | null
     diffLines: string[] | null
     conflictAiContent?: string | null
     conflictActive?: boolean
+    commitDetail?: CommitDetail | null
+    commitFiles?: ChangeStat[] | null
+    commitHash?: string | null
 }
 
 export interface AgentInfo {
@@ -191,6 +194,7 @@ interface AppState {
     todoCollapsed: Record<string, boolean>
     changeStats: { stats: ChangeStat[]; loading: boolean; error: string }
     commitHistory: { commits: CommitInfo[]; loading: boolean; error: string }
+    feedback: { message: string; type: 'info' | 'error' | 'success' }
     recentProjects: RecentProject[]
     allBranches: BranchInfo[]
     availableProviders: ProviderInfo[]
@@ -299,6 +303,13 @@ interface AppState {
     loadModelsForProvider: (providerId: string) => Promise<void>
     setChangeStats: (st: Partial<{ stats: ChangeStat[]; loading: boolean; error: string }>) => void
     loadCommitHistory: (path?: string) => void
+    loadChangeStats: () => Promise<void>
+    stageFiles: (paths: string[]) => Promise<void>
+    unstageFiles: (paths: string[]) => Promise<void>
+    commitChanges: (message: string, push: boolean) => Promise<void>
+    setPreviewCommit: (hash: string) => Promise<void>
+    setCommitFileDiff: (filePath: string) => Promise<void>
+    clearFeedback: () => void
     respondPermission: (resp: { requestId: string; decision: string; rulePattern?: string }) => Promise<void>
     respondAskUser: (resp: { requestId: string; answer: string }) => Promise<void>
     loadPermissionRules: () => Promise<void>
@@ -372,7 +383,7 @@ export const useStore = create<AppState>((set, get) => ({
     memoryStatus: null,
     sessionParents: {},
     subagentStack: {},
-    preview: { mode: null, filePath: null, fileName: null, fileContent: null, diffLines: null, conflictAiContent: null, conflictActive: false },
+    preview: { mode: null, filePath: null, fileName: null, fileContent: null, diffLines: null, conflictAiContent: null, conflictActive: false, commitDetail: null, commitFiles: null, commitHash: null },
     dirtyFiles: new Set<string>(),
 
     fileTreeActiveTab: 'files' as 'files' | 'tasks' | 'debug',
@@ -390,6 +401,7 @@ export const useStore = create<AppState>((set, get) => ({
     todoCollapsed: {},
     changeStats: { stats: [], loading: false, error: '' },
     commitHistory: { commits: [], loading: false, error: '' },
+    feedback: { message: '', type: 'info' },
     recentProjects: [],
     allBranches: [],
     availableProviders: [],
@@ -706,7 +718,7 @@ export const useStore = create<AppState>((set, get) => ({
         set((state) => ({
             sessionWorktrees: { ...state.sessionWorktrees, [sessionId]: path },
         })),
-    selectBgTask: (id) => set({ selectedBgTaskId: id, preview: { mode: 'task', filePath: null, fileName: null, fileContent: null, diffLines: null, conflictAiContent: null, conflictActive: false } }),
+    selectBgTask: (id) => set({ selectedBgTaskId: id, preview: { mode: 'task', filePath: null, fileName: null, fileContent: null, diffLines: null, conflictAiContent: null, conflictActive: false, commitDetail: null, commitFiles: null, commitHash: null } }),
     updateBgTask: (info) => set((state) => {
         const idx = state.bgTasks.findIndex(t => t.id === info.id)
         if (idx >= 0) {
@@ -1168,8 +1180,13 @@ export const useStore = create<AppState>((set, get) => ({
     },
 
     clearPreview: () => {
-        set({ preview: { mode: null, filePath: null, fileName: null, fileContent: null, diffLines: null, conflictAiContent: null, conflictActive: false } })
-        set({ preview: { mode: null, filePath: null, fileName: null, fileContent: null, diffLines: null } })
+        set({
+            preview: {
+                mode: null, filePath: null, fileName: null, fileContent: null,
+                diffLines: null, conflictAiContent: null, conflictActive: false,
+                commitDetail: null, commitFiles: null, commitHash: null,
+            },
+        })
     },
 
     setPreview: (preview) => set((s) => ({ preview: { ...s.preview, ...preview } })),
@@ -1302,6 +1319,104 @@ export const useStore = create<AppState>((set, get) => ({
             set((s) => ({ commitHistory: { commits: s.commitHistory.commits, loading: false, error: 'Failed to load history' } }))
         }
     },
+
+    loadChangeStats: async () => {
+        const { projectPath } = get()
+        if (!projectPath) return
+        set((s) => ({ changeStats: { ...s.changeStats, loading: true, error: '' } }))
+        try {
+            const stats = await App.ListChangeStats(projectPath)
+            set({ changeStats: { stats: Array.isArray(stats) ? stats : [], loading: false, error: '' } })
+        } catch {
+            set((s) => ({ changeStats: { ...s.changeStats, loading: false, error: 'Failed to load changes' } }))
+        }
+    },
+
+    stageFiles: async (paths) => {
+        const { projectPath } = get()
+        if (!projectPath) return
+        try {
+            await App.StageFiles(projectPath, paths)
+            await get().loadChangeStats()
+            set({ feedback: { message: `${paths.length} file(s) staged`, type: 'success' } })
+        } catch (err: any) {
+            set({ feedback: { message: err?.message || 'Failed to stage', type: 'error' } })
+        }
+    },
+
+    unstageFiles: async (paths) => {
+        const { projectPath } = get()
+        if (!projectPath) return
+        try {
+            await App.UnstageFiles(projectPath, paths)
+            await get().loadChangeStats()
+            set({ feedback: { message: `${paths.length} file(s) unstaged`, type: 'success' } })
+        } catch (err: any) {
+            set({ feedback: { message: err?.message || 'Failed to unstage', type: 'error' } })
+        }
+    },
+
+    commitChanges: async (message, push) => {
+        const { projectPath } = get()
+        if (!projectPath) return
+        try {
+            if (push) {
+                await App.CommitAndPush(projectPath, message)
+            } else {
+                await App.Commit(projectPath, message)
+            }
+            await get().loadChangeStats()
+            get().loadCommitHistory()
+            set({ feedback: { message: push ? 'Committed & pushed' : 'Committed', type: 'success' } })
+        } catch (err: any) {
+            set({ feedback: { message: err?.message || 'Commit failed', type: 'error' } })
+        }
+    },
+
+    setPreviewCommit: async (hash) => {
+        const { projectPath } = get()
+        if (!projectPath) return
+        try {
+            const detail = await App.GitShow(projectPath, hash)
+            set({
+                preview: {
+                    mode: 'commit',
+                    filePath: null,
+                    fileName: detail.message,
+                    fileContent: null,
+                    diffLines: null,
+                    commitDetail: detail,
+                    commitFiles: detail.files || [],
+                    commitHash: hash,
+                    conflictAiContent: null,
+                    conflictActive: false,
+                },
+                selectedBgTaskId: null,
+            })
+        } catch {
+            set({ feedback: { message: 'Failed to load commit details', type: 'error' } })
+        }
+    },
+
+    setCommitFileDiff: async (filePath) => {
+        const { projectPath, preview } = get()
+        if (!projectPath || !preview.commitHash) return
+        try {
+            const result = await App.GetCommitFileDiff(projectPath, preview.commitHash, filePath)
+            set({
+                preview: {
+                    ...preview,
+                    filePath: filePath,
+                    fileName: filePath.split('/').pop() || filePath,
+                    diffLines: result.lines || [],
+                },
+            })
+        } catch {
+            set({ feedback: { message: 'Failed to load file diff', type: 'error' } })
+        }
+    },
+
+    clearFeedback: () => set({ feedback: { message: '', type: 'info' } }),
     respondPermission: async (resp) => {
         await Call.ByName('monika/internal/api.App.RespondPermission', resp)
         set({ pendingPermission: null })
@@ -1573,7 +1688,7 @@ export const useStore = create<AppState>((set, get) => ({
             activeSessionId: '',
             sessionParents: {},
             subagentStack: {},
-            preview: { mode: null, filePath: null, fileName: null, fileContent: null, diffLines: null },
+            preview: { mode: null, filePath: null, fileName: null, fileContent: null, diffLines: null, commitDetail: null, commitFiles: null, commitHash: null },
 
 
             openSessions: [],

@@ -605,6 +605,10 @@ function FilePreviewHeader({ fileName, filePath, lineCount, truncated }: {
 
 function PreviewPanel(props: IDockviewPanelProps) {
     const preview = useStore((s) => s.preview)
+    const commitDetail = useStore((s) => s.preview.commitDetail)
+    const commitFiles = useStore((s) => s.preview.commitFiles)
+    const commitHash = useStore((s) => s.preview.commitHash)
+    const setCommitFileDiff = useStore((s) => s.setCommitFileDiff)
     const dirtyFiles = useStore((s) => s.dirtyFiles)
     const isDirtyPanel = !!(preview.filePath && dirtyFiles.has(preview.filePath))
 
@@ -618,6 +622,7 @@ function PreviewPanel(props: IDockviewPanelProps) {
     const monacoEditorRef = useRef<monacoType.editor.IStandaloneCodeEditor | null>(null)
     const headerRef = useRef<HTMLDivElement>(null)
     const [maximized, setMaximized] = useState(false)
+    const [selectedCommitFile, setSelectedCommitFile] = useState<string | null>(null)
     const saveTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
     const prevFilePathRef = useRef<string | null>(null)
     const diagTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
@@ -725,6 +730,7 @@ function PreviewPanel(props: IDockviewPanelProps) {
     const showFile = preview.mode === 'file' && preview.fileContent && !showBinary
     const showDiff = preview.mode === 'diff' && preview.diffLines
     const showEmpty = preview.mode === null
+    const showCommit = preview.mode === 'commit' && !!commitFiles
     const isMarkdown = /\.(md|mdx|markdown)$/i.test(preview.filePath || '')
     const showMarkdownPreview = showFile && isMarkdown && mdPreviewMode
 
@@ -1808,6 +1814,65 @@ function PreviewPanel(props: IDockviewPanelProps) {
             {
                 showDiff && (
                     <DiffView lines={preview.diffLines!} fileName={preview.fileName || ''} conflictActive={preview.conflictActive} conflictAiContent={preview.conflictAiContent} />
+                )
+            }
+            {
+                showCommit && commitFiles && commitDetail && (
+                    <div className="flex flex-col flex-1 overflow-hidden">
+                        <div
+                            className="flex items-center gap-2 px-3 py-2 shrink-0 border-b border-[var(--border)]"
+                            style={{ background: 'var(--bg-sidebar)' }}
+                        >
+                            <span className="font-mono text-[12px]" style={{ color: 'var(--accent)' }}>
+                                {commitHash?.slice(0, 7)}
+                            </span>
+                            <span className="flex-1 text-[13px] font-medium truncate" style={{ color: 'var(--text-primary)' }}>
+                                {commitDetail.message}
+                            </span>
+                            <span className="text-[11px]" style={{ color: 'var(--text-dim)' }}>
+                                {commitDetail.author} · {commitDetail.date}
+                            </span>
+                        </div>
+                        <div className="flex-1 flex overflow-hidden">
+                            <div
+                                className="flex-shrink-0 overflow-y-auto border-r border-[var(--border)]"
+                                style={{ width: '200px', background: 'var(--bg-sidebar)' }}
+                            >
+                                <div className="px-2 pt-2 pb-1 text-[11px] text-[var(--text-dim)]" style={{ fontFamily: 'var(--font-sans)' }}>
+                                    {commitFiles.length} file{commitFiles.length !== 1 ? 's' : ''} changed
+                                </div>
+                                {commitFiles.map((f: any) => (
+                                    <div
+                                        key={f.path}
+                                        className="flex items-center gap-1 px-2 py-1 cursor-pointer text-[12px] leading-[20px] truncate"
+                                        style={{
+                                            color: selectedCommitFile === f.path ? 'var(--text-primary)' : 'var(--text-secondary)',
+                                            background: selectedCommitFile === f.path ? 'var(--bg-active)' : 'transparent',
+                                        }}
+                                        onMouseEnter={(e) => { if (selectedCommitFile !== f.path) e.currentTarget.style.background = 'var(--bg-hover)' }}
+                                        onMouseLeave={(e) => { if (selectedCommitFile !== f.path) e.currentTarget.style.background = 'transparent' }}
+                                        onClick={() => {
+                                            setSelectedCommitFile(f.path)
+                                            setCommitFileDiff(f.path)
+                                        }}
+                                    >
+                                        <span className="truncate flex-1">{f.path.split('/').pop()}</span>
+                                        {f.added > 0 && <span className="text-[10px] flex-shrink-0" style={{ color: 'var(--green)' }}>+{f.added}</span>}
+                                        {f.deleted > 0 && <span className="text-[10px] flex-shrink-0" style={{ color: 'var(--red)' }}>-{f.deleted}</span>}
+                                    </div>
+                                ))}
+                            </div>
+                            <div className="flex-1 flex flex-col overflow-hidden">
+                                {preview.diffLines ? (
+                                    <DiffView lines={preview.diffLines} fileName={preview.fileName || ''} conflictActive={false} />
+                                ) : (
+                                    <div className="flex-1 flex items-center justify-center">
+                                        <div className="text-[13px] text-[var(--text-dim)] select-none">Select a file to view diff</div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
                 )
             }
             {
