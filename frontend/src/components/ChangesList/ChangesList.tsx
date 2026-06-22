@@ -5,6 +5,7 @@ import { App as MonikaApp } from '../../../bindings/monika'
 import type { ChangeStat, CommitInfo } from '../../../bindings/monika'
 import { useStore } from '../../store'
 import { GitBranch } from 'lucide-react'
+import ConfirmModal from '../Chat/ConfirmModal'
 
 function useEffectiveChangesPath() {
     const projectPath = useStore((s) => s.projectPath)
@@ -344,6 +345,10 @@ function HistoryTab({ active, effectivePath }: { active: boolean; effectivePath:
     const [contextMenu, setContextMenu] = useState<{ x: number; y: number; commit: CommitInfo } | null>(null)
     const menuRef = useRef<HTMLDivElement>(null)
     const menuJustOpened = useRef(false)
+    const [confirmModal, setConfirmModal] = useState<{
+        title: string; message: string; confirmLabel: string; variant: 'danger' | 'primary';
+        onConfirm: () => Promise<void>;
+    } | null>(null)
 
     useEffect(() => {
         if (!active) return
@@ -407,6 +412,66 @@ function HistoryTab({ active, effectivePath }: { active: boolean; effectivePath:
         } catch { /* ignore */ }
     }
 
+    const handleRevertCommit = (c: CommitInfo) => {
+        setContextMenu(null)
+        setConfirmModal({
+            title: `Revert ${c.hash.slice(0, 7)}?`,
+            message: `This will create a new commit that reverses "${c.message}".`,
+            confirmLabel: 'Revert',
+            variant: 'danger',
+            onConfirm: async () => {
+                await MonikaApp.RevertCommit(effectivePath, c.hash)
+                loadCommitHistory()
+                setConfirmModal(null)
+            },
+        })
+    }
+
+    const handleCherryPick = (c: CommitInfo) => {
+        setContextMenu(null)
+        setConfirmModal({
+            title: 'Cherry-pick Commit?',
+            message: `Apply "${c.hash.slice(0, 7)}: ${c.message}" to the current branch.`,
+            confirmLabel: 'Cherry-pick',
+            variant: 'primary',
+            onConfirm: async () => {
+                await MonikaApp.CherryPickCommit(effectivePath, c.hash)
+                loadCommitHistory()
+                setConfirmModal(null)
+            },
+        })
+    }
+
+    const handleReset = (c: CommitInfo, mode: 'soft' | 'mixed' | 'hard') => {
+        setContextMenu(null)
+        const descriptions: Record<string, string> = {
+            soft: 'HEAD only — staged changes are kept.',
+            mixed: 'HEAD + index — unstaged changes are kept (default).',
+            hard: 'ALL changes will be permanently discarded.',
+        }
+        setConfirmModal({
+            title: `Reset to ${c.hash.slice(0, 7)} (${mode})?`,
+            message: descriptions[mode] + (mode === 'hard' ? ' This cannot be undone.' : ''),
+            confirmLabel: `Reset ${mode}`,
+            variant: mode === 'hard' ? 'danger' : 'primary',
+            onConfirm: async () => {
+                await MonikaApp.ResetToCommit(effectivePath, c.hash, mode)
+                loadCommitHistory()
+                setConfirmModal(null)
+            },
+        })
+    }
+
+    const handleAmendMessage = async (c: CommitInfo) => {
+        setContextMenu(null)
+        const newMsg = prompt('New commit message:', c.message)
+        if (!newMsg) return
+        try {
+            await MonikaApp.AmendMessage(effectivePath, newMsg)
+            loadCommitHistory()
+        } catch { /* ignore */ }
+    }
+
     const renderContextMenu = () => {
         if (!contextMenu) return null
         const c = contextMenu.commit
@@ -430,6 +495,19 @@ function HistoryTab({ active, effectivePath }: { active: boolean; effectivePath:
                 <ContextMenuItem label="Checkout Commit..." onClick={() => handleCheckoutCommit(c)} />
                 <ContextMenuItem label="Create Tag..." onClick={() => handleCreateTag(c)} />
                 <ContextMenuItem label="Create Branch at Commit..." onClick={() => handleCreateBranch(c)} />
+                <ContextMenuDivider />
+                <ContextMenuItem label="Revert Commit" onClick={() => handleRevertCommit(c)} />
+                <ContextMenuItem label="Cherry-pick Commit" onClick={() => handleCherryPick(c)} />
+                <ContextMenuDivider />
+                <ContextMenuItem label="Reset to Commit (Soft)" onClick={() => handleReset(c, 'soft')} />
+                <ContextMenuItem label="Reset to Commit (Mixed)" onClick={() => handleReset(c, 'mixed')} />
+                <ContextMenuItem variant="danger" label="Reset to Commit (Hard)" onClick={() => handleReset(c, 'hard')} />
+                {c.hash === commitHistory.commits[0]?.hash && (
+                    <>
+                        <ContextMenuDivider />
+                        <ContextMenuItem label="Amend Message..." onClick={() => handleAmendMessage(c)} />
+                    </>
+                )}
             </div>,
             document.body
         )
@@ -457,6 +535,16 @@ function HistoryTab({ active, effectivePath }: { active: boolean; effectivePath:
                 ))}
             </div>
             {renderContextMenu()}
+            {confirmModal && (
+                <ConfirmModal
+                    title={confirmModal.title}
+                    message={confirmModal.message}
+                    confirmLabel={confirmModal.confirmLabel}
+                    variant={confirmModal.variant}
+                    onConfirm={confirmModal.onConfirm}
+                    onCancel={() => setConfirmModal(null)}
+                />
+            )}
         </>
     )
 }
