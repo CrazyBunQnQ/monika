@@ -697,18 +697,16 @@ func parseFMLinks(content string) []string {
 
 func extractMDBody(content string) string {
 	lines := strings.Split(content, "\n")
-	var body []string
-	pastFM := false
-	for _, line := range lines {
-		if !pastFM && (strings.HasPrefix(line, "> ") || strings.HasPrefix(line, "# ")) {
-			if strings.HasPrefix(line, "# ") && len(body) > 0 {
-				pastFM = true
-				body = append(body, line)
-			}
-			continue
-		}
-		pastFM = true
-		body = append(body, line)
+	i := 0
+	if i < len(lines) && strings.HasPrefix(lines[i], "# ") {
+		i++
 	}
-	return strings.Join(body, "\n")
+	for i < len(lines) {
+		if lines[i] == "" || strings.HasPrefix(lines[i], "> ") {
+			i++
+		} else {
+			break
+		}
+	}
+	return strings.Join(lines[i:], "\n")
 }

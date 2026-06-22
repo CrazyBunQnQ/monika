@@ -163,8 +163,8 @@ function KnowledgeBaseTab() {
             {/* Header */}
             <div className="flex items-center justify-between mb-4">
                 <div>
-                    <h3 className="text-[15px] font-semibold m-0 mb-1">Knowledge Base</h3>
-                    <p className="text-[11px] text-[var(--text-dim)] m-0">Browse, search and manage stored knowledge</p>
+                    <h3 className="text-[15px] font-semibold m-0 mb-1">Memory</h3>
+                    <p className="text-[11px] text-[var(--text-dim)] m-0">Browse, search and manage stored memories</p>
                 </div>
                 <div className="inline-flex rounded-md border border-[var(--border)] overflow-hidden">
                     {(['project', 'global'] as const).map((s) => (
@@ -194,7 +194,7 @@ function KnowledgeBaseTab() {
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
                             onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-                            placeholder="Search knowledge base..."
+                            placeholder="Search memory..."
                             className="w-full pl-8 pr-3 py-2 text-[12px] rounded-md border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-primary)] placeholder-[var(--text-dim)] focus:outline-none focus:border-[var(--border-strong)] form-input-glow transition-colors duration-150"
                         />
                     </div>
@@ -229,7 +229,7 @@ function KnowledgeBaseTab() {
                                 <th className="text-left px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-[var(--text-dim)]">Title</th>
                                 <th className="text-left px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-[var(--text-dim)] w-[90px]">Category</th>
                                 <th className="text-left px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-[var(--text-dim)] w-[70px]">Confidence</th>
-                                <th className="text-left px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-[var(--text-dim)] w-[80px]">Updated</th>
+                                <th className="text-left px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-[var(--text-dim)] w-[120px]">Updated</th>
                                 <th className="text-center px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-[var(--text-dim)] w-[50px]">Status</th>
                                 <th className="text-right px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-[var(--text-dim)] w-[60px]">Action</th>
                             </tr>
