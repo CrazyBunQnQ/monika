@@ -74,6 +74,7 @@ func (b *BridgeManager) startLocked(ctx context.Context) error {
 	b.scriptPath = script
 
 	b.cmd = exec.CommandContext(ctx, bin, script)
+	hideWindow(b.cmd)
 	b.cmd.Dir = b.projectDir
 
 	stdinPipe, err := b.cmd.StdinPipe()

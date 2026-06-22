@@ -74,7 +74,6 @@ type App struct {
 	loopOpts        []agent2.LoopOption
 	mcpRegistry     *engine2.MCPRegistry
 	kbStore         *memory.KBStore
-	memoryHook      *memory.ArchiveHook
 
 	permissionRequests map[string]chan permission.PermissionResponse
 	permMu             sync.Mutex
@@ -600,69 +599,6 @@ func (a *App) ArchiveSession(projectPath, sessionID string) error {
 	if err := sm.Save(s); err != nil {
 		return err
 	}
-
-	// 会话归档自动触发记忆提取 — 暂不支持
-	// if a.memoryHook != nil {
-	// 	summary := extractCompactionSummary(s)
-	// 	scope := memory.ScopeProject
-	// 	go func() {
-	// 		a.memoryHook.OnArchive(context.Background(), scope, sessionID, summary)
-	// 	}()
-	// }
-	return nil
-}
-
-func extractCompactionSummary(s *Session) string {
-	for i := len(s.Messages) - 1; i >= 0; i-- {
-		if s.Messages[i].Name == "compaction_summary" {
-			return s.Messages[i].Content
-		}
-	}
-	var parts []string
-	start := len(s.Messages) - 10
-	if start < 0 {
-		start = 0
-	}
-	for i := start; i < len(s.Messages); i++ {
-		m := s.Messages[i]
-		if m.Role == "user" || m.Role == "assistant" {
-			role := m.Role
-			if m.Name != "" {
-				role += " (" + m.Name + ")"
-			}
-			content := m.Content
-			if len(content) > 500 {
-				content = content[:500] + "..."
-			}
-			parts = append(parts, role+": "+content)
-		}
-	}
-	return strings.Join(parts, "\n\n")
-}
-
-func (a *App) SetMemoryHook(hook *memory.ArchiveHook) {
-	a.memoryHook = hook
-}
-
-func (a *App) TriggerMemorySummarize(projectPath, sessionID string) error {
-	if a.memoryHook == nil {
-		return fmt.Errorf("memory hook not initialized")
-	}
-
-	sm := a.getSessionManager(projectPath)
-	sm.Lock()
-	s, err := sm.Load(sessionID)
-	sm.Unlock()
-	if err != nil {
-		return fmt.Errorf("session %s not found: %w", sessionID, err)
-	}
-
-	summary := extractCompactionSummary(s)
-	scope := memory.ScopeProject
-
-	go func() {
-		a.memoryHook.OnArchive(context.Background(), scope, sessionID, summary)
-	}()
 
 	return nil
 }
@@ -2695,8 +2631,8 @@ func (a *App) modelLimits(providerID, modelID string) (contextTokens, outputToke
 }
 
 // syncProviderFromModelsDev enriches a provider's model list from the models.dev
-// catalog. It only populates missing context/output limits for existing models,
-// and does NOT add new models. Users must explicitly add models through the Settings UI.
+// catalog. It populates missing context/output limits for existing models and
+// auto-appends new catalog models (disabled). Providers themselves are never auto-added.
 func (a *App) syncProviderFromModelsDev(providerID string) {
 	pc, ok := a.cfg.ModelProviders[providerID]
 	if !ok {
@@ -2772,8 +2708,33 @@ func (a *App) syncProviderFromModelsDev(providerID string) {
 		}
 	}
 
-	// Do NOT auto-add new models from models.dev.
-	// Users must explicitly add models through the Settings UI.
+	// Auto-append new catalog models for this provider (disabled by default).
+	// Users opt in by enabling them in the Settings UI.
+	if devProv, ok := catalog[pc.ModelsDevProvider]; ok {
+		newIDs := make([]string, 0, 16)
+		for modelID, md := range devProv.Models {
+			if !existingIDs[modelID] && md.Limit.Context > 0 {
+				newIDs = append(newIDs, modelID)
+			}
+		}
+		sort.Strings(newIDs)
+		for _, modelID := range newIDs {
+			md := devProv.Models[modelID]
+			name := md.Name
+			if name == "" {
+				name = modelID
+			}
+			pc.Models = append(pc.Models, config2.ModelEntry{
+				ID:           modelID,
+				DisplayName:  name,
+				ContextLimit: md.Limit.Context,
+				OutputLimit:  md.Limit.Output,
+				Enabled:      false,
+			})
+			existingIDs[modelID] = true
+			changed = true
+		}
+	}
 
 	if changed {
 		a.cfg.ModelProviders[providerID] = pc

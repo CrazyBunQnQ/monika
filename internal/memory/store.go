@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	_ "modernc.org/sqlite"
 )
@@ -124,13 +125,14 @@ func (s *KBStore) autoReindex(scope string) {
 // sanitizeFTSQuery 转义 FTS5 查询中的特殊字符。
 // FTS5 的 MATCH 操作符将 *, (), :, "", AND/OR/NOT 等视为语法元素。
 // 将每个词用双引号包裹，使其成为短语查询，避免语法错误。
+// 词间用 OR 连接，提升召回率（单词命中即可），由 bm25 排序保证精度。
 func sanitizeFTSQuery(query string) string {
 	words := strings.Fields(query)
 	for i, w := range words {
 		w = strings.ReplaceAll(w, `"`, `""`)
 		words[i] = `"` + w + `"`
 	}
-	return strings.Join(words, " ")
+	return strings.Join(words, " OR ")
 }
 
 func containsCJK(s string) bool {
@@ -236,7 +238,7 @@ func (s *KBStore) searchLike(query, scope string, limit int) ([]KBFile, error) {
 		       substr(f.content, 1, 200)
 		FROM file_index f
 		WHERE f.status != 'trash'
-		  AND (`+strings.Join(conditions, " AND ")+`)
+		  AND (`+strings.Join(conditions, " OR ")+`)
 		ORDER BY f.updated_at DESC
 		LIMIT ?
 	`, args...)
@@ -310,6 +312,47 @@ func (s *KBStore) ReadFile(scope, relPath string) (string, error) {
 		return "", err
 	}
 	return string(data), nil
+}
+
+// UpdateFile 按路径覆盖写入已有记忆，刷新索引和时间戳。
+// 调用前应通过 ReadFile 确认路径存在。content 为完整的文件内容（含 frontmatter）。
+func (s *KBStore) UpdateFile(scope, relPath, content string) error {
+	cleanPath := filepath.Clean(relPath)
+	if strings.Contains(cleanPath, "..") {
+		return fmt.Errorf("invalid path: %s", relPath)
+	}
+	fullPath := filepath.Join(s.rootFor(scope), cleanPath)
+	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+		return fmt.Errorf("memory not found at path: %s", relPath)
+	}
+	if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
+		return err
+	}
+	charCount := len([]rune(content))
+	now := time.Now().UTC().Format(time.RFC3339)
+	// file_index.path 以正斜杠存储（categoryPath 用 path.Join），Windows 上
+	// filepath.Clean 会产生反斜杠导致 WHERE path = ? 匹配不到行，需归一化。
+	dbPath := filepath.ToSlash(cleanPath)
+	title := extractTitleFromContent(content)
+	_, err := s.dbFor(scope).Exec(`
+		UPDATE file_index SET content = ?, title = ?, char_count = ?, updated_at = ?
+		WHERE path = ?
+	`, content, title, charCount, now, dbPath)
+	if err != nil {
+		return fmt.Errorf("update index: %w", err)
+	}
+	return nil
+}
+
+// extractTitleFromContent 从 markdown 内容中提取标题（第一个 # 开头的行）。
+// 供 UpdateFile 刷新 DB title 列使用，避免 search/index 显示旧标题。
+func extractTitleFromContent(content string) string {
+	for _, line := range strings.Split(content, "\n") {
+		if strings.HasPrefix(line, "# ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "# "))
+		}
+	}
+	return ""
 }
 
 func (s *KBStore) ListFiles(scope, category string) ([]KBFile, error) {
@@ -458,7 +501,7 @@ func titleToSlug(title string) string {
 	slug = strings.ReplaceAll(slug, " ", "-")
 	var c strings.Builder
 	for _, r := range slug {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' {
 			c.WriteRune(r)
 		}
 	}
@@ -486,6 +529,7 @@ func scanKBFiles(rows *sql.Rows) ([]KBFile, error) {
 		json.Unmarshal([]byte(linkedJSON), &f.LinkedTo)
 		f.CreatedAt, _ = time.Parse(time.RFC3339, ca)
 		f.UpdatedAt, _ = time.Parse(time.RFC3339, ua)
+		f.Snippet = snippet
 		results = append(results, f)
 	}
 	if results == nil {
@@ -653,18 +697,16 @@ func parseFMLinks(content string) []string {
 
 func extractMDBody(content string) string {
 	lines := strings.Split(content, "\n")
-	var body []string
-	pastFM := false
-	for _, line := range lines {
-		if !pastFM && (strings.HasPrefix(line, "> ") || strings.HasPrefix(line, "# ")) {
-			if strings.HasPrefix(line, "# ") && len(body) > 0 {
-				pastFM = true
-				body = append(body, line)
-			}
-			continue
-		}
-		pastFM = true
-		body = append(body, line)
+	i := 0
+	if i < len(lines) && strings.HasPrefix(lines[i], "# ") {
+		i++
 	}
-	return strings.Join(body, "\n")
+	for i < len(lines) {
+		if lines[i] == "" || strings.HasPrefix(lines[i], "> ") {
+			i++
+		} else {
+			break
+		}
+	}
+	return strings.Join(lines[i:], "\n")
 }

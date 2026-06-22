@@ -20,7 +20,7 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
     { id: 'mcp', label: 'MCP', icon: <IconPlug size={14} /> },
     { id: 'lsp-formatters', label: 'LSP & Format', icon: <IconServer size={14} /> },
     { id: 'databases', label: 'Databases', icon: <IconHardDrive size={14} /> },
-    { id: 'knowledge-base', label: 'Knowledge Base', icon: <IconBookOpen size={14} /> },
+    { id: 'knowledge-base', label: 'Memory', icon: <IconBookOpen size={14} /> },
     { id: 'about', label: 'About', icon: <IconInfo size={14} /> },
 ]
 

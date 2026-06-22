@@ -197,3 +197,94 @@ func TestReindexFromDisk(t *testing.T) {
 		t.Errorf("got title '%s'", results[0].Title)
 	}
 }
+func TestKBStoreSearchReturnsSnippet(t *testing.T) {
+	homeDir := t.TempDir()
+	projectDir := t.TempDir()
+
+	store, err := NewKBStore(homeDir, projectDir)
+	if err != nil {
+		t.Fatalf("NewKBStore: %v", err)
+	}
+	defer store.Close()
+
+	err = store.WriteFile(ScopeProject, CategoryLesson, "Snippet Test",
+		"This lesson talks about goroutine leak detection patterns.", []string{"go"}, "high")
+	if err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	results, err := store.Search("goroutine leak", ScopeProject, 5)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Snippet == "" {
+		t.Errorf("expected non-empty Snippet, got empty")
+	}
+}
+func TestKBStoreUpdateFile(t *testing.T) {
+	homeDir := t.TempDir()
+	projectDir := t.TempDir()
+
+	store, err := NewKBStore(homeDir, projectDir)
+	if err != nil {
+		t.Fatalf("NewKBStore: %v", err)
+	}
+	defer store.Close()
+
+	err = store.WriteFile(ScopeProject, CategoryLesson, "Update Target",
+		"Original content.", []string{"test"}, "high")
+	if err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// 读取实际路径
+	results, err := store.Search("Update Target", ScopeProject, 1)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	path := results[0].Path
+
+	// 正常更新
+	err = store.UpdateFile(ScopeProject, path, "# Update Target\n\nUpdated content here.")
+	if err != nil {
+		t.Fatalf("UpdateFile: %v", err)
+	}
+
+	content, err := store.ReadFile(ScopeProject, path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !strings.Contains(content, "Updated content here.") {
+		t.Errorf("content not updated, got: %s", content)
+	}
+
+	// 验证 DB 索引和 FTS 也已刷新（UpdateFile 的核心功能）
+	searchResults, err := store.Search("Updated content here.", ScopeProject, 1)
+	if err != nil {
+		t.Fatalf("Search after update: %v", err)
+	}
+	if len(searchResults) != 1 {
+		t.Fatalf("expected 1 search result after update, got %d", len(searchResults))
+	}
+	if searchResults[0].Path != path {
+		t.Errorf("search returned wrong path: got %s, want %s", searchResults[0].Path, path)
+	}
+
+	// 不存在的路径
+	err = store.UpdateFile(ScopeProject, "wiki/lessons/nonexistent.md", "content")
+	if err == nil {
+		t.Error("expected error for nonexistent path, got nil")
+	}
+
+	// 路径穿越
+	err = store.UpdateFile(ScopeProject, "../../etc/passwd", "content")
+	if err == nil {
+		t.Error("expected error for path traversal, got nil")
+	}
+}

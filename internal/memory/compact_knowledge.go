@@ -7,8 +7,8 @@ import (
 )
 
 const (
-	maxKnowledgeChars = 3000
-	maxProfileChars   = 1500
+	MaxKnowledgeChars = 3000
+	MaxProfileChars   = 1500
 )
 
 type CompactionLLM interface {
@@ -21,12 +21,12 @@ func (s *KBStore) CompactKnowledge(ctx context.Context, llm CompactionLLM, scope
 		return nil
 	}
 
-	if len([]rune(content)) <= maxKnowledgeChars {
+	if len([]rune(content)) <= MaxKnowledgeChars {
 		return nil
 	}
 
 	prompt := `你是一个知识压缩器。将以下 knowledge.md 压缩到 ` +
-		fmt.Sprintf("%d 字符以内，保留高置信度的事实，淘汰低置信度或过时的信息。\n\n", maxKnowledgeChars) +
+		fmt.Sprintf("%d 字符以内，保留高置信度的事实，淘汰低置信度或过时的信息。\n\n", MaxKnowledgeChars) +
 		`规则：
 - 保留所有用户偏好和硬约束
 - 保留最近的、高频使用的知识
@@ -42,8 +42,8 @@ func (s *KBStore) CompactKnowledge(ctx context.Context, llm CompactionLLM, scope
 	}
 
 	runes := []rune(compressed)
-	if len(runes) > maxKnowledgeChars {
-		compressed = string(runes[:maxKnowledgeChars])
+	if len(runes) > MaxKnowledgeChars {
+		compressed = string(runes[:MaxKnowledgeChars])
 	}
 
 	return s.WriteFile(scope, CategoryKnowledge, "Core Knowledge", compressed, nil, "high")
@@ -55,11 +55,11 @@ func (s *KBStore) CompactProfile(ctx context.Context, llm CompactionLLM, scope s
 		return nil
 	}
 
-	if len([]rune(content)) <= maxProfileChars {
+	if len([]rune(content)) <= MaxProfileChars {
 		return nil
 	}
 
-	prompt := `压缩以下 user profile 到 ` + fmt.Sprintf("%d", maxProfileChars) +
+	prompt := `压缩以下 user profile 到 ` + fmt.Sprintf("%d", MaxProfileChars) +
 		` 字符以内，保留最重要的偏好和事实：\n\n` + content
 
 	compressed, err := llm.Chat(ctx, prompt, "")
@@ -68,8 +68,8 @@ func (s *KBStore) CompactProfile(ctx context.Context, llm CompactionLLM, scope s
 	}
 
 	runes := []rune(compressed)
-	if len(runes) > maxProfileChars {
-		compressed = string(runes[:maxProfileChars])
+	if len(runes) > MaxProfileChars {
+		compressed = string(runes[:MaxProfileChars])
 	}
 
 	return s.WriteFile(scope, CategoryProfile, "User Profile", compressed, nil, "high")

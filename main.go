@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -205,6 +206,45 @@ func main() {
 	systemParts := []string{
 		fmt.Sprintf("Current date: %s\nOS Version: %s\nWorking directory: {{WorkingDirectory}}\nShell: %s", time.Now().Format("2006-01-02"), runtime.GOOS, shellName),
 		ps.Identity,
+		`## Knowledge Base (Memory)
+
+You have a self-evolving knowledge base that persists across sessions. It contains
+past lessons (bugs, root causes, solutions), topics (architecture, patterns), and
+core knowledge (your preferences, project conventions, persistent facts).
+
+**MEMORY USAGE — mandatory task lifecycle:**
+
+Every task MUST follow this closed loop. Skipping steps degrades quality over time.
+
+1. **BEFORE any action** — Your FIRST tool call for every task MUST be
+   **memory_search(query)** to check for relevant past experience (similar problems,
+   conventions, user preferences). Only after checking memory may you proceed.
+   - If results look relevant → memory_read(path) for full content → apply what you find
+   - If no results → proceed normally (you now know nothing relevant exists)
+2. **DURING** — execute the task normally, applying any memory you found.
+3. **AFTER completing** — if you learned something worth keeping (a bug root cause,
+   a working pattern, a user preference, a project convention):
+   - memory_search first to check if a similar memory already exists
+   - exists → memory_read full content → merge new insight → memory_update(path, merged)
+   - not exists → memory_write(title, content, category)
+
+   For profile (wiki/profile.md) and core knowledge (wiki/knowledge.md), use
+   memory_update with the specific path. These files have character limits
+   (profile: 1500, knowledge: 3000) — the tool warns on overflow, then you
+   must read back and trim.
+
+**Also:** Before any web search, MCP tool, or asking the user, you MUST first call
+memory_search — only fall back to external sources if no relevant memory exists.
+
+**Tools:**
+- memory_search(query, scope?, category?, limit?) — search; returns title + snippet
+- memory_read(path, scope?) — read a single memory's full content
+- memory_write(title, content, category, scope?, tags?, confidence?) — create NEW memory
+- memory_update(path, content, scope?) — overwrite existing memory with merged content
+- memory_index(scope?) — list all memories by category
+
+**Memory types:** lessons (bugs/causes/solutions), topics (architecture/patterns),
+knowledge (preferences/constraints/persistent facts).`,
 		ps.ToolUsage,
 		ps.Planning,
 		ps.CodeQuality,
@@ -230,28 +270,7 @@ changes as you install or configure them. Always search before assuming:
 - **mcp_search(query)** — fuzzy search MCP tools by name, server, or capability
 - **lsp_list** — list currently available language servers
 
-Once you identify the right skill or tool, load it with **skill** or call the MCP tool directly.
-
-## Knowledge Base (Memory)
-
-You have access to a self-evolving knowledge base that persists across sessions.
-Key knowledge (user preferences, project conventions, and recent facts) is injected
-at the top of this conversation inside <global_memory> and <project_memory> blocks.
-
-**SEARCH PRIORITY — local knowledge base FIRST, always:**
-Before using any web search, MCP tools, or asking the user, you MUST first call **memory_search(query)** to check the local knowledge base. Only if memory_search returns no relevant results should you fall back to web search or other external tools.
-
-- **memory_search(query)** — search the knowledge base for relevant memories. Use this
-  FIRST before any web search or MCP tool, for user preferences, project conventions,
-  past lessons, or technical topics.
-- **memory_index()** — list all stored memories organized by category
-- **memory_write(title, content, category)** — persist new knowledge discovered during
-  this session (lessons learned, user preferences, project conventions)
-
-The knowledge base contains three types of entries:
-- *lessons*: past bugs, root causes, and solutions
-- *topics*: architecture, patterns, conventions, API details
-- *knowledge*: user preferences, project constraints, persistent facts`
+	Once you identify the right skill or tool, load it with **skill** or call the MCP tool directly.`
 
 	systemParts = append(systemParts, strings.TrimSpace(dynamicCapabilities))
 
@@ -269,7 +288,6 @@ The knowledge base contains three types of entries:
 		agent.WithModel(pr.Model),
 		agent.WithSystemPrompt(systemPrompt),
 		agent.WithHomeDir(home),
-		agent.WithKBStore(kbStore),
 	}
 
 	// Wire permission pipeline
@@ -366,35 +384,6 @@ The knowledge base contains three types of entries:
 
 	appService = api.NewApp(home, cwd, pr.Config, pr.Providers, pr.Model, registry, loopOpts, taskStoreAccessor, agentRegistry, taskRunner, mcpRegistry, kbStore)
 
-	if kbStore != nil {
-		llmAdapter := &memory.GoLLMAdapter{
-			ChatFn: func(ctx context.Context, systemPrompt, userMessage string) (string, error) {
-				req := engine2.ChatRequest{
-					Messages: []engine2.ChatMessage{
-						{Role: "system", Content: systemPrompt},
-						{Role: "user", Content: userMessage},
-					},
-				}
-				events, err := defaultProvider.StreamChat(ctx, req)
-				if err != nil {
-					return "", err
-				}
-				var out strings.Builder
-				for ev := range events {
-					if ev.Kind == engine2.EventContentDelta {
-						out.WriteString(ev.Text)
-					}
-				}
-				return out.String(), nil
-			},
-		}
-		hook := &memory.ArchiveHook{
-			Store:         kbStore,
-			LLM:           llmAdapter,
-			CompactionLLM: llmAdapter,
-		}
-		appService.SetMemoryHook(hook)
-	}
 	appService.InitTSBridge(tsBridge)
 	// appService.StartBackgroundTasks() // 后台审查/技能生成，暂不实现
 	appGetProjectPath = appService.GetProjectPath
@@ -570,8 +559,9 @@ func syncModelsDev(home string, cfg *config2.Config) {
 
 	changed := false
 
-	// Only enrich existing providers from models.dev — do not auto-populate for new users.
-	// Users must explicitly add providers through the Settings UI.
+	// Enrich already-configured providers from models.dev: fill missing limits and
+	// auto-append new catalog models (disabled). Providers themselves are never auto-added —
+	// users must explicitly add providers through the Settings UI.
 	if len(cfg.ModelProviders) > 0 {
 		for key, pc := range cfg.ModelProviders {
 			existingIDs := make(map[string]bool, len(pc.Models))
@@ -615,8 +605,33 @@ func syncModelsDev(home string, cfg *config2.Config) {
 				}
 			}
 
-			// Do NOT auto-add new models from models.dev.
-			// Users must explicitly add models through the Settings UI.
+			// Auto-append new catalog models for this provider (disabled by default).
+			// Users opt in by enabling them in the Settings UI.
+			if devProv, ok := catalog[pc.ModelsDevProvider]; ok {
+				newIDs := make([]string, 0, 16)
+				for modelID, md := range devProv.Models {
+					if !existingIDs[modelID] && md.Limit.Context > 0 {
+						newIDs = append(newIDs, modelID)
+					}
+				}
+				sort.Strings(newIDs)
+				for _, modelID := range newIDs {
+					md := devProv.Models[modelID]
+					name := md.Name
+					if name == "" {
+						name = modelID
+					}
+					pc.Models = append(pc.Models, config2.ModelEntry{
+						ID:           modelID,
+						DisplayName:  name,
+						ContextLimit: md.Limit.Context,
+						OutputLimit:  md.Limit.Output,
+						Enabled:      false,
+					})
+					existingIDs[modelID] = true
+					changed = true
+				}
+			}
 
 			cfg.ModelProviders[key] = pc
 		}

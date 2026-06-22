@@ -16,7 +16,7 @@ func NewMemoryWrite(store *memory.KBStore) tool.Tool { return &memoryWriteTool{s
 func (t *memoryWriteTool) Name() string { return "memory_write" }
 
 func (t *memoryWriteTool) Description() string {
-	return "Write a new memory entry to the knowledge base."
+	return "Create a NEW memory entry. If a similar memory may already exist, use memory_search first then memory_update."
 }
 
 func (t *memoryWriteTool) Parameters() map[string]any {
@@ -57,6 +57,8 @@ func (t *memoryWriteTool) Execute(ctx context.Context, args json.RawMessage) (to
 		"lesson":           memory.CategoryLesson,
 		"topic":            memory.CategoryTopic,
 		"knowledge_update": memory.CategoryKnowledge,
+		"knowledge":        memory.CategoryKnowledge,
+		"profile":          memory.CategoryProfile,
 	}
 	cat, ok := catMap[p.Category]
 	if !ok {
@@ -68,5 +70,5 @@ func (t *memoryWriteTool) Execute(ctx context.Context, args json.RawMessage) (to
 	if err := t.store.WriteFile(p.Scope, cat, p.Title, p.Content, p.Tags, p.Confidence); err != nil {
 		return tool.ExecutionResult{Content: fmt.Sprintf("Failed to write: %s", err), IsError: true}, nil
 	}
-	return tool.ExecutionResult{Content: fmt.Sprintf("Memory '%s' written to %s scope.", p.Title, p.Scope)}, nil
+	return tool.ExecutionResult{Content: fmt.Sprintf("Memory '%s' written to %s scope. If you intended to update an existing memory, use memory_update instead.", p.Title, p.Scope)}, nil
 }

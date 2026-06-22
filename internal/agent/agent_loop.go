@@ -10,7 +10,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"monika/internal/memory"
 	"monika/internal/permission"
 	"monika/internal/tool"
 	"monika/pkg/engine"
@@ -263,7 +262,6 @@ type AgentLoop struct {
 	pipeline          *permission.Pipeline
 	projectDir        string
 	homeDir           string
-	kbStore           *memory.KBStore
 	model             string
 	modelContextLimit int64
 	modelOutputLimit  int64
@@ -303,10 +301,6 @@ func WithProjectDir(dir string) LoopOption {
 
 func WithHomeDir(dir string) LoopOption {
 	return func(a *AgentLoop) { a.homeDir = dir }
-}
-
-func WithKBStore(store *memory.KBStore) LoopOption {
-	return func(a *AgentLoop) { a.kbStore = store }
 }
 
 func WithModel(model string) LoopOption {
@@ -1178,11 +1172,6 @@ func (a *AgentLoop) buildMessages(conv *Conversation) []engine.ChatMessage {
 				parts = append(parts, b.String())
 			}
 		}
-		if a.kbStore != nil {
-			if block := a.kbStore.BuildMemoryBlock(); block != "" {
-				parts = append(parts, block)
-			}
-		}
 
 		messages = append(messages, engine.ChatMessage{
 			Role:    "system",
@@ -1191,7 +1180,7 @@ func (a *AgentLoop) buildMessages(conv *Conversation) []engine.ChatMessage {
 	}
 
 	if len(msgs) >= 10 && a.agent.Name != "compaction" {
-		reminder := "\n\n<system-reminder>\nRemember: grep before reading | read before editing | never guess URLs | prefer editing over creating | check MCP before bash | follow project_rules strictly | do the smallest thing | run lint/typecheck after completing\n</system-reminder>"
+		reminder := "\n\n<system-reminder>\nRemember: memory_search FIRST before any task | grep before reading | read before editing | never guess URLs | prefer editing over creating | check MCP before bash | follow project_rules strictly | do the smallest thing | run lint/typecheck after completing\n</system-reminder>"
 		for i := len(messages) - 1; i >= 0; i-- {
 			if messages[i].Role == "system" {
 				messages[i].Content += reminder
