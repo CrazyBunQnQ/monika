@@ -67,43 +67,6 @@ async function ensureModelExists(pp: string, fp: string) {
     } catch { /* ignore */ }
 }
 
-function registerCompletionProvider(monaco: typeof import('monaco-editor')) {
-    monaco.languages.registerCompletionItemProvider('*', {
-        triggerCharacters: ['.'],
-        provideCompletionItems: async (model, position) => {
-            const params = getModelParams(model)
-            if (!params) return null
-
-            const pp = params.pp
-            const fp = params.fp
-            const line = position.lineNumber - 1
-            const col = position.column - 1
-
-            const content = model.getValue()
-            await lspService.didChange(pp, fp, content, Date.now())
-
-            const result = await lspService.completion(pp, fp, line, col)
-            if (!result || !result.items || result.items.length === 0) return null
-
-            return {
-                suggestions: result.items.map(item => ({
-                    label: item.label,
-                    kind: mapCompletionKind(monaco, item.kind),
-                    detail: item.detail,
-                    documentation: item.documentation || undefined,
-                    insertText: item.insertText || item.label,
-                    range: {
-                        startLineNumber: position.lineNumber,
-                        startColumn: position.column,
-                        endLineNumber: position.lineNumber,
-                        endColumn: position.column,
-                    },
-                })),
-            } satisfies languages.CompletionList
-        },
-    })
-}
-
 function mapCompletionKind(monaco: typeof import('monaco-editor'), kind?: number): languages.CompletionItemKind {
     const map: Record<number, languages.CompletionItemKind> = {
         1: monaco.languages.CompletionItemKind.Text,
@@ -129,23 +92,70 @@ function mapCompletionKind(monaco: typeof import('monaco-editor'), kind?: number
     return map[kind ?? 0] || monaco.languages.CompletionItemKind.Property
 }
 
+function registerCompletionProvider(monaco: typeof import('monaco-editor')) {
+    monaco.languages.registerCompletionItemProvider('*', {
+        triggerCharacters: ['.'],
+        provideCompletionItems: async (model, position) => {
+            try {
+                const params = getModelParams(model)
+                if (!params) return null
+
+                const pp = params.pp
+                const fp = params.fp
+                const line = position.lineNumber - 1
+                const col = position.column - 1
+
+                const content = model.getValue()
+                await lspService.didChange(pp, fp, content, Date.now())
+
+                const result = await lspService.completion(pp, fp, line, col)
+                if (!result || !result.items || result.items.length === 0) return null
+
+                return {
+                    suggestions: result.items.map(item => ({
+                        label: item.label,
+                        kind: mapCompletionKind(monaco, item.kind),
+                        detail: item.detail,
+                        documentation: item.documentation || undefined,
+                        insertText: item.insertText || item.label,
+                        range: {
+                            startLineNumber: position.lineNumber,
+                            startColumn: position.column,
+                            endLineNumber: position.lineNumber,
+                            endColumn: position.column,
+                        },
+                    })),
+                } satisfies languages.CompletionList
+            } catch (e) {
+                console.warn('[lsp] completion provider error:', e)
+                return null
+            }
+        },
+    })
+}
+
 function registerHoverProvider(monaco: typeof import('monaco-editor')) {
     monaco.languages.registerHoverProvider('*', {
         provideHover: async (model, position) => {
-            const params = getModelParams(model)
-            if (!params) return null
+            try {
+                const params = getModelParams(model)
+                if (!params) return null
 
-            const lineLen = model.getLineLength(position.lineNumber)
-            const col = Math.min(position.column - 1, Math.max(0, lineLen - 1))
+                const lineLen = model.getLineLength(position.lineNumber)
+                const col = Math.min(position.column - 1, Math.max(0, lineLen - 1))
 
-            const result = await lspService.hover(
-                params.pp, params.fp,
-                position.lineNumber - 1, col,
-            )
-            if (!result || !result.contents) return null
+                const result = await lspService.hover(
+                    params.pp, params.fp,
+                    position.lineNumber - 1, col,
+                )
+                if (!result || !result.contents) return null
 
-            return {
-                contents: [{ value: result.contents }],
+                return {
+                    contents: [{ value: result.contents }],
+                }
+            } catch (e) {
+                console.warn('[lsp] hover provider error:', e)
+                return null
             }
         },
     })
@@ -154,34 +164,39 @@ function registerHoverProvider(monaco: typeof import('monaco-editor')) {
 function registerDefinitionProvider(monaco: typeof import('monaco-editor')) {
     monaco.languages.registerDefinitionProvider('*', {
         provideDefinition: async (model, position) => {
-            const params = getModelParams(model)
-            if (!params) return null
+            try {
+                const params = getModelParams(model)
+                if (!params) return null
 
-            const lineLen = model.getLineLength(position.lineNumber)
-            const col = Math.min(position.column - 1, Math.max(0, lineLen - 1))
+                const lineLen = model.getLineLength(position.lineNumber)
+                const col = Math.min(position.column - 1, Math.max(0, lineLen - 1))
 
-            const locs = await lspService.goToDefinition(
-                params.pp, params.fp,
-                position.lineNumber - 1, col,
-            )
-            if (!locs || locs.length === 0) return null
+                const locs = await lspService.goToDefinition(
+                    params.pp, params.fp,
+                    position.lineNumber - 1, col,
+                )
+                if (!locs || locs.length === 0) return null
 
-            // Ensure Monaco models exist for cross-file targets so Peek widget doesn't crash
-            for (const loc of locs) {
-                if (loc.path !== params.fp) {
-                    await ensureModelExists(params.pp, loc.path)
+                // Ensure Monaco models exist for cross-file targets so Peek widget doesn't crash
+                for (const loc of locs) {
+                    if (loc.path !== params.fp) {
+                        await ensureModelExists(params.pp, loc.path)
+                    }
                 }
-            }
 
-            return locs.map(loc => ({
-                uri: monaco.Uri.parse('monika://' + encodeURIComponent(params.pp) + '/' + encodeURIComponent(loc.path)),
-                range: {
-                    startLineNumber: loc.line + 1,
-                    startColumn: loc.col + 1,
-                    endLineNumber: loc.line + 1,
-                    endColumn: loc.col + 1,
-                },
-            }))
+                return locs.map(loc => ({
+                    uri: monaco.Uri.parse('monika://' + encodeURIComponent(params.pp) + '/' + encodeURIComponent(loc.path)),
+                    range: {
+                        startLineNumber: loc.line + 1,
+                        startColumn: loc.col + 1,
+                        endLineNumber: loc.line + 1,
+                        endColumn: loc.col + 1,
+                    },
+                }))
+            } catch (e) {
+                console.warn('[lsp] definition provider error:', e)
+                return null
+            }
         },
     })
 }

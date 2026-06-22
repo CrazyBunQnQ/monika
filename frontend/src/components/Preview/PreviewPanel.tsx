@@ -1691,86 +1691,98 @@ function PreviewPanel(props: IDockviewPanelProps) {
                         {[
                             {
                                 label: 'Go to Definition', shortcut: 'Ctrl+Click', action: async () => {
-                                    const store = useStore.getState()
-                                    const fp = store.preview.filePath
-                                    const pp = store.projectPath
-                                    if (!fp || !pp) return
-                                    const locs = await lspService.goToDefinition(pp, fp, contextMenu.line, contextMenu.col)
-                                    if (locs && locs.length > 0) navigateToLocation(locs[0])
+                                    try {
+                                        const store = useStore.getState()
+                                        const fp = store.preview.filePath
+                                        const pp = store.projectPath
+                                        if (!fp || !pp) return
+                                        const locs = await lspService.goToDefinition(pp, fp, contextMenu.line, contextMenu.col)
+                                        if (locs && locs.length > 0) navigateToLocation(locs[0])
+                                    } catch (e) { console.warn('[lsp] go to definition error:', e) }
                                 }
                             },
                             {
                                 label: 'Go to Type Definition', action: async () => {
-                                    const store = useStore.getState()
-                                    const fp = store.preview.filePath
-                                    const pp = store.projectPath
-                                    if (!fp || !pp) return
-                                    const locs = await lspService.typeDefinition(pp, fp, contextMenu.line, contextMenu.col)
-                                    if (locs && locs.length > 0) navigateToLocation(locs[0])
+                                    try {
+                                        const store = useStore.getState()
+                                        const fp = store.preview.filePath
+                                        const pp = store.projectPath
+                                        if (!fp || !pp) return
+                                        const locs = await lspService.typeDefinition(pp, fp, contextMenu.line, contextMenu.col)
+                                        if (locs && locs.length > 0) navigateToLocation(locs[0])
+                                    } catch (e) { console.warn('[lsp] type definition error:', e) }
                                 }
                             },
                             {
                                 label: 'Find Implementations', action: async () => {
-                                    const store = useStore.getState()
-                                    const fp = store.preview.filePath
-                                    const pp = store.projectPath
-                                    if (!fp || !pp) return
-                                    const locs = await lspService.implementation(pp, fp, contextMenu.line, contextMenu.col)
-                                    if (locs && locs.length > 0) navigateToLocation(locs[0])
+                                    try {
+                                        const store = useStore.getState()
+                                        const fp = store.preview.filePath
+                                        const pp = store.projectPath
+                                        if (!fp || !pp) return
+                                        const locs = await lspService.implementation(pp, fp, contextMenu.line, contextMenu.col)
+                                        if (locs && locs.length > 0) navigateToLocation(locs[0])
+                                    } catch (e) { console.warn('[lsp] implementation error:', e) }
                                 }
                             },
                             {
                                 label: 'Find All References', action: async () => {
-                                    const store = useStore.getState()
-                                    const fp = store.preview.filePath
-                                    const pp = store.projectPath
-                                    if (!fp || !pp) return
-                                    const refs = await lspService.references(pp, fp, contextMenu.line, contextMenu.col)
-                                    if (refs && refs.length > 0) {
-                                        setPeekPanel({ title: 'References', items: refs })
-                                    }
+                                    try {
+                                        const store = useStore.getState()
+                                        const fp = store.preview.filePath
+                                        const pp = store.projectPath
+                                        if (!fp || !pp) return
+                                        const refs = await lspService.references(pp, fp, contextMenu.line, contextMenu.col)
+                                        if (refs && refs.length > 0) {
+                                            setPeekPanel({ title: 'References', items: refs })
+                                        }
+                                    } catch (e) { console.warn('[lsp] references error:', e) }
                                 }
                             },
                             { type: 'separator' },
                             {
                                 label: 'Rename Symbol...', action: async () => {
-                                    if (!editorRef.current) return
-                                    const store = useStore.getState()
-                                    const fp = store.preview.filePath
-                                    const pp = store.projectPath
-                                    if (!fp || !pp) return
-                                    const lineText = editorRef.current.state.doc.line(contextMenu.line + 1).text
-                                    const word = lineText.slice(contextMenu.col).match(/^[a-zA-Z_$][a-zA-Z0-9_$]*/)
-                                    const word2 = lineText.slice(0, contextMenu.col).match(/[a-zA-Z_$][a-zA-Z0-9_$]*$/)
-                                    const token = (word2 ? word2[0] : '') + (word ? word[0] : '')
-                                    const newName = window.prompt('Rename symbol:', token)
-                                    if (!newName || newName === token) return
-                                    const edit = await lspService.rename(pp, fp, contextMenu.line, contextMenu.col, newName)
-                                    if (edit) {
-                                        await applyWorkspaceEdit(edit, editorRef.current, pp)
-                                    }
+                                    try {
+                                        if (!editorRef.current) return
+                                        const store = useStore.getState()
+                                        const fp = store.preview.filePath
+                                        const pp = store.projectPath
+                                        if (!fp || !pp) return
+                                        const lineText = editorRef.current.state.doc.line(contextMenu.line + 1).text
+                                        const word = lineText.slice(contextMenu.col).match(/^[a-zA-Z_$][a-zA-Z0-9_$]*/)
+                                        const word2 = lineText.slice(0, contextMenu.col).match(/[a-zA-Z_$][a-zA-Z0-9_$]*$/)
+                                        const token = (word2 ? word2[0] : '') + (word ? word[0] : '')
+                                        const newName = window.prompt('Rename symbol:', token)
+                                        if (!newName || newName === token) return
+                                        const edit = await lspService.rename(pp, fp, contextMenu.line, contextMenu.col, newName)
+                                        if (edit) {
+                                            await applyWorkspaceEdit(edit, editorRef.current, pp)
+                                        }
+                                    } catch (e) { console.warn('[lsp] rename error:', e) }
                                 }
                             },
                             {
                                 label: 'Code Actions...', action: async () => {
-                                    const store = useStore.getState()
-                                    const fp = store.preview.filePath
-                                    const pp = store.projectPath
-                                    if (!fp || !pp) return
-                                    const actions = await lspService.codeActions(pp, fp, contextMenu.line, contextMenu.col)
-                                    if (actions && actions.length > 0) {
-                                        const titles = actions.map((a, i) => `${i + 1}. ${a.title}`)
-                                        const choice = window.prompt(`Available code actions:\n${titles.join('\n')}\n\nEnter number (1-${actions.length}):`)
-                                        if (choice) {
-                                            const idx = parseInt(choice) - 1
-                                            if (idx >= 0 && idx < actions.length) {
-                                                const result = await lspService.executeCodeAction(pp, actions[idx])
-                                                if (result && editorRef.current) {
-                                                    await applyWorkspaceEdit(result, editorRef.current, pp)
+                                    try {
+                                        const store = useStore.getState()
+                                        const fp = store.preview.filePath
+                                        const pp = store.projectPath
+                                        if (!fp || !pp) return
+                                        const actions = await lspService.codeActions(pp, fp, contextMenu.line, contextMenu.col)
+                                        if (actions && actions.length > 0) {
+                                            const titles = actions.map((a, i) => `${i + 1}. ${a.title}`)
+                                            const choice = window.prompt(`Available code actions:\n${titles.join('\n')}\n\nEnter number (1-${actions.length}):`)
+                                            if (choice) {
+                                                const idx = parseInt(choice) - 1
+                                                if (idx >= 0 && idx < actions.length) {
+                                                    const result = await lspService.executeCodeAction(pp, actions[idx])
+                                                    if (result && editorRef.current) {
+                                                        await applyWorkspaceEdit(result, editorRef.current, pp)
+                                                    }
                                                 }
                                             }
                                         }
-                                    }
+                                    } catch (e) { console.warn('[lsp] code actions error:', e) }
                                 }
                             },
                         ].map((item, idx) => {
