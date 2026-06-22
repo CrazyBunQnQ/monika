@@ -758,13 +758,12 @@ function InputModal({ config, onCancel }: { config: { title: string; label: stri
 const GRAPH_COLORS = [
     '#e06c75', '#61afef', '#98c379', '#e5c07b',
     '#c678dd', '#56b6c2', '#d19a66', '#be5046',
-    '#61d4d4', '#a0e060', '#e0a060', '#80a0ff',
 ]
 
 function GraphLine({ line }: { line: string }) {
     const chars = line.split('')
     return (
-        <span className="flex-shrink-0 select-none inline-flex" style={{ fontFamily: 'var(--font-mono)', lineHeight: '22px', fontSize: '11px' }}>
+        <span className="flex-shrink-0 select-none" style={{ fontFamily: 'var(--font-mono)', lineHeight: '22px', fontSize: '11px', whiteSpace: 'pre' }}>
             {chars.map((ch, i) => {
                 const lane = Math.floor(i / 2)
                 const color = GRAPH_COLORS[lane % GRAPH_COLORS.length]
@@ -778,9 +777,7 @@ function GraphLine({ line }: { line: string }) {
                 }
                 const isGraph = ch === '*' || ch === '|' || ch === '/' || ch === '\\'
                 return (
-                    <span key={i} style={{ color: isGraph ? color : undefined, width: '0.6em', textAlign: 'center' }}>
-                        {display}
-                    </span>
+                    <span key={i} style={isGraph ? { color } : undefined}>{display}</span>
                 )
             })}
         </span>
