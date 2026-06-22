@@ -1415,7 +1415,7 @@ function PreviewPanel(props: IDockviewPanelProps) {
             {/* File preview — wrapper always mounted for CodeMirror DOM safety    */}
             <div
                 className={`flex flex-1 min-h-0 ${maximized ? 'flex-row' : 'flex-col'}`}
-                style={{ display: (showFile || maximized) ? 'flex' : 'none' }}
+                style={{ display: showFile ? 'flex' : 'none' }}
             >
                 {maximized && (
                     <div style={{ width: 260, flexShrink: 0, height: '100%', borderRight: '1px solid var(--border)', overflow: 'hidden' }}>

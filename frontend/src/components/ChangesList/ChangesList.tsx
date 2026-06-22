@@ -4,8 +4,9 @@ import { IDockviewPanelProps } from 'dockview'
 import { App as MonikaApp } from '../../../bindings/monika'
 import type { ChangeStat, CommitInfo } from '../../../bindings/monika'
 import { useStore } from '../../store'
-import { GitBranch } from 'lucide-react'
+import { GitBranch, GitCommitHorizontal, Copy, Clipboard, Tag, GitPullRequestArrow, RotateCcw, UndoDot, Pencil, Eye } from 'lucide-react'
 import ConfirmModal from '../Chat/ConfirmModal'
+import Modal, { ModalHeader, ModalBody, ModalFooter, ModalButton } from '../ui/Modal'
 
 function useEffectiveChangesPath() {
     const projectPath = useStore((s) => s.projectPath)
@@ -349,6 +350,10 @@ function HistoryTab({ active, effectivePath }: { active: boolean; effectivePath:
         title: string; message: string; confirmLabel: string; variant: 'danger' | 'primary';
         onConfirm: () => Promise<void>;
     } | null>(null)
+    const [inputModal, setInputModal] = useState<{
+        title: string; label: string; defaultValue: string; confirmLabel: string;
+        onConfirm: (value: string) => Promise<void>;
+    } | null>(null)
 
     useEffect(() => {
         if (!active) return
@@ -396,20 +401,32 @@ function HistoryTab({ active, effectivePath }: { active: boolean; effectivePath:
 
     const handleCreateTag = async (c: CommitInfo) => {
         setContextMenu(null)
-        const name = prompt('Tag name:')
-        if (!name) return
-        try {
-            await MonikaApp.CreateTag(effectivePath, c.hash, name)
-        } catch { /* ignore */ }
+        setInputModal({
+            title: 'Create Tag',
+            label: 'Tag name',
+            defaultValue: '',
+            confirmLabel: 'Create',
+            onConfirm: async (name) => {
+                await MonikaApp.CreateTag(effectivePath, c.hash, name)
+                loadCommitHistory()
+                setInputModal(null)
+            },
+        })
     }
 
     const handleCreateBranch = async (c: CommitInfo) => {
         setContextMenu(null)
-        const name = prompt('Branch name:')
-        if (!name) return
-        try {
-            await MonikaApp.CreateBranchAt(effectivePath, c.hash, name)
-        } catch { /* ignore */ }
+        setInputModal({
+            title: 'Create Branch at Commit',
+            label: 'Branch name',
+            defaultValue: '',
+            confirmLabel: 'Create',
+            onConfirm: async (name) => {
+                await MonikaApp.CreateBranchAt(effectivePath, c.hash, name)
+                loadCommitHistory()
+                setInputModal(null)
+            },
+        })
     }
 
     const handleRevertCommit = (c: CommitInfo) => {
@@ -464,17 +481,38 @@ function HistoryTab({ active, effectivePath }: { active: boolean; effectivePath:
 
     const handleAmendMessage = async (c: CommitInfo) => {
         setContextMenu(null)
-        const newMsg = prompt('New commit message:', c.message)
-        if (!newMsg) return
-        try {
-            await MonikaApp.AmendMessage(effectivePath, newMsg)
-            loadCommitHistory()
-        } catch { /* ignore */ }
+        setInputModal({
+            title: 'Amend Commit Message',
+            label: 'New message',
+            defaultValue: c.message,
+            confirmLabel: 'Amend',
+            onConfirm: async (newMsg) => {
+                await MonikaApp.AmendMessage(effectivePath, newMsg)
+                loadCommitHistory()
+                setInputModal(null)
+            },
+        })
     }
 
     const renderContextMenu = () => {
         if (!contextMenu) return null
         const c = contextMenu.commit
+        const menuItems: { label: string; icon: React.ReactNode; action: () => void; separator?: boolean; danger?: boolean }[] = [
+            { label: 'View Details', icon: <Eye size={14} />, action: () => { setContextMenu(null); handleClick(c) } },
+            { label: 'Copy Hash', icon: <Copy size={14} />, action: () => handleCopyHash(c), separator: true },
+            { label: 'Copy Message', icon: <Clipboard size={14} />, action: () => handleCopyMessage(c) },
+            { label: 'Checkout Commit...', icon: <GitCommitHorizontal size={14} />, action: () => handleCheckoutCommit(c), separator: true },
+            { label: 'Create Tag...', icon: <Tag size={14} />, action: () => handleCreateTag(c) },
+            { label: 'Create Branch at Commit...', icon: <GitBranch size={14} />, action: () => handleCreateBranch(c) },
+            { label: 'Revert Commit', icon: <RotateCcw size={14} />, action: () => handleRevertCommit(c), separator: true },
+            { label: 'Cherry-pick Commit', icon: <GitPullRequestArrow size={14} />, action: () => handleCherryPick(c) },
+            { label: 'Reset to Commit (Soft)', icon: <UndoDot size={14} />, action: () => handleReset(c, 'soft'), separator: true },
+            { label: 'Reset to Commit (Mixed)', icon: <UndoDot size={14} />, action: () => handleReset(c, 'mixed') },
+            { label: 'Reset to Commit (Hard)', icon: <UndoDot size={14} />, action: () => handleReset(c, 'hard'), danger: true },
+        ]
+        if (c.hash === commitHistory.commits[0]?.hash) {
+            menuItems.push({ label: 'Amend Message...', icon: <Pencil size={14} />, action: () => handleAmendMessage(c), separator: true })
+        }
         return createPortal(
             <div
                 ref={menuRef}
@@ -482,32 +520,26 @@ function HistoryTab({ active, effectivePath }: { active: boolean; effectivePath:
                 style={{
                     left: contextMenu.x, top: contextMenu.y, zIndex: 2000,
                     background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-                    borderRadius: 'var(--radius-md)', padding: '4px 0', minWidth: '200px',
+                    borderRadius: 'var(--radius-md)', padding: '4px 0', minWidth: '220px',
                     boxShadow: '0 8px 24px rgba(0,0,0,0.4)', fontSize: '12px', fontFamily: 'var(--font-sans)',
                 }}
                 onClick={(e) => e.stopPropagation()}
             >
-                <ContextMenuItem icon="◆" label="View Details" onClick={() => { setContextMenu(null); handleClick(c) }} />
-                <ContextMenuDivider />
-                <ContextMenuItem label="Copy Hash" onClick={() => handleCopyHash(c)} />
-                <ContextMenuItem label="Copy Message" onClick={() => handleCopyMessage(c)} />
-                <ContextMenuDivider />
-                <ContextMenuItem label="Checkout Commit..." onClick={() => handleCheckoutCommit(c)} />
-                <ContextMenuItem label="Create Tag..." onClick={() => handleCreateTag(c)} />
-                <ContextMenuItem label="Create Branch at Commit..." onClick={() => handleCreateBranch(c)} />
-                <ContextMenuDivider />
-                <ContextMenuItem label="Revert Commit" onClick={() => handleRevertCommit(c)} />
-                <ContextMenuItem label="Cherry-pick Commit" onClick={() => handleCherryPick(c)} />
-                <ContextMenuDivider />
-                <ContextMenuItem label="Reset to Commit (Soft)" onClick={() => handleReset(c, 'soft')} />
-                <ContextMenuItem label="Reset to Commit (Mixed)" onClick={() => handleReset(c, 'mixed')} />
-                <ContextMenuItem variant="danger" label="Reset to Commit (Hard)" onClick={() => handleReset(c, 'hard')} />
-                {c.hash === commitHistory.commits[0]?.hash && (
-                    <>
-                        <ContextMenuDivider />
-                        <ContextMenuItem label="Amend Message..." onClick={() => handleAmendMessage(c)} />
-                    </>
-                )}
+                {menuItems.map((item, i) => (
+                    <div key={i}>
+                        {item.separator && <div style={{ height: '1px', background: 'var(--border)', margin: '4px 0' }} />}
+                        <div
+                            className="flex items-center gap-2.5 px-3 py-[5px] cursor-pointer transition-colors rounded-sm mx-1"
+                            style={{ color: item.danger ? 'var(--red)' : 'var(--text-secondary)' }}
+                            onMouseEnter={(e) => { const t = e.currentTarget; t.style.background = 'var(--bg-hover)'; t.style.color = item.danger ? 'var(--red)' : 'var(--text-primary)' }}
+                            onMouseLeave={(e) => { const t = e.currentTarget; t.style.background = 'transparent'; t.style.color = item.danger ? 'var(--red)' : 'var(--text-secondary)' }}
+                            onClick={() => { setContextMenu(null); item.action() }}
+                        >
+                            <span className="flex-shrink-0 flex items-center" style={{ opacity: 0.7, width: 14 }}>{item.icon}</span>
+                            <span>{item.label}</span>
+                        </div>
+                    </div>
+                ))}
             </div>,
             document.body
         )
@@ -545,6 +577,7 @@ function HistoryTab({ active, effectivePath }: { active: boolean; effectivePath:
                     onCancel={() => setConfirmModal(null)}
                 />
             )}
+            {inputModal && <InputModal config={inputModal} onCancel={() => setInputModal(null)} />}
         </>
     )
 }
@@ -610,26 +643,66 @@ function RefTags({ refs }: { refs: string }) {
         </span>
     )
 }
+export default ChangesList
 
-function ContextMenuItem({ icon, label, onClick, variant }: { icon?: string; label: string; onClick: () => void; variant?: 'danger' }) {
-    const color = variant === 'danger' ? 'var(--red)' : 'var(--text-secondary)'
-    const hoverColor = variant === 'danger' ? 'var(--red)' : 'var(--text-primary)'
+function InputModal({ config, onCancel }: { config: { title: string; label: string; defaultValue: string; confirmLabel: string; onConfirm: (value: string) => Promise<void> }; onCancel: () => void }) {
+    const [value, setValue] = useState(config.defaultValue)
+    const [isLoading, setIsLoading] = useState(false)
+    const [error, setError] = useState('')
+    const inputRef = useRef<HTMLInputElement>(null)
+
+    useEffect(() => {
+        inputRef.current?.focus()
+        inputRef.current?.select()
+    }, [])
+
+    const handleSubmit = async () => {
+        if (!value.trim()) return
+        setIsLoading(true)
+        setError('')
+        try {
+            await config.onConfirm(value.trim())
+        } catch (err: any) {
+            setError(err?.message || 'Operation failed')
+            setIsLoading(false)
+        }
+    }
+
     return (
-        <div
-            className="flex items-center gap-2.5 px-3 py-[5px] cursor-pointer transition-colors rounded-sm mx-1"
-            style={{ color }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-hover)'; e.currentTarget.style.color = hoverColor }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = color }}
-            onClick={onClick}
-        >
-            {icon && <span className="flex-shrink-0 flex items-center" style={{ opacity: 0.7, width: 14 }}>{icon}</span>}
-            <span>{label}</span>
-        </div>
+        <Modal onClose={onCancel} loading={isLoading} width={400}>
+            <ModalHeader>
+                <h2 className="text-[14px] font-semibold text-[var(--text-primary)] m-0">{config.title}</h2>
+            </ModalHeader>
+            <ModalBody>
+                <label className="text-[12px] text-[var(--text-dim)] block mb-2">{config.label}</label>
+                <input
+                    ref={inputRef}
+                    type="text"
+                    className="w-full rounded-md text-[13px]"
+                    style={{
+                        background: 'var(--bg-sidebar)',
+                        border: '1px solid var(--border)',
+                        color: 'var(--text-primary)',
+                        fontFamily: 'var(--font-sans)',
+                        padding: '8px 10px',
+                        outline: 'none',
+                    }}
+                    value={value}
+                    onChange={(e) => setValue(e.target.value)}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter') { e.preventDefault(); handleSubmit() }
+                        if (e.key === 'Escape') { e.preventDefault(); onCancel() }
+                    }}
+                    disabled={isLoading}
+                />
+                {error && <p className="text-[12px] text-[var(--red)] mt-3 mb-0">{error}</p>}
+            </ModalBody>
+            <ModalFooter>
+                <ModalButton onClick={onCancel} disabled={isLoading}>Cancel</ModalButton>
+                <ModalButton variant="primary" onClick={handleSubmit} disabled={isLoading || !value.trim()}>
+                    {isLoading ? `${config.confirmLabel}ing...` : config.confirmLabel}
+                </ModalButton>
+            </ModalFooter>
+        </Modal>
     )
 }
-
-function ContextMenuDivider() {
-    return <div style={{ height: '1px', background: 'var(--border)', margin: '4px 0' }} />
-}
-
-export default ChangesList
