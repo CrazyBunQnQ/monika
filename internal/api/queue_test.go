@@ -140,3 +140,33 @@ func TestEnqueueWhenBusy(t *testing.T) {
 		t.Errorf("expected 1 queued item, got %+v", reloaded.Queue)
 	}
 }
+
+func TestNextQueuedItem(t *testing.T) {
+	dir := t.TempDir()
+	sm := NewSessionManager(dir, dir)
+
+	s, _ := sm.New("m", "p")
+	s.Queue = []QueuedMessage{
+		{ID: "q1", Text: "first", Status: "executing", CreatedAt: 1},
+		{ID: "q2", Text: "second", Status: "queued", CreatedAt: 2},
+		{ID: "q3", Text: "third", Status: "error", CreatedAt: 3},
+		{ID: "q4", Text: "fourth", Status: "queued", CreatedAt: 4},
+	}
+
+	next := sm.NextQueuedItem(s)
+	if next == nil || next.ID != "q2" {
+		t.Errorf("expected q2, got %+v", next)
+	}
+
+	sm.UpdateQueueItem(s, "q2", func(item *QueuedMessage) { item.Status = "executing" })
+	next = sm.NextQueuedItem(s)
+	if next == nil || next.ID != "q4" {
+		t.Errorf("expected q4, got %+v", next)
+	}
+
+	sm.UpdateQueueItem(s, "q4", func(item *QueuedMessage) { item.Status = "executing" })
+	next = sm.NextQueuedItem(s)
+	if next != nil {
+		t.Errorf("expected nil, got %+v", next)
+	}
+}

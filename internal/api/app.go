@@ -849,10 +849,57 @@ func (a *App) startAgentLoop(ctx context.Context, cancel context.CancelFunc, sm 
 }
 
 func (a *App) drainQueue(sm *SessionManager, sessionID string) {
-	// Implemented in Task 4
+	sm.Lock()
+	defer sm.Unlock()
+
+	s, err := sm.Load(sessionID)
+	if err != nil {
+		return
+	}
+
+	// Don't drain if paused
+	if s.QueuePaused {
+		return
+	}
+
+	// Find next queued item
+	item := sm.NextQueuedItem(s)
+	if item == nil {
+		return
+	}
+
+	// Check not busy
+	a.cancelMu.Lock()
+	_, busy := a.cancelFuncs[sessionID]
+	a.cancelMu.Unlock()
+	if busy {
+		return
+	}
+
+	// Mark as executing
+	sm.UpdateQueueItem(s, item.ID, func(qi *QueuedMessage) {
+		qi.Status = "executing"
+	})
+	sm.Save(s)
+
+	// Notify frontend that this item is starting
+	a.emitQueueItemStarted(sessionID, *item)
+
+	// Set up cancel func
+	ctx, cancel := context.WithCancel(a.ctx)
+	a.cancelMu.Lock()
+	a.cancelFuncs[sessionID] = cancel
+	a.cancelMu.Unlock()
+
+	// Start agent loop for this queued message
+	a.startAgentLoop(ctx, cancel, sm, s, sessionID, item.Text, item.ProviderID, item.Model, item.ID)
 }
 
 func (a *App) emitQueueUpdated(sessionID string, queue []QueuedMessage) {
+	// Implemented in Task 6
+}
+
+func (a *App) emitQueueItemStarted(sessionID string, item QueuedMessage) {
 	// Implemented in Task 6
 }
 
