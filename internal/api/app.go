@@ -1914,15 +1914,40 @@ func (a *App) resetStaleSessions(projectPath string) {
 		return
 	}
 	for _, info := range sessions {
-		if info.Status == StatusGenerating {
-			s, err := sm.Load(info.ID)
-			if err != nil {
-				continue
+		s, err := sm.Load(info.ID)
+		if err != nil {
+			continue
+		}
+		needsSave := false
+
+		// Reset stale generating status
+		if s.Status == StatusGenerating {
+			s.Status = StatusPending
+			needsSave = true
+		}
+
+		// Recover queue: reset "executing" items to "queued"
+		for i := range s.Queue {
+			if s.Queue[i].Status == "executing" {
+				s.Queue[i].Status = "queued"
+				needsSave = true
 			}
+		}
+
+		if needsSave {
 			sm.Lock()
-			sm.SetStatus(s, StatusPending)
 			sm.Save(s)
 			sm.Unlock()
+		}
+
+		// Auto-trigger queue if not paused and has queued items
+		if !s.QueuePaused && s.Status != StatusGenerating {
+			for _, item := range s.Queue {
+				if item.Status == "queued" {
+					go a.drainQueue(sm, info.ID)
+					break
+				}
+			}
 		}
 	}
 }
