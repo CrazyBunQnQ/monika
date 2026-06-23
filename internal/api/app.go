@@ -673,12 +673,13 @@ func (a *App) SendMessage(projectPath, sessionID, text, providerID, model string
 		return err
 	}
 
-	// Check if session is busy
-	a.cancelMu.Lock()
-	_, busy := a.cancelFuncs[sessionID]
-	a.cancelMu.Unlock()
+	ctx, cancel := context.WithCancel(a.ctx)
 
-	if busy {
+	a.cancelMu.Lock()
+	if _, busy := a.cancelFuncs[sessionID]; busy {
+		a.cancelMu.Unlock()
+		cancel()
+
 		// Enqueue the message instead of rejecting
 		item := QueuedMessage{
 			ID:         generateID(),
@@ -695,17 +696,23 @@ func (a *App) SendMessage(projectPath, sessionID, text, providerID, model string
 		}
 		sm.Unlock()
 
-		// Notify frontend
 		a.emitQueueUpdated(sessionID, s.Queue)
 		return nil
 	}
 
-	// Not busy — set up cancel func and execute
-	ctx, cancel := context.WithCancel(a.ctx)
-	a.cancelMu.Lock()
+	// Not busy — register cancel func (atomic with the busy check above)
 	a.cancelFuncs[sessionID] = cancel
 	a.cancelMu.Unlock()
 	sm.Unlock()
+
+	// Check provider availability before starting
+	if _, ok := a.providers[providerID]; !ok {
+		a.cancelMu.Lock()
+		delete(a.cancelFuncs, sessionID)
+		a.cancelMu.Unlock()
+		cancel()
+		return fmt.Errorf("provider %q not available", providerID)
+	}
 
 	a.startAgentLoop(ctx, cancel, sm, s, sessionID, text, providerID, model, "")
 	return nil
@@ -732,22 +739,7 @@ func (a *App) startAgentLoop(ctx context.Context, cancel context.CancelFunc, sm 
 		}
 	}
 
-	providerEng, ok := a.providers[providerID]
-	if !ok {
-		a.cancelMu.Lock()
-		delete(a.cancelFuncs, sessionID)
-		a.cancelMu.Unlock()
-		cancel()
-		sm.Lock()
-		sm.SetStatus(s, StatusPending)
-		sm.Save(s)
-		sm.Unlock()
-		a.handleAgentEvent(sessionID, model, agent2.Event{
-			Type:    agent2.EventError,
-			Content: fmt.Sprintf("provider %q not available", providerID),
-		})
-		return
-	}
+	providerEng, _ := a.providers[providerID]
 
 	conv := &agent2.Conversation{
 		ID:              s.ID,
@@ -841,11 +833,7 @@ func (a *App) startAgentLoop(ctx context.Context, cancel context.CancelFunc, sm 
 		if queueItemID != "" {
 			sm.RemoveQueueItem(s, queueItemID)
 		}
-		if ctx.Err() != nil {
-			sm.SetStatus(s, StatusPending)
-		} else {
-			sm.SetStatus(s, StatusPending)
-		}
+		sm.SetStatus(s, StatusPending)
 		sm.Save(s)
 		sm.Unlock()
 
