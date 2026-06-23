@@ -107,7 +107,7 @@ A dedicated input mode for running shell commands inline, with ANSI rendering, t
 
 ### Git Integration
 
-Change tracking, diffs, local/remote branch listing, branch create/switch, and worktree-aware branch management.
+Change tracking, diffs, staging, commit and push, commit history, local/remote branch listing, branch create/switch, and worktree-aware branch management.
 
 ### Skills & MCP
 
@@ -214,7 +214,7 @@ The agent can manipulate your project directly:
 
 ### Git Integration
 
-File change tracking, diff viewing, local/remote branch listing, branch creation and switching, worktree-aware branch management.
+File change tracking, diff viewing, staging, commit and push, commit history, local/remote branch listing, branch creation and switching, worktree-aware branch management.
 
 ### Skills & MCP
 
