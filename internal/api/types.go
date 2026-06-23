@@ -263,3 +263,14 @@ type LspCodeAction struct {
 	Kind  string            `json:"kind"`
 	Edit  *LspWorkspaceEdit `json:"edit,omitempty"`
 }
+
+// QueuedMessage represents a chat message waiting in a session's queue.
+type QueuedMessage struct {
+	ID         string `json:"id"`
+	Text       string `json:"text"`
+	ProviderID string `json:"provider_id"`
+	Model      string `json:"model"`
+	Status     string `json:"status"`
+	Error      string `json:"error,omitempty"`
+	CreatedAt  int64  `json:"created_at"`
+}

@@ -42,6 +42,8 @@ type Session struct {
 	CreatedAt       time.Time            `json:"created_at"`
 	UpdatedAt       time.Time            `json:"updated_at"`
 	WorktreePath    string               `json:"worktree_path,omitempty"`
+	Queue           []QueuedMessage      `json:"queue,omitempty"`
+	QueuePaused     bool                 `json:"queue_paused,omitempty"`
 }
 
 type SessionManager struct {
