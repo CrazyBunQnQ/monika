@@ -2,6 +2,7 @@ package api
 
 import (
 	"testing"
+	"time"
 )
 
 func TestSessionQueueSaveLoad(t *testing.T) {
@@ -103,5 +104,39 @@ func TestReorderQueuePreservesUnlisted(t *testing.T) {
 	}
 	if s.Queue[2].ID != "q2" {
 		t.Errorf("expected q2 preserved at end, got %s", s.Queue[2].ID)
+	}
+}
+
+func TestEnqueueWhenBusy(t *testing.T) {
+	dir := t.TempDir()
+	sm := NewSessionManager(dir, dir)
+
+	s, err := sm.New("m", "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Status = StatusGenerating
+	if err := sm.Save(s); err != nil {
+		t.Fatal(err)
+	}
+
+	item := QueuedMessage{
+		ID:         generateID(),
+		Text:       "queued msg",
+		ProviderID: "p",
+		Model:      "m",
+		Status:     "queued",
+		CreatedAt:  time.Now().Unix(),
+	}
+
+	sm.Lock()
+	loaded, _ := sm.Load(s.ID)
+	sm.EnqueueQueueItem(loaded, item)
+	sm.Save(loaded)
+	sm.Unlock()
+
+	reloaded, _ := sm.Load(s.ID)
+	if len(reloaded.Queue) != 1 || reloaded.Queue[0].Text != "queued msg" {
+		t.Errorf("expected 1 queued item, got %+v", reloaded.Queue)
 	}
 }

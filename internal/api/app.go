@@ -666,31 +666,60 @@ func (a *App) LoadSession(projectPath, sessionID string) (*Session, error) {
 func (a *App) SendMessage(projectPath, sessionID, text, providerID, model string) error {
 	sm := a.getSessionManager(projectPath)
 	sm.Lock()
-	defer sm.Unlock()
 
 	s, err := sm.Load(sessionID)
 	if err != nil {
+		sm.Unlock()
 		return err
 	}
 
-	ctx, cancel := context.WithCancel(a.ctx)
+	// Check if session is busy
 	a.cancelMu.Lock()
-	if _, exists := a.cancelFuncs[sessionID]; exists {
-		a.cancelMu.Unlock()
-		cancel()
-		return fmt.Errorf("session %s is already generating", sessionID)
-	}
-	a.cancelFuncs[sessionID] = cancel
+	_, busy := a.cancelFuncs[sessionID]
 	a.cancelMu.Unlock()
 
+	if busy {
+		// Enqueue the message instead of rejecting
+		item := QueuedMessage{
+			ID:         generateID(),
+			Text:       text,
+			ProviderID: providerID,
+			Model:      model,
+			Status:     "queued",
+			CreatedAt:  time.Now().Unix(),
+		}
+		sm.EnqueueQueueItem(s, item)
+		if err := sm.Save(s); err != nil {
+			sm.Unlock()
+			return err
+		}
+		sm.Unlock()
+
+		// Notify frontend
+		a.emitQueueUpdated(sessionID, s.Queue)
+		return nil
+	}
+
+	// Not busy — set up cancel func and execute
+	ctx, cancel := context.WithCancel(a.ctx)
+	a.cancelMu.Lock()
+	a.cancelFuncs[sessionID] = cancel
+	a.cancelMu.Unlock()
+	sm.Unlock()
+
+	a.startAgentLoop(ctx, cancel, sm, s, sessionID, text, providerID, model, "")
+	return nil
+}
+
+func (a *App) startAgentLoop(ctx context.Context, cancel context.CancelFunc, sm *SessionManager, s *Session, sessionID, text, providerID, model, queueItemID string) {
 	// Route /skill-name [msg] to skill tool
 	if strings.HasPrefix(text, "/") {
 		parts := strings.SplitN(strings.TrimPrefix(text, "/"), " ", 2)
 		skillName := parts[0]
 		if skillName != "" {
 			skills := a.ListSkills()
-			for _, s := range skills {
-				if s.Name == skillName {
+			for _, sk := range skills {
+				if sk.Name == skillName {
 					var sb strings.Builder
 					sb.WriteString(fmt.Sprintf("Load the skill %q and execute its full workflow.", skillName))
 					if len(parts) > 1 && strings.TrimSpace(parts[1]) != "" {
@@ -705,7 +734,19 @@ func (a *App) SendMessage(projectPath, sessionID, text, providerID, model string
 
 	providerEng, ok := a.providers[providerID]
 	if !ok {
-		return fmt.Errorf("provider %q not available", providerID)
+		a.cancelMu.Lock()
+		delete(a.cancelFuncs, sessionID)
+		a.cancelMu.Unlock()
+		cancel()
+		sm.Lock()
+		sm.SetStatus(s, StatusPending)
+		sm.Save(s)
+		sm.Unlock()
+		a.handleAgentEvent(sessionID, model, agent2.Event{
+			Type:    agent2.EventError,
+			Content: fmt.Sprintf("provider %q not available", providerID),
+		})
+		return
 	}
 
 	conv := &agent2.Conversation{
@@ -794,14 +835,18 @@ func (a *App) SendMessage(projectPath, sessionID, text, providerID, model string
 		// Persist tasks alongside the session so they survive restarts.
 		a.syncTasksToSession(sessionID, s)
 
+		// Auto-drain: if message came from queue, remove it
+		// (This happens inside the sm.Lock() block below)
 		sm.Lock()
+		if queueItemID != "" {
+			sm.RemoveQueueItem(s, queueItemID)
+		}
 		if ctx.Err() != nil {
 			sm.SetStatus(s, StatusPending)
-			sm.Save(s)
 		} else {
 			sm.SetStatus(s, StatusPending)
-			sm.Save(s)
 		}
+		sm.Save(s)
 		sm.Unlock()
 
 		if ctx.Err() == nil {
@@ -809,10 +854,18 @@ func (a *App) SendMessage(projectPath, sessionID, text, providerID, model string
 				Type:    agent2.EventSessionUpdated,
 				Content: s.Title,
 			})
+			// Auto-drain only on normal completion (not on cancel)
+			a.drainQueue(sm, sessionID)
 		}
 	}()
+}
 
-	return nil
+func (a *App) drainQueue(sm *SessionManager, sessionID string) {
+	// Implemented in Task 4
+}
+
+func (a *App) emitQueueUpdated(sessionID string, queue []QueuedMessage) {
+	// Implemented in Task 6
 }
 
 func (a *App) CancelGeneration(sessionID string) {
