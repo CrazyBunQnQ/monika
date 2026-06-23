@@ -257,9 +257,16 @@ func (sm *SessionManager) ReorderQueue(s *Session, itemIDs []string) {
 	for _, item := range s.Queue {
 		itemMap[item.ID] = item
 	}
+	seen := make(map[string]bool)
 	var reordered []QueuedMessage
 	for _, id := range itemIDs {
 		if item, ok := itemMap[id]; ok {
+			reordered = append(reordered, item)
+			seen[id] = true
+		}
+	}
+	for _, item := range s.Queue {
+		if !seen[item.ID] {
 			reordered = append(reordered, item)
 		}
 	}

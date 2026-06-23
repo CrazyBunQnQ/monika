@@ -82,3 +82,26 @@ func TestSessionQueueHelpers(t *testing.T) {
 		t.Errorf("reorder failed: %+v", s.Queue)
 	}
 }
+
+func TestReorderQueuePreservesUnlisted(t *testing.T) {
+	dir := t.TempDir()
+	sm := NewSessionManager(dir, dir)
+	s, _ := sm.New("m", "p")
+
+	sm.EnqueueQueueItem(s, QueuedMessage{ID: "q1", Text: "first", Status: "queued"})
+	sm.EnqueueQueueItem(s, QueuedMessage{ID: "q2", Text: "second", Status: "queued"})
+	sm.EnqueueQueueItem(s, QueuedMessage{ID: "q3", Text: "third", Status: "queued"})
+
+	// Reorder with only q3 and q1 — q2 should be preserved at the end
+	sm.ReorderQueue(s, []string{"q3", "q1"})
+
+	if len(s.Queue) != 3 {
+		t.Fatalf("expected 3 items preserved, got %d", len(s.Queue))
+	}
+	if s.Queue[0].ID != "q3" || s.Queue[1].ID != "q1" {
+		t.Errorf("reorder failed: expected q3,q1 first, got %s,%s", s.Queue[0].ID, s.Queue[1].ID)
+	}
+	if s.Queue[2].ID != "q2" {
+		t.Errorf("expected q2 preserved at end, got %s", s.Queue[2].ID)
+	}
+}
