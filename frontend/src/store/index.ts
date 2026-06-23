@@ -307,6 +307,8 @@ interface AppState {
     stageFiles: (paths: string[]) => Promise<void>
     unstageFiles: (paths: string[]) => Promise<void>
     commitChanges: (message: string, push: boolean) => Promise<void>
+    gitFetch: (path: string) => Promise<void>
+    gitPull: (path: string) => Promise<void>
     setPreviewCommit: (hash: string) => Promise<void>
     setCommitFileDiff: (filePath: string) => Promise<void>
     clearFeedback: () => void
@@ -1370,6 +1372,26 @@ export const useStore = create<AppState>((set, get) => ({
             set({ feedback: { message: push ? 'Committed & pushed' : 'Committed', type: 'success' } })
         } catch (err: any) {
             set({ feedback: { message: err?.message || 'Commit failed', type: 'error' } })
+        }
+    },
+
+    gitFetch: async (path) => {
+        try {
+            await App.GitFetch(path)
+            get().loadCommitHistory(path)
+            set({ feedback: { message: 'Fetch OK', type: 'success' } })
+        } catch (err: any) {
+            set({ feedback: { message: err?.message || 'Fetch failed', type: 'error' } })
+        }
+    },
+
+    gitPull: async (path) => {
+        try {
+            await App.GitPull(path)
+            get().loadCommitHistory(path)
+            set({ feedback: { message: 'Pull OK', type: 'success' } })
+        } catch (err: any) {
+            set({ feedback: { message: err?.message || 'Pull failed', type: 'error' } })
         }
     },
 

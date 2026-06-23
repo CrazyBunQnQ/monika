@@ -1880,6 +1880,34 @@ func (a *App) Commit(projectPath string, message string) error {
 	return nil
 }
 
+func (a *App) GitFetch(projectPath string) error {
+	cmd := command("git", "fetch", "--all", "--prune")
+	cmd.Dir = projectPath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("fetch failed: %s. %s", err.Error(), strings.TrimSpace(string(out)))
+	}
+	a.emitCommitHistoryChangedIfChanged()
+	return nil
+}
+
+func (a *App) GitPull(projectPath string) error {
+	cmd := command("git", "pull", "--ff-only")
+	cmd.Dir = projectPath
+	_, err := cmd.CombinedOutput()
+	if err != nil {
+		// ff-only failed — try rebase as fallback for diverging branches
+		cmd2 := command("git", "pull", "--rebase", "--autostash")
+		cmd2.Dir = projectPath
+		out2, err2 := cmd2.CombinedOutput()
+		if err2 != nil {
+			return fmt.Errorf("pull failed: %s", strings.TrimSpace(string(out2)))
+		}
+	}
+	a.emitCommitHistoryChangedIfChanged()
+	return nil
+}
+
 func (a *App) CommitAndPush(projectPath string, message string) error {
 	if err := a.Commit(projectPath, message); err != nil {
 		return err
@@ -2090,12 +2118,15 @@ func (a *App) GitLog(projectPath string) ([]CommitInfo, error) {
 	var commits []CommitInfo
 	lines := strings.Split(string(out), "\n")
 	for _, line := range lines {
-		if line == "" {
+		if strings.TrimSpace(line) == "" {
 			continue
 		}
 		// Split graph prefix from structured data at the NUL byte.
 		nulIdx := strings.IndexByte(line, 0x00)
 		if nulIdx < 0 {
+			// Graph-only line (e.g. "|\ ", "|/") — emit with empty commit data
+			// so the frontend can render the connecting lines.
+			commits = append(commits, CommitInfo{GraphLine: line})
 			continue
 		}
 		graphPrefix := line[:nulIdx]

@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
+import { useNotificationStore } from '../../store/notificationStore'
 import { IDockviewPanelProps } from 'dockview'
 import { App as MonikaApp } from '../../../bindings/monika'
 import type { ChangeStat, CommitInfo } from '../../../bindings/monika'
 import { useStore } from '../../store'
-import { GitBranch, GitCommitHorizontal, Copy, Clipboard, Tag, GitPullRequestArrow, RotateCcw, UndoDot, Pencil, Eye, Circle, CircleCheck, Upload } from 'lucide-react'
+import { GitBranch, GitCommitHorizontal, Copy, Clipboard, Tag, GitPullRequestArrow, RotateCcw, UndoDot, Pencil, Eye, Circle, CircleCheck, Upload, Download } from 'lucide-react'
 import ConfirmModal from '../Chat/ConfirmModal'
 import Modal, { ModalHeader, ModalBody, ModalFooter, ModalButton } from '../ui/Modal'
 
@@ -23,6 +24,29 @@ function ChangesList(_props: IDockviewPanelProps) {
     const effectivePath = useEffectiveChangesPath()
     const projectPath = useStore((s) => s.projectPath)
     const isWorktree = effectivePath !== projectPath
+
+    const gitFetch = useStore((s) => s.gitFetch)
+    const gitPull = useStore((s) => s.gitPull)
+    const [fetching, setFetching] = useState(false)
+    const [pulling, setPulling] = useState(false)
+
+    const handleFetch = async () => {
+        setFetching(true)
+        try {
+            await gitFetch(effectivePath)
+        } finally {
+            setFetching(false)
+        }
+    }
+
+    const handlePull = async () => {
+        setPulling(true)
+        try {
+            await gitPull(effectivePath)
+        } finally {
+            setPulling(false)
+        }
+    }
 
     // Extract branch name from worktree path
     const branchDisplay = useMemo(() => {
@@ -66,6 +90,40 @@ function ChangesList(_props: IDockviewPanelProps) {
                 >
                     {isWorktree ? branchDisplay : 'Main'}
                 </span>
+                {activeTab === 'history' && (
+                    <div className="ml-auto flex items-center gap-0.5">
+                        <button
+                            className="flex items-center justify-center w-5 h-5 rounded hover:bg-[var(--bg-hover)] transition-colors"
+                            style={{
+                                color: 'var(--text-dim)',
+                                opacity: fetching ? 0.5 : 1,
+                                cursor: fetching ? 'wait' : 'pointer',
+                            }}
+                            onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--text-primary)' }}
+                            onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-dim)' }}
+                            onClick={handleFetch}
+                            disabled={fetching || pulling}
+                            title="Fetch"
+                        >
+                            <Download size={13} strokeWidth={1.5} />
+                        </button>
+                        <button
+                            className="flex items-center justify-center w-5 h-5 rounded hover:bg-[var(--bg-hover)] transition-colors"
+                            style={{
+                                color: 'var(--text-dim)',
+                                opacity: pulling ? 0.5 : 1,
+                                cursor: pulling ? 'wait' : 'pointer',
+                            }}
+                            onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--text-primary)' }}
+                            onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-dim)' }}
+                            onClick={handlePull}
+                            disabled={fetching || pulling}
+                            title="Pull"
+                        >
+                            <GitPullRequestArrow size={13} strokeWidth={1.5} />
+                        </button>
+                    </div>
+                )}
             </div>
 
             {/* Tab content */}
@@ -116,8 +174,8 @@ function ChangesTab({ effectivePath }: { effectivePath: string }) {
 
     useEffect(() => {
         if (!feedback.message) return
-        const t = setTimeout(() => clearFeedback(), 4000)
-        return () => clearTimeout(t)
+        useNotificationStore.getState().pushToast(feedback.message, feedback.type)
+        clearFeedback()
     }, [feedback.message])
 
     const unstaged = changes.stats.filter(s => !s.staged)
@@ -194,20 +252,6 @@ function ChangesTab({ effectivePath }: { effectivePath: string }) {
 
     return (
         <div className="flex flex-col flex-1 overflow-hidden">
-            {feedback.message && (
-                <div
-                    className="shrink-0 px-2 py-1 text-[11px]"
-                    style={{
-                        color: feedback.type === 'error' ? 'var(--red)' :
-                            feedback.type === 'success' ? 'var(--green)' : 'var(--text-dim)',
-                        background: feedback.type === 'error' ? 'rgba(255,50,50,0.1)' :
-                            feedback.type === 'success' ? 'rgba(0,200,100,0.1)' : 'transparent',
-                    }}
-                >
-                    {feedback.message}
-                </div>
-            )}
-
             <div className="flex-1 overflow-y-auto" style={{ minHeight: 0 }}>
                 <div className="flex items-center justify-between px-2 py-1 text-[11px] text-[var(--text-dim)] sticky top-0" style={{ background: 'var(--bg-sidebar)' }}>
                     <span>Unstaged ({unstaged.length})</span>
@@ -582,12 +626,18 @@ function HistoryTab({ active, effectivePath }: { active: boolean; effectivePath:
         <>
             <div className="flex-1 overflow-y-auto" style={{ padding: '0 8px' }}>
                 {commitHistory.commits.map((commit, idx) => (
-                    <CommitRow
-                        key={commit.hash + '-' + idx}
-                        commit={commit}
-                        onClick={() => handleClick(commit)}
-                        onContextMenu={(e) => handleContextMenu(e, commit)}
-                    />
+                    commit.hash === '' ? (
+                        <div key={'g-' + idx} className="flex items-center gap-1 text-[12px] leading-[22px] px-1">
+                            <GraphLine line={commit.graph_line} />
+                        </div>
+                    ) : (
+                        <CommitRow
+                            key={commit.hash + '-' + idx}
+                            commit={commit}
+                            onClick={() => handleClick(commit)}
+                            onContextMenu={(e) => handleContextMenu(e, commit)}
+                        />
+                    )
                 ))}
             </div>
             {renderContextMenu()}
@@ -630,7 +680,7 @@ function CommitRow({ commit, onClick, onContextMenu }: { commit: CommitInfo; onC
                 onMouseEnter={handleMouseEnter}
                 onMouseLeave={() => setHover(false)}
             >
-                <GraphLine line={commit.graph_line} />
+                <GraphLine line={commit.graph_line} isHead={!!commit.refs?.includes('HEAD')} />
                 <span className="flex-shrink-0" style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)', fontSize: '11px', width: '7ch' }}>
                     {commit.hash.slice(0, 7)}
                 </span>
@@ -784,25 +834,55 @@ const GRAPH_COLORS = [
     '#c678dd', '#56b6c2', '#d19a66', '#be5046',
 ]
 
-function GraphLine({ line }: { line: string }) {
-    const chars = line.split('')
+const CELL_W = 7
+const CELL_H = 22
+
+function GraphLine({ line, isHead }: { line: string; isHead?: boolean }) {
     return (
-        <span className="flex-shrink-0 select-none" style={{ fontFamily: 'var(--font-mono)', lineHeight: '22px', fontSize: '11px', whiteSpace: 'pre' }}>
-            {chars.map((ch, i) => {
+        <span className="flex-shrink-0 select-none inline-flex items-stretch" style={{ height: CELL_H }}>
+            {line.split('').map((ch, i) => {
                 const lane = Math.floor(i / 2)
                 const color = GRAPH_COLORS[lane % GRAPH_COLORS.length]
-                let display = ch
+                const cell: React.CSSProperties = { width: CELL_W, height: CELL_H, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }
                 switch (ch) {
-                    case '*': display = '●'; break
-                    case '|': display = '│'; break
-                    case '/': display = '╱'; break
-                    case '\\': display = '╲'; break
-                    default: display = ch
+                    case '*':
+                        return (
+                            <span key={i} style={cell}>
+                                {isHead ? (
+                                    <span style={{ width: 8, height: 8, borderRadius: '50%', border: `2px solid ${color}`, boxSizing: 'border-box' }} />
+                                ) : (
+                                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: color }} />
+                                )}
+                            </span>
+                        )
+                    case '|':
+                        return (
+                            <span key={i} style={cell}>
+                                <span style={{ width: 1.5, height: '100%', background: color, opacity: 0.7 }} />
+                            </span>
+                        )
+                    case '/':
+                    case '\\':
+                        return (
+                            <svg key={i} width={CELL_W} height={CELL_H} className="inline-block" style={{ overflow: 'visible' }}>
+                                <line
+                                    x1={ch === '/' ? 0 : CELL_W}
+                                    y1={ch === '/' ? CELL_H : 0}
+                                    x2={ch === '/' ? CELL_W : 0}
+                                    y2={ch === '/' ? 0 : CELL_H}
+                                    stroke={color}
+                                    strokeWidth={2}
+                                />
+                                {ch === '/' ? (
+                                    <polygon points={`${CELL_W},0 ${CELL_W - 5},1 ${CELL_W - 2},5`} fill={color} />
+                                ) : (
+                                    <polygon points={`0,${CELL_H} 5,${CELL_H - 1} 2,${CELL_H - 5}`} fill={color} />
+                                )}
+                            </svg>
+                        )
+                    default:
+                        return <span key={i} style={{ width: CELL_W, display: 'inline-block' }} />
                 }
-                const isGraph = ch === '*' || ch === '|' || ch === '/' || ch === '\\'
-                return (
-                    <span key={i} style={isGraph ? { color } : undefined}>{display}</span>
-                )
             })}
         </span>
     )
