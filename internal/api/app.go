@@ -895,11 +895,222 @@ func (a *App) drainQueue(sm *SessionManager, sessionID string) {
 	a.startAgentLoop(ctx, cancel, sm, s, sessionID, item.Text, item.ProviderID, item.Model, item.ID)
 }
 
+func (a *App) GetQueue(projectPath, sessionID string) ([]QueuedMessage, error) {
+	sm := a.getSessionManager(projectPath)
+	sm.Lock()
+	defer sm.Unlock()
+	s, err := sm.Load(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return s.Queue, nil
+}
+
+func (a *App) EditQueueItem(projectPath, sessionID, itemID, newText string) error {
+	sm := a.getSessionManager(projectPath)
+	sm.Lock()
+	defer sm.Unlock()
+	s, err := sm.Load(sessionID)
+	if err != nil {
+		return err
+	}
+	idx := sm.FindQueueItem(s, itemID)
+	if idx < 0 {
+		return fmt.Errorf("queue item %s not found", itemID)
+	}
+	if s.Queue[idx].Status == "executing" {
+		return fmt.Errorf("cannot edit an executing message")
+	}
+	sm.UpdateQueueItem(s, itemID, func(item *QueuedMessage) {
+		item.Text = newText
+	})
+	if err := sm.Save(s); err != nil {
+		return err
+	}
+	a.emitQueueUpdated(sessionID, s.Queue)
+	return nil
+}
+
+func (a *App) ReorderQueue(projectPath, sessionID string, itemIDs []string) error {
+	sm := a.getSessionManager(projectPath)
+	sm.Lock()
+	defer sm.Unlock()
+	s, err := sm.Load(sessionID)
+	if err != nil {
+		return err
+	}
+	sm.ReorderQueue(s, itemIDs)
+	if err := sm.Save(s); err != nil {
+		return err
+	}
+	a.emitQueueUpdated(sessionID, s.Queue)
+	return nil
+}
+
+func (a *App) CancelQueueItem(projectPath, sessionID, itemID string) error {
+	sm := a.getSessionManager(projectPath)
+	sm.Lock()
+	s, err := sm.Load(sessionID)
+	if err != nil {
+		sm.Unlock()
+		return err
+	}
+	idx := sm.FindQueueItem(s, itemID)
+	if idx < 0 {
+		sm.Unlock()
+		return fmt.Errorf("queue item %s not found", itemID)
+	}
+
+	if s.Queue[idx].Status == "executing" {
+		// Cancel current generation + pause queue
+		sm.UpdateQueueItem(s, itemID, func(item *QueuedMessage) {
+			item.Status = "error"
+			item.Error = "cancelled by user"
+		})
+		s.QueuePaused = true
+		if err := sm.Save(s); err != nil {
+			sm.Unlock()
+			return err
+		}
+		sm.Unlock()
+
+		// Cancel the running agent loop
+		a.cancelMu.Lock()
+		cancel, ok := a.cancelFuncs[sessionID]
+		a.cancelMu.Unlock()
+		if ok {
+			cancel()
+		}
+
+		a.emitQueueError(sessionID, itemID, "cancelled by user")
+		return nil
+	}
+
+	// Simple removal for queued/error items
+	sm.RemoveQueueItem(s, itemID)
+	if err := sm.Save(s); err != nil {
+		sm.Unlock()
+		return err
+	}
+	sm.Unlock()
+	a.emitQueueUpdated(sessionID, s.Queue)
+	return nil
+}
+
+func (a *App) PauseQueue(projectPath, sessionID string) error {
+	sm := a.getSessionManager(projectPath)
+	sm.Lock()
+	defer sm.Unlock()
+	s, err := sm.Load(sessionID)
+	if err != nil {
+		return err
+	}
+	s.QueuePaused = true
+	if err := sm.Save(s); err != nil {
+		return err
+	}
+	a.emitQueueUpdated(sessionID, s.Queue)
+	return nil
+}
+
+func (a *App) ResumeQueue(projectPath, sessionID string) error {
+	sm := a.getSessionManager(projectPath)
+	sm.Lock()
+	s, err := sm.Load(sessionID)
+	if err != nil {
+		sm.Unlock()
+		return err
+	}
+	s.QueuePaused = false
+	if err := sm.Save(s); err != nil {
+		sm.Unlock()
+		return err
+	}
+	sm.Unlock()
+
+	// If idle and has queued items, trigger drain
+	a.cancelMu.Lock()
+	_, busy := a.cancelFuncs[sessionID]
+	a.cancelMu.Unlock()
+	if !busy {
+		a.drainQueue(sm, sessionID)
+	}
+	return nil
+}
+
+func (a *App) RetryQueueItem(projectPath, sessionID, itemID string) error {
+	sm := a.getSessionManager(projectPath)
+	sm.Lock()
+	s, err := sm.Load(sessionID)
+	if err != nil {
+		sm.Unlock()
+		return err
+	}
+	idx := sm.FindQueueItem(s, itemID)
+	if idx < 0 {
+		sm.Unlock()
+		return fmt.Errorf("queue item %s not found", itemID)
+	}
+	if s.Queue[idx].Status != "error" {
+		sm.Unlock()
+		return fmt.Errorf("can only retry failed items")
+	}
+	sm.UpdateQueueItem(s, itemID, func(item *QueuedMessage) {
+		item.Status = "queued"
+		item.Error = ""
+	})
+	s.QueuePaused = false
+	if err := sm.Save(s); err != nil {
+		sm.Unlock()
+		return err
+	}
+	sm.Unlock()
+
+	// Trigger drain if idle
+	a.cancelMu.Lock()
+	_, busy := a.cancelFuncs[sessionID]
+	a.cancelMu.Unlock()
+	if !busy {
+		a.drainQueue(sm, sessionID)
+	}
+	return nil
+}
+
+func (a *App) SkipQueueItem(projectPath, sessionID, itemID string) error {
+	sm := a.getSessionManager(projectPath)
+	sm.Lock()
+	s, err := sm.Load(sessionID)
+	if err != nil {
+		sm.Unlock()
+		return err
+	}
+	sm.RemoveQueueItem(s, itemID)
+	s.QueuePaused = false
+	if err := sm.Save(s); err != nil {
+		sm.Unlock()
+		return err
+	}
+	sm.Unlock()
+
+	// Trigger drain if idle
+	a.cancelMu.Lock()
+	_, busy := a.cancelFuncs[sessionID]
+	a.cancelMu.Unlock()
+	if !busy {
+		a.drainQueue(sm, sessionID)
+	}
+	return nil
+}
+
 func (a *App) emitQueueUpdated(sessionID string, queue []QueuedMessage) {
 	// Implemented in Task 6
 }
 
 func (a *App) emitQueueItemStarted(sessionID string, item QueuedMessage) {
+	// Implemented in Task 6
+}
+
+func (a *App) emitQueueError(sessionID, itemID, errorMsg string) {
 	// Implemented in Task 6
 }
 
