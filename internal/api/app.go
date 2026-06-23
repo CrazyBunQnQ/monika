@@ -2101,12 +2101,12 @@ func (a *App) AmendMessage(projectPath, message string) error {
 	return nil
 }
 
-// GitLog returns recent git commits with graph topology for the given project.
-// It executes git log --graph --all with structured output, parsing each line
-// into graph prefix, hash, author, date, message, and ref decorations.
+// GitLog returns recent git commits for the given project.
+// It runs git log --all with structured output including parent hashes
+// so the frontend can compute the commit graph topology.
 func (a *App) GitLog(projectPath string) ([]CommitInfo, error) {
-	cmd := command("git", "log", "--graph", "--all", "--no-color",
-		"--pretty=format:%x00%H%x00%h%x00%an%x00%ar%x00%s%x00%D",
+	cmd := command("git", "log", "--all", "--no-color", "--topo-order",
+		"--pretty=format:%x00%H%x00%P%x00%an%x00%ar%x00%s%x00%D",
 		"-200")
 	cmd.Dir = projectPath
 	out, err := cmd.Output()
@@ -2121,34 +2121,28 @@ func (a *App) GitLog(projectPath string) ([]CommitInfo, error) {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		// Split graph prefix from structured data at the NUL byte.
 		nulIdx := strings.IndexByte(line, 0x00)
 		if nulIdx < 0 {
-			// Graph-only line (e.g. "|\ ", "|/") — emit with empty commit data
-			// so the frontend can render the connecting lines.
-			commits = append(commits, CommitInfo{GraphLine: line})
 			continue
 		}
-		graphPrefix := line[:nulIdx]
 		rest := line[nulIdx+1:]
-
-		parts := strings.SplitN(rest, "\x00", 6)
-		if len(parts) < 5 {
+		parts := strings.SplitN(rest, "\x00", 7)
+		if len(parts) < 6 {
 			continue
 		}
 
-		refs := ""
-		if len(parts) >= 6 {
-			refs = parts[5]
+		var parents []string
+		if parts[1] != "" {
+			parents = strings.Fields(parts[1])
 		}
 
 		commits = append(commits, CommitInfo{
-			GraphLine: graphPrefix,
-			Hash:      parts[1], // short hash
-			Author:    parts[2],
-			Date:      parts[3],
-			Message:   parts[4],
-			Refs:      refs,
+			Hash:    parts[0][:7], // display short hash
+			Author:  parts[2],
+			Date:    parts[3],
+			Message: parts[4],
+			Refs:    parts[5],
+			Parents: parents,
 		})
 	}
 	return commits, nil

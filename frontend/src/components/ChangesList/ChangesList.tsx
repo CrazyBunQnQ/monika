@@ -613,6 +613,9 @@ function HistoryTab({ active, effectivePath }: { active: boolean; effectivePath:
         )
     }
 
+    const graph = useMemo(() => computeGraph(commitHistory.commits), [commitHistory.commits])
+    const graphWidth = Math.max(graph.numLanes, 1) * LANE_W + 12
+
     if (commitHistory.loading && commitHistory.commits.length === 0) {
         return <div className="flex-1 overflow-y-auto" style={{ padding: '8px' }}><div className="py-4 text-[12px] text-[var(--text-dim)] px-1">Loading...</div></div>
     }
@@ -622,22 +625,24 @@ function HistoryTab({ active, effectivePath }: { active: boolean; effectivePath:
     if (commitHistory.commits.length === 0) {
         return <div className="flex-1 overflow-y-auto" style={{ padding: '8px' }}><div className="py-4 text-[12px] text-[var(--text-dim)] px-1">No commits</div></div>
     }
+
     return (
         <>
-            <div className="flex-1 overflow-y-auto" style={{ padding: '0 8px' }}>
+            <div className="flex-1 overflow-y-auto" style={{ position: 'relative', padding: '0 8px' }}>
+                <CommitGraphSVG
+                    commits={commitHistory.commits}
+                    laneOf={graph.laneOf}
+                    edges={graph.edges}
+                    numLanes={graph.numLanes}
+                />
                 {commitHistory.commits.map((commit, idx) => (
-                    commit.hash === '' ? (
-                        <div key={'g-' + idx} className="flex items-center gap-1 text-[12px] leading-[22px] px-1">
-                            <GraphLine line={commit.graph_line} />
-                        </div>
-                    ) : (
-                        <CommitRow
-                            key={commit.hash + '-' + idx}
-                            commit={commit}
-                            onClick={() => handleClick(commit)}
-                            onContextMenu={(e) => handleContextMenu(e, commit)}
-                        />
-                    )
+                    <CommitRow
+                        key={commit.hash + '-' + idx}
+                        commit={commit}
+                        graphWidth={graphWidth}
+                        onClick={() => handleClick(commit)}
+                        onContextMenu={(e) => handleContextMenu(e, commit)}
+                    />
                 ))}
             </div>
             {renderContextMenu()}
@@ -656,7 +661,7 @@ function HistoryTab({ active, effectivePath }: { active: boolean; effectivePath:
     )
 }
 
-function CommitRow({ commit, onClick, onContextMenu }: { commit: CommitInfo; onClick: () => void; onContextMenu: (e: React.MouseEvent) => void }) {
+function CommitRow({ commit, graphWidth, onClick, onContextMenu }: { commit: CommitInfo; graphWidth: number; onClick: () => void; onContextMenu: (e: React.MouseEvent) => void }) {
     const [hover, setHover] = useState(false)
     const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 })
     const rowRef = useRef<HTMLDivElement>(null)
@@ -673,14 +678,13 @@ function CommitRow({ commit, onClick, onContextMenu }: { commit: CommitInfo; onC
         <>
             <div
                 ref={rowRef}
-                className="flex items-center gap-1 text-[12px] leading-[22px] rounded-md transition-colors duration-150 px-1 cursor-pointer hover:bg-[var(--bg-hover)]"
-                style={{ fontFamily: 'var(--font-sans)', color: 'var(--text-secondary)' }}
+                className="flex items-center gap-1 text-[12px] rounded-md transition-colors duration-150 px-1 cursor-pointer hover:bg-[var(--bg-hover)] overflow-hidden"
+                style={{ fontFamily: 'var(--font-sans)', color: 'var(--text-secondary)', paddingLeft: graphWidth, height: ROW_H, lineHeight: `${ROW_H}px` }}
                 onClick={onClick}
                 onContextMenu={onContextMenu}
                 onMouseEnter={handleMouseEnter}
                 onMouseLeave={() => setHover(false)}
             >
-                <GraphLine line={commit.graph_line} isHead={!!commit.refs?.includes('HEAD')} />
                 <span className="flex-shrink-0" style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)', fontSize: '11px', width: '7ch' }}>
                     {commit.hash.slice(0, 7)}
                 </span>
@@ -833,57 +837,138 @@ const GRAPH_COLORS = [
     '#e06c75', '#61afef', '#98c379', '#e5c07b',
     '#c678dd', '#56b6c2', '#d19a66', '#be5046',
 ]
+const LANE_W = 14
+const ROW_H = 22
 
-const CELL_W = 7
-const CELL_H = 22
+interface GraphEdge { fromRow: number; fromLane: number; toRow: number; toLane: number; color: number }
 
-function GraphLine({ line, isHead }: { line: string; isHead?: boolean }) {
-    return (
-        <span className="flex-shrink-0 select-none inline-flex items-stretch" style={{ height: CELL_H }}>
-            {line.split('').map((ch, i) => {
-                const lane = Math.floor(i / 2)
-                const color = GRAPH_COLORS[lane % GRAPH_COLORS.length]
-                const cell: React.CSSProperties = { width: CELL_W, height: CELL_H, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }
-                switch (ch) {
-                    case '*':
-                        return (
-                            <span key={i} style={cell}>
-                                {isHead ? (
-                                    <span style={{ width: 8, height: 8, borderRadius: '50%', border: `2px solid ${color}`, boxSizing: 'border-box' }} />
-                                ) : (
-                                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: color }} />
-                                )}
-                            </span>
-                        )
-                    case '|':
-                        return (
-                            <span key={i} style={cell}>
-                                <span style={{ width: 1.5, height: '100%', background: color, opacity: 0.7 }} />
-                            </span>
-                        )
-                    case '/':
-                    case '\\':
-                        return (
-                            <svg key={i} width={CELL_W} height={CELL_H} className="inline-block" style={{ overflow: 'visible' }}>
-                                <line
-                                    x1={ch === '/' ? 0 : CELL_W}
-                                    y1={ch === '/' ? CELL_H : 0}
-                                    x2={ch === '/' ? CELL_W : 0}
-                                    y2={ch === '/' ? 0 : CELL_H}
-                                    stroke={color}
-                                    strokeWidth={2}
-                                />
-                                {ch === '/' ? (
-                                    <polygon points={`${CELL_W},0 ${CELL_W - 5},1 ${CELL_W - 2},5`} fill={color} />
-                                ) : (
-                                    <polygon points={`0,${CELL_H} 5,${CELL_H - 1} 2,${CELL_H - 5}`} fill={color} />
-                                )}
-                            </svg>
-                        )
-                    default:
-                        return <span key={i} style={{ width: CELL_W, display: 'inline-block' }} />
+function computeGraph(commits: CommitInfo[]) {
+    const hashToIndex = new Map<string, number>()
+    commits.forEach((c, i) => hashToIndex.set(c.hash, i))
+
+    // Also build a prefix map: first 7 chars of full parent hash → commit index
+    const prefixToIndex = new Map<string, number>()
+    commits.forEach((c, i) => {
+        const parents = c.parents || []
+        for (const p of parents) {
+            if (!prefixToIndex.has(p.slice(0, 7))) {
+                // Find which commit this prefix belongs to
+                const matchIdx = commits.findIndex(cc => cc.hash === p.slice(0, 7) || p.startsWith(cc.hash) || cc.hash.startsWith(p.slice(0, 7)))
+                if (matchIdx >= 0) prefixToIndex.set(p.slice(0, 7), matchIdx)
+            }
+        }
+    })
+
+    const resolveParent = (parentHash: string): number => {
+        // Try exact match first (7-char hash)
+        let idx = hashToIndex.get(parentHash.slice(0, 7))
+        if (idx !== undefined) return idx
+        // Try prefix match
+        idx = prefixToIndex.get(parentHash.slice(0, 7))
+        if (idx !== undefined) return idx
+        // Brute force: find commit whose hash is a prefix of parentHash or vice versa
+        for (let j = 0; j < commits.length; j++) {
+            if (parentHash.startsWith(commits[j].hash) || commits[j].hash.startsWith(parentHash.slice(0, 7))) {
+                return j
+            }
+        }
+        return -1
+    }
+
+    const N = commits.length
+    const laneOf: number[] = new Array(N).fill(-1)
+    const laneTarget: number[] = []  // -1 = free, otherwise = target commit index
+    let maxLane = 0
+
+    for (let i = 0; i < N; i++) {
+        const commit = commits[i]
+
+        let myLane = laneTarget.indexOf(i)
+        if (myLane === -1) {
+            myLane = laneTarget.indexOf(-1)
+            if (myLane === -1) {
+                myLane = laneTarget.length
+                laneTarget.push(-1)
+            }
+        }
+        laneOf[i] = myLane
+        if (myLane + 1 > maxLane) maxLane = myLane + 1
+
+        for (let l = 0; l < laneTarget.length; l++) {
+            if (laneTarget[l] === i) laneTarget[l] = -1
+        }
+        laneTarget[myLane] = -1
+
+        const parents = commit.parents || []
+        if (parents.length > 0) {
+            const p0Idx = resolveParent(parents[0])
+            if (p0Idx >= 0) laneTarget[myLane] = p0Idx
+            for (let p = 1; p < parents.length; p++) {
+                const pIdx = resolveParent(parents[p])
+                if (pIdx < 0) continue
+                let ml = -1
+                for (let l = 0; l < laneTarget.length; l++) {
+                    if (laneTarget[l] === -1) { ml = l; break }
                 }
+                if (ml === -1) {
+                    ml = laneTarget.length
+                    laneTarget.push(pIdx)
+                    if (ml + 1 > maxLane) maxLane = ml + 1
+                } else {
+                    laneTarget[ml] = pIdx
+                }
+            }
+        }
+    }
+
+    const edges: GraphEdge[] = []
+    for (let i = 0; i < N; i++) {
+        const parents = commits[i].parents || []
+        for (let p = 0; p < parents.length; p++) {
+            const pIdx = resolveParent(parents[p])
+            if (pIdx < 0) continue
+            edges.push({
+                fromRow: i, fromLane: laneOf[i],
+                toRow: pIdx, toLane: laneOf[pIdx],
+                color: p === 0 ? laneOf[i] : laneOf[pIdx],
+            })
+        }
+    }
+    return { laneOf, edges, numLanes: maxLane }
+}
+
+function CommitGraphSVG({ commits, laneOf, edges, numLanes }: {
+    commits: CommitInfo[]; laneOf: number[]; edges: GraphEdge[]; numLanes: number
+}) {
+    const w = Math.max(numLanes, 1) * LANE_W + 4
+    const h = commits.length * ROW_H
+    const laneX = (l: number) => l * LANE_W + LANE_W / 2 + 2
+    const rowY = (r: number) => r * ROW_H + ROW_H / 2
+    const d = ROW_H * 0.4
+
+    return (
+        <svg width={w} height={h} style={{ position: 'absolute', left: 8, top: 0, pointerEvents: 'none', zIndex: 0 }}>
+            {edges.map((e, i) => {
+                const x1 = laneX(e.fromLane), y1 = rowY(e.fromRow)
+                const x2 = laneX(e.toLane), y2 = rowY(e.toRow)
+                const color = GRAPH_COLORS[e.color % GRAPH_COLORS.length]
+                let path: string
+                if (x1 === x2) {
+                    path = `M${x1},${y1} L${x1},${y2}`
+                } else {
+                    const ty = Math.min(y1 + ROW_H, (y1 + y2) / 2)
+                    path = `M${x1},${y1} L${x1},${y1 + 2} C${x1},${y1 + d} ${x2},${ty - d} ${x2},${ty} L${x2},${y2}`
+                }
+                return <path key={i} d={path} stroke={color} strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
             })}
-        </span>
+            {commits.map((c, i) => {
+                const cx = laneX(laneOf[i]), cy = rowY(i)
+                const color = GRAPH_COLORS[laneOf[i] % GRAPH_COLORS.length]
+                if (c.refs?.includes('HEAD')) {
+                    return <circle key={i} cx={cx} cy={cy} r={5} fill="none" stroke={color} strokeWidth={2} />
+                }
+                return <circle key={i} cx={cx} cy={cy} r={4} fill={color} />
+            })}
+        </svg>
     )
 }

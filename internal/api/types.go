@@ -126,12 +126,12 @@ type ChangeStat struct {
 }
 
 type CommitInfo struct {
-	Hash      string `json:"hash"`
-	Author    string `json:"author"`
-	Date      string `json:"date"`
-	Message   string `json:"message"`
-	Refs      string `json:"refs"`
-	GraphLine string `json:"graph_line"`
+	Hash    string   `json:"hash"`
+	Author  string   `json:"author"`
+	Date    string   `json:"date"`
+	Message string   `json:"message"`
+	Refs    string   `json:"refs"`
+	Parents []string `json:"parents"`
 }
 
 // ProviderInfo identifies a configured provider for the frontend selector.
