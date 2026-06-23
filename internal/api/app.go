@@ -793,12 +793,16 @@ func (a *App) startAgentLoop(ctx context.Context, cancel context.CancelFunc, sm 
 		sm.Save(s)
 		sm.Unlock()
 
+		var hadError bool
 		events := loop.Run(ctx, conv, text)
 		for ev := range events {
 			select {
 			case <-ctx.Done():
 				_ = ctx.Err()
 			default:
+			}
+			if ev.Type == agent2.EventError {
+				hadError = true
 			}
 			a.handleAgentEvent(sessionID, model, ev)
 		}
@@ -826,6 +830,20 @@ func (a *App) startAgentLoop(ctx context.Context, cancel context.CancelFunc, sm 
 
 		// Persist tasks alongside the session so they survive restarts.
 		a.syncTasksToSession(sessionID, s)
+
+		// Error during queued message execution — pause queue
+		if hadError && queueItemID != "" {
+			sm.Lock()
+			sm.UpdateQueueItem(s, queueItemID, func(item *QueuedMessage) {
+				item.Status = "error"
+			})
+			s.QueuePaused = true
+			sm.SetStatus(s, StatusPending)
+			sm.Save(s)
+			sm.Unlock()
+			a.emitQueueError(sessionID, queueItemID, "execution failed")
+			return // Skip normal completion + drain — queue is paused
+		}
 
 		// Auto-drain: if message came from queue, remove it
 		// (This happens inside the sm.Lock() block below)
@@ -1103,15 +1121,52 @@ func (a *App) SkipQueueItem(projectPath, sessionID, itemID string) error {
 }
 
 func (a *App) emitQueueUpdated(sessionID string, queue []QueuedMessage) {
-	// Implemented in Task 6
+	se := StreamEvent{
+		SessionID: sessionID,
+		Type:      "queue_updated",
+		Content:   queueToJSON(queue),
+		Seq:       a.eventSeq.Add(1),
+	}
+	a.eventBus.Emit(se)
+	application.Get().Event.Emit("stream", se)
 }
 
 func (a *App) emitQueueItemStarted(sessionID string, item QueuedMessage) {
-	// Implemented in Task 6
+	se := StreamEvent{
+		SessionID: sessionID,
+		Type:      "queue_item_started",
+		Content:   queueItemToJSON(item),
+		Seq:       a.eventSeq.Add(1),
+	}
+	a.eventBus.Emit(se)
+	application.Get().Event.Emit("stream", se)
 }
 
 func (a *App) emitQueueError(sessionID, itemID, errorMsg string) {
-	// Implemented in Task 6
+	se := StreamEvent{
+		SessionID: sessionID,
+		Type:      "queue_error",
+		Content:   fmt.Sprintf(`{"item_id":%q,"error":%q}`, itemID, errorMsg),
+		Seq:       a.eventSeq.Add(1),
+	}
+	a.eventBus.Emit(se)
+	application.Get().Event.Emit("stream", se)
+}
+
+func queueToJSON(queue []QueuedMessage) string {
+	data, err := json.Marshal(queue)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
+}
+
+func queueItemToJSON(item QueuedMessage) string {
+	data, err := json.Marshal(item)
+	if err != nil {
+		return "{}"
+	}
+	return string(data)
 }
 
 func (a *App) CancelGeneration(sessionID string) {
