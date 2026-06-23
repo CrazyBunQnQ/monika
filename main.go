@@ -165,7 +165,7 @@ func main() {
 		builtin.RegisterSkillSearchTool(registry, skEngine, home, getCwd, &pr.Config)
 	}
 
-	kbStore, err := memory.NewKBStore(home, workspaceRoot)
+	kbStore, err := memory.NewKBStore(home, "")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[monika] kb init failed: %v\n", err)
 	} else {

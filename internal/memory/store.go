@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -17,6 +18,7 @@ import (
 )
 
 type KBStore struct {
+	mu          sync.RWMutex
 	globalPath  string
 	projectPath string
 	globalDB    *sql.DB
@@ -25,15 +27,12 @@ type KBStore struct {
 
 func NewKBStore(homeDir, projectDir string) (*KBStore, error) {
 	gp := GlobalKBPath(homeDir)
-	pp := ProjectKBPath(projectDir)
-	for _, p := range []string{gp, pp} {
-		for _, sub := range KBSubdirs() {
-			if err := os.MkdirAll(filepath.Join(p, sub), 0755); err != nil {
-				return nil, fmt.Errorf("kb mkdir %s: %w", p, err)
-			}
+	for _, sub := range KBSubdirs() {
+		if err := os.MkdirAll(filepath.Join(gp, sub), 0755); err != nil {
+			return nil, fmt.Errorf("kb mkdir %s: %w", gp, err)
 		}
 	}
-	s := &KBStore{globalPath: gp, projectPath: pp}
+	s := &KBStore{globalPath: gp}
 
 	gdb, err := openDB(filepath.Join(gp, ".index", "kb.db"))
 	if err != nil {
@@ -41,17 +40,89 @@ func NewKBStore(homeDir, projectDir string) (*KBStore, error) {
 	}
 	s.globalDB = gdb
 
-	pdb, err := openDB(filepath.Join(pp, ".index", "kb.db"))
-	if err != nil {
-		gdb.Close()
-		return nil, fmt.Errorf("open project db: %w", err)
-	}
-	s.projectDB = pdb
-
 	s.autoReindex(ScopeGlobal)
-	s.autoReindex(ScopeProject)
+
+	if projectDir != "" {
+		if err := s.initProjectKB(projectDir); err != nil {
+			gdb.Close()
+			return nil, err
+		}
+	}
 
 	return s, nil
+}
+
+// initProjectKB 在 projectDir 下创建知识库目录结构和 SQLite 索引。
+// 调用方负责加锁。
+func (s *KBStore) initProjectKB(projectDir string) error {
+	pp := ProjectKBPath(projectDir)
+	for _, sub := range KBSubdirs() {
+		if err := os.MkdirAll(filepath.Join(pp, sub), 0755); err != nil {
+			return fmt.Errorf("kb mkdir %s: %w", pp, err)
+		}
+	}
+	pdb, err := openDB(filepath.Join(pp, ".index", "kb.db"))
+	if err != nil {
+		return fmt.Errorf("open project db: %w", err)
+	}
+	s.projectPath = pp
+	s.projectDB = pdb
+	s.autoReindex(ScopeProject)
+	return nil
+}
+
+// SetProjectDir 切换项目知识库到新的项目目录。
+// 关闭旧的 project DB，打开新项目的 KB。
+func (s *KBStore) SetProjectDir(projectDir string) error {
+	if projectDir != "" {
+		newPP := ProjectKBPath(projectDir)
+		s.mu.RLock()
+		same := s.projectDB != nil && s.projectPath == newPP
+		s.mu.RUnlock()
+		if same {
+			return nil
+		}
+
+		for _, sub := range KBSubdirs() {
+			if err := os.MkdirAll(filepath.Join(newPP, sub), 0755); err != nil {
+				return fmt.Errorf("kb mkdir %s: %w", newPP, err)
+			}
+		}
+		pdb, err := openDB(filepath.Join(newPP, ".index", "kb.db"))
+		if err != nil {
+			return fmt.Errorf("open project db: %w", err)
+		}
+
+		s.mu.Lock()
+		oldDB := s.projectDB
+		s.projectDB = pdb
+		s.projectPath = newPP
+		s.mu.Unlock()
+
+		if oldDB != nil {
+			oldDB.Close()
+		}
+		s.autoReindex(ScopeProject)
+	} else {
+		s.mu.Lock()
+		oldDB := s.projectDB
+		s.projectDB = nil
+		s.projectPath = ""
+		s.mu.Unlock()
+		if oldDB != nil {
+			oldDB.Close()
+		}
+	}
+	return nil
+}
+
+func (s *KBStore) dbFor(scope string) *sql.DB {
+	if scope == ScopeGlobal {
+		return s.globalDB
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.projectDB
 }
 
 func openDB(dbPath string) (*sql.DB, error) {
@@ -103,13 +174,6 @@ func openDB(dbPath string) (*sql.DB, error) {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	return db, nil
-}
-
-func (s *KBStore) dbFor(scope string) *sql.DB {
-	if scope == ScopeGlobal {
-		return s.globalDB
-	}
-	return s.projectDB
 }
 
 // autoReindex 如果 DB 索引为空但磁盘上有 .md 文件，从磁盘重建索引。
@@ -185,6 +249,9 @@ func (s *KBStore) searchAuto(query string, limit int) ([]KBFile, error) {
 }
 
 func (s *KBStore) searchSingle(query, scope string, limit int) ([]KBFile, error) {
+	if s.dbFor(scope) == nil {
+		return nil, nil
+	}
 	if containsCJK(query) {
 		return s.searchLike(query, scope, limit)
 	}
@@ -473,6 +540,8 @@ func (s *KBStore) rootFor(scope string) string {
 	if scope == ScopeGlobal {
 		return s.globalPath
 	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.projectPath
 }
 

@@ -387,6 +387,14 @@ func (a *App) OpenProject(path string) (*ProjectInfo, error) {
 	a.writeRecentProject(info.Path, info.Name)
 	a.saveLastProjectPath(path)
 
+	// Switch project knowledge base to the actual project directory.
+	if a.kbStore != nil {
+		wsRoot := memory.ResolveWorkspaceRoot(path)
+		if err := a.kbStore.SetProjectDir(wsRoot); err != nil {
+			fmt.Fprintf(os.Stderr, "[monika] kb switch project: %v\n", err)
+		}
+	}
+
 	// Reload config so LSP servers are read from the actual project directory.
 	a.reloadMergedConfig()
 
