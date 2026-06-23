@@ -88,6 +88,16 @@ interface Message {
     afterTokens?: number
 }
 
+interface QueuedMessage {
+    id: string
+    text: string
+    provider_id: string
+    model: string
+    status: 'queued' | 'executing' | 'error'
+    error?: string
+    created_at: number
+}
+
 interface SessionTabInfo {
     id: string
     title: string
@@ -234,6 +244,9 @@ interface AppState {
     selectedBgTaskId: string | null
     bgTaskLogs: Record<string, string[]>
 
+    sessionQueues: Record<string, QueuedMessage[]>
+    queuePaused: Record<string, boolean>
+
     addMessage: (msg: Message) => void
     setPermissionMode: (mode: 'auto' | 'manual') => void
     setInputMode: (sessionId: string, mode: 'normal' | 'shell') => void
@@ -362,6 +375,12 @@ interface AppState {
     appendBgTaskLog: (taskId: string, line: string) => void
     stopBgTask: (taskId: string) => Promise<void>
     startBgTask: (command: string) => Promise<void>
+
+    setQueue: (sessionId: string, items: QueuedMessage[]) => void
+    updateQueueItem: (sessionId: string, itemId: string, changes: Partial<QueuedMessage>) => void
+    removeQueueItem: (sessionId: string, itemId: string) => void
+    reorderQueue: (sessionId: string, itemIds: string[]) => void
+    toggleQueuePause: (sessionId: string, paused: boolean) => void
 }
 
 const INITIAL_DISPLAY_COUNT = 15
@@ -440,6 +459,9 @@ export const useStore = create<AppState>((set, get) => ({
     bgTasks: [] as BgTaskInfo[],
     selectedBgTaskId: null as string | null,
     bgTaskLogs: {} as Record<string, string[]>,
+
+    sessionQueues: {},
+    queuePaused: {},
 
     addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
 
@@ -745,6 +767,47 @@ export const useStore = create<AppState>((set, get) => ({
             console.error('[monika] failed to start bg task:', e)
         }
     },
+
+    setQueue: (sessionId, items) => set((state) => ({
+        sessionQueues: { ...state.sessionQueues, [sessionId]: items },
+    })),
+
+    updateQueueItem: (sessionId, itemId, changes) => set((state) => {
+        const queue = state.sessionQueues[sessionId] || []
+        return {
+            sessionQueues: {
+                ...state.sessionQueues,
+                [sessionId]: queue.map((item) =>
+                    item.id === itemId ? { ...item, ...changes } : item
+                ),
+            },
+        }
+    }),
+
+    removeQueueItem: (sessionId, itemId) => set((state) => {
+        const queue = state.sessionQueues[sessionId] || []
+        return {
+            sessionQueues: {
+                ...state.sessionQueues,
+                [sessionId]: queue.filter((item) => item.id !== itemId),
+            },
+        }
+    }),
+
+    reorderQueue: (sessionId, itemIds) => set((state) => {
+        const queue = state.sessionQueues[sessionId] || []
+        const map = new Map(queue.map((item) => [item.id, item]))
+        return {
+            sessionQueues: {
+                ...state.sessionQueues,
+                [sessionId]: itemIds.map((id) => map.get(id)!).filter(Boolean),
+            },
+        }
+    }),
+
+    toggleQueuePause: (sessionId, paused) => set((state) => ({
+        queuePaused: { ...state.queuePaused, [sessionId]: paused },
+    })),
 
 
     setLastAssistantMeta: (sessionId, meta) => {
@@ -2164,6 +2227,49 @@ export function setupWailsEvents() {
                     })
                 }
                 break
+
+            case 'queue_updated': {
+                try {
+                    const items = data.content ? JSON.parse(data.content) : []
+                    store.setQueue(sid, items)
+                } catch {}
+                break
+            }
+            case 'queue_item_started': {
+                try {
+                    const item = data.content ? JSON.parse(data.content) : null
+                    if (item) {
+                        store.updateQueueItem(sid, item.id, { status: 'executing' })
+                        const userMsg: Message = {
+                            id: crypto.randomUUID(),
+                            role: 'user',
+                            content: item.text,
+                        }
+                        const assistantMsg: Message = {
+                            id: crypto.randomUUID(),
+                            role: 'assistant',
+                            content: '',
+                            startedAt: Date.now(),
+                        }
+                        store.appendToSession(sid, [userMsg, assistantMsg])
+                        store.addGeneratingSession(sid)
+                    }
+                } catch {}
+                break
+            }
+            case 'queue_error': {
+                try {
+                    const info = data.content ? JSON.parse(data.content) : null
+                    if (info) {
+                        store.updateQueueItem(sid, info.item_id, {
+                            status: 'error',
+                            error: info.error,
+                        })
+                        store.toggleQueuePause(sid, true)
+                    }
+                } catch {}
+                break
+            }
         }
     }
 
