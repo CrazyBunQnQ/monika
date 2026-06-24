@@ -66,7 +66,7 @@ function ModelPicker() {
     type FlatItem =
         | { type: 'favorite-header' }
         | { type: 'provider'; provider: ProviderInfo }
-        | { type: 'model'; provider: ProviderInfo; model: ModelInfo; isFavorite?: boolean }
+        | { type: 'model'; provider: ProviderInfo; model: ModelInfo; isFavorite?: boolean; inFavoriteGroup?: boolean }
 
     const flatItems = useMemo((): FlatItem[] => {
         const items: FlatItem[] = []
@@ -95,7 +95,7 @@ function ModelPicker() {
         if (validFavorites.length > 0) {
             items.push({ type: 'favorite-header' })
             for (const { provider, model } of validFavorites) {
-                items.push({ type: 'model', provider, model, isFavorite: true })
+                items.push({ type: 'model', provider, model, isFavorite: true, inFavoriteGroup: true })
             }
         }
 
@@ -175,6 +175,9 @@ function ModelPicker() {
 
     return (
         <div ref={ref} style={{ position: 'relative' }}>
+            <style>{`
+.fav-row:hover .fav-star { opacity: 1 !important; }
+`}</style>
             <button
                 onClick={() => setOpen((v) => !v)}
                 disabled={isGenerating}
@@ -235,6 +238,17 @@ function ModelPicker() {
                         </div>
                     ) : (
                         flatItems.map((item, idx) => {
+                            if (item.type === 'favorite-header') {
+                                return (
+                                    <div
+                                        key="favorite-header"
+                                        className="text-[10px] font-semibold uppercase tracking-[0.05em] px-2 pt-2 pb-0.5"
+                                        style={{ color: '#ffd700' }}
+                                    >
+                                        ★ Favorite models
+                                    </div>
+                                )
+                            }
                             if (item.type === 'provider') {
                                 return (
                                     <div
@@ -254,7 +268,7 @@ function ModelPicker() {
                                     key={`m-${item.provider.id}-${m.ID}`}
                                     onClick={() => handleSelect(item.provider.id, m.ID)}
                                     onMouseEnter={() => setFocusIdx(idx)}
-                                    className="text-[11px] w-full text-left px-2 py-1 rounded cursor-pointer flex items-center justify-between"
+                                    className="text-[11px] w-full text-left px-2 py-1 rounded cursor-pointer flex items-center justify-between fav-row"
                                     style={{
                                         background:
                                             idx === focusIdx
@@ -267,10 +281,36 @@ function ModelPicker() {
                                         fontFamily: 'inherit',
                                     }}
                                 >
-                                    <span>{m.DisplayName}</span>
-                                    {isSelected && (
-                                        <IconCheck size={12} />
-                                    )}
+                                    <span>
+                                        {m.DisplayName}
+                                        {item.inFavoriteGroup && (
+                                            <span className="text-[9px]" style={{ color: 'var(--text-dim)', marginLeft: 4 }}>
+                                                ({item.provider.display_name})
+                                            </span>
+                                        )}
+                                    </span>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                        <span
+                                            onClick={(e) => {
+                                                e.stopPropagation()
+                                                toggleFavoriteModel(item.provider.id, m.ID)
+                                            }}
+                                            className="fav-star"
+                                            style={{
+                                                fontSize: 14,
+                                                cursor: 'pointer',
+                                                color: item.isFavorite ? '#ffd700' : 'var(--text-dim)',
+                                                opacity: item.isFavorite ? 1 : 0,
+                                                transition: 'opacity 0.15s',
+                                            }}
+                                            title={item.isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+                                        >
+                                            {item.isFavorite ? '★' : '☆'}
+                                        </span>
+                                        {isSelected && (
+                                            <IconCheck size={12} />
+                                        )}
+                                    </div>
                                 </button>
                             )
                         })
