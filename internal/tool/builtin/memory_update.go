@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"monika/internal/agent"
 	"monika/internal/memory"
 	"monika/internal/tool"
 )
@@ -53,6 +54,10 @@ func (t *memoryUpdateTool) Execute(ctx context.Context, args json.RawMessage) (t
 	}
 
 	msg := fmt.Sprintf("Memory '%s' updated in %s scope.", p.Path, p.Scope)
+
+	if q, ok := agent.MemoryQueueFromContext(ctx); ok {
+		q.QueueMemory(fmt.Sprintf("Updated memory \"%s\" in %s scope", p.Path, p.Scope))
+	}
 
 	// 字符上限检查
 	if warn := checkCharLimit(p.Path, p.Content); warn != "" {
