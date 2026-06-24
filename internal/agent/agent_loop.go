@@ -1214,8 +1214,7 @@ func (a *AgentLoop) buildMessages(conv *Conversation) []engine.ChatMessage {
 }
 
 func (a *AgentLoop) buildMaxStepsPrompt(conv *Conversation) []engine.ChatMessage {
-	normalized := strings.ReplaceAll(a.projectDir, "\\", "/")
-	sysPrompt := strings.ReplaceAll(a.systemPrompt, "{{WorkingDirectory}}", normalized)
+	sysPrompt := a.systemPrompt // already had {{WorkingDirectory}} replaced at startup
 
 	maxStepsPrompt := `CRITICAL - MAXIMUM STEPS REACHED
 

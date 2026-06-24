@@ -204,7 +204,7 @@ func main() {
 	}
 	shellName += " (mvdan/sh)"
 	systemParts := []string{
-		fmt.Sprintf("Current date: %s\nOS Version: %s\nWorking directory: {{WorkingDirectory}}\nShell: %s", time.Now().Format("2006-01-02"), runtime.GOOS, shellName),
+		fmt.Sprintf("OS Version: %s\nWorking directory: {{WorkingDirectory}}\nShell: %s", runtime.GOOS, shellName),
 		ps.Identity,
 		`## Knowledge Base (Memory)
 
@@ -274,15 +274,12 @@ changes as you install or configure them. Always search before assuming:
 
 	systemParts = append(systemParts, strings.TrimSpace(dynamicCapabilities))
 
-	if dbMgr != nil {
-		if summary := dbMgr.SchemaSummary(); summary != "" {
-			systemParts = append(systemParts, summary)
-		} else {
-			systemParts = append(systemParts, "## Database Schema\nDatabase schema is loading in background and will be available in subsequent queries.")
-		}
-	}
-
 	systemPrompt := strings.Join(systemParts, "\n\n")
+
+	// One-time {{WorkingDirectory}} replacement at startup so the system
+	// prompt stays fully static (better for prompt caching).
+	normalized := strings.ReplaceAll(cwd, "\\", "/")
+	systemPrompt = strings.ReplaceAll(systemPrompt, "{{WorkingDirectory}}", normalized)
 	loopOpts := []agent.LoopOption{
 		agent.WithProjectDir(cwd),
 		agent.WithModel(pr.Model),
