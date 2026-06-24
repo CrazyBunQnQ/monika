@@ -294,6 +294,33 @@ func likeEscape(s string) string {
 }
 
 func (s *KBStore) WriteFile(scope, category, title, content string, tags []string, confidence string) error {
+	if tags == nil {
+		tags = []string{}
+	}
+	tags = normalizeTags(tags)
+	if confidence == "" {
+		confidence = "medium"
+	}
+
+	// Dedup check: lexical signals only (no LLM). Runs on every write, so it
+	// must stay cheap. Rejects near-duplicates; guides caller to memory_update.
+	queryText := title + " " + content
+	if existing, _ := s.Search(queryText, scope, 3); len(existing) > 0 {
+		for _, e := range existing {
+			if sim := computeWriteSimilarity(title, tags, e); sim >= 0.75 {
+				return fmt.Errorf("similar memory already exists: %s (path: %s, similarity: %.2f). Use memory_update to merge instead",
+					e.Title, e.Path, sim)
+			}
+		}
+	}
+
+	return s.writeFileUnchecked(scope, category, title, content, tags, confidence)
+}
+
+// writeFileUnchecked writes the memory without running the dedup check.
+// Used by bulkImport/ReindexFromDisk where the file already exists on disk
+// and must be indexed as-is rather than rejected as a near-duplicate.
+func (s *KBStore) writeFileUnchecked(scope, category, title, content string, tags []string, confidence string) error {
 	root := s.rootFor(scope)
 	if tags == nil {
 		tags = []string{}
@@ -338,6 +365,15 @@ func (s *KBStore) WriteFile(scope, category, title, content string, tags []strin
 		return fmt.Errorf("upsert: %w", err)
 	}
 	return nil
+}
+
+// computeWriteSimilarity returns a 0-1 lexical similarity for write-time dedup.
+// Title keyword overlap weighted higher than tags: two memories with the same
+// title word-set are almost always the same fact regardless of body wording.
+func computeWriteSimilarity(title string, tags []string, existing KBFile) float64 {
+	tagSim := tagOverlap(tags, existing.Tags)
+	titleSim := keywordOverlap(title, existing.Title)
+	return tagSim*0.4 + titleSim*0.6
 }
 
 func (s *KBStore) ReadFile(scope, relPath string) (string, error) {
@@ -678,7 +714,7 @@ func (s *KBStore) ReindexFromDisk(scope string) (int, error) {
 		links := parseFMLinks(content)
 		body := extractMDBody(content)
 
-		if err := s.WriteFile(scope, category, title, body, tags, confidence); err != nil {
+		if err := s.writeFileUnchecked(scope, category, title, body, tags, confidence); err != nil {
 			return nil
 		}
 		// 回填 linked_to：WriteFile 总是写 '[]'，这里把正文里解析到的链接同步进 DB，
