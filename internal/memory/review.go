@@ -43,12 +43,18 @@ func (s *KBStore) Review(ctx context.Context, llm ReviewLLM, scope string) (*Rev
 		return nil, err
 	}
 
+	// Review ALL active memories, not just last 7 days.
+	// ListFiles already returns entries ordered by updated_at DESC, so the
+	// first 50 are the most recently touched.
 	var recent []KBFile
-	weekAgo := time.Now().Add(-7 * 24 * time.Hour)
 	for _, f := range files {
-		if f.UpdatedAt.After(weekAgo) && f.Status == "active" {
+		if f.Status == "active" {
 			recent = append(recent, f)
 		}
+	}
+	// Cap at 50 most recent to avoid overly large prompts.
+	if len(recent) > 50 {
+		recent = recent[:50]
 	}
 
 	if len(recent) < 2 {
@@ -102,6 +108,24 @@ func (s *KBStore) ExecuteReview(ctx context.Context, llm ReviewLLM, scope string
 	}
 
 	return nil
+}
+
+// AutoReviewIfNeeded checks if a review is due (7+ days since last) and runs it asynchronously.
+func (s *KBStore) AutoReviewIfNeeded(ctx context.Context, llm ReviewLLM, scope string) {
+	lastFile := filepath.Join(s.rootFor(scope), ".index", "last_review.txt")
+	data, _ := os.ReadFile(lastFile)
+	lastReview, _ := time.Parse(time.RFC3339, strings.TrimSpace(string(data)))
+
+	if time.Since(lastReview) < 7*24*time.Hour {
+		return // Not due yet
+	}
+
+	go func() {
+		if err := s.ExecuteReview(ctx, llm, scope); err == nil {
+			os.MkdirAll(filepath.Dir(lastFile), 0755)
+			os.WriteFile(lastFile, []byte(time.Now().UTC().Format(time.RFC3339)), 0644)
+		}
+	}()
 }
 
 func (s *KBStore) archiveFile(scope, path string) error {

@@ -385,7 +385,67 @@ changes as you install or configure them. Always search before assuming:
 	appService = api.NewApp(home, cwd, pr.Config, pr.Providers, pr.Model, registry, loopOpts, taskStoreAccessor, agentRegistry, taskRunner, mcpRegistry, kbStore)
 
 	appService.InitTSBridge(tsBridge)
-	// appService.StartBackgroundTasks() // 后台审查/技能生成，暂不实现
+	// Background memory maintenance: decay (archive/delete stale) + review (conflict/upgrade detection).
+	if kbStore != nil {
+		policy := memory.DefaultDecayPolicy()
+		go func() {
+			// Run decay on startup for both scopes if 24h+ since last run.
+			for _, scope := range []string{memory.ScopeProject, memory.ScopeGlobal} {
+				if time.Since(kbStore.LastDecayTime(scope)) >= 24*time.Hour {
+					archived, deleted, _ := kbStore.RunDecay(scope, policy)
+					if archived+deleted > 0 {
+						fmt.Fprintf(os.Stderr, "[monika] memory decay (%s): %d archived, %d deleted\n", scope, archived, deleted)
+					}
+					kbStore.SetLastDecayTime(scope)
+				}
+			}
+			// Then re-check every 24 hours.
+			ticker := time.NewTicker(24 * time.Hour)
+			defer ticker.Stop()
+			for range ticker.C {
+				for _, scope := range []string{memory.ScopeProject, memory.ScopeGlobal} {
+					archived, deleted, _ := kbStore.RunDecay(scope, policy)
+					if archived+deleted > 0 {
+						fmt.Fprintf(os.Stderr, "[monika] memory decay (%s): %d archived, %d deleted\n", scope, archived, deleted)
+					}
+					kbStore.SetLastDecayTime(scope)
+				}
+			}
+		}()
+
+		// Periodic review uses the default provider, wrapped as a ReviewLLM.
+		if defaultProvider != nil {
+			reviewLLM := &memory.GoLLMAdapter{
+				ChatFn: func(ctx context.Context, systemPrompt, userMessage string) (string, error) {
+					msgs := []engine2.ChatMessage{{Role: "system", Content: systemPrompt}}
+					if userMessage != "" {
+						msgs = append(msgs, engine2.ChatMessage{Role: "user", Content: userMessage})
+					}
+					events, err := defaultProvider.StreamChat(ctx, engine2.ChatRequest{
+						Provider: defaultProvider.ID(),
+						Model:    pr.Model,
+						Messages: msgs,
+					})
+					if err != nil {
+						return "", err
+					}
+					var sb strings.Builder
+					for ev := range events {
+						if ev.Kind == engine2.EventContentDelta && ev.Text != "" {
+							sb.WriteString(ev.Text)
+						}
+					}
+					return sb.String(), nil
+				},
+			}
+			go func() {
+				time.Sleep(10 * time.Second) // let the app settle before the first review
+				for _, scope := range []string{memory.ScopeProject, memory.ScopeGlobal} {
+					kbStore.AutoReviewIfNeeded(context.Background(), reviewLLM, scope)
+				}
+			}()
+		}
+	}
 	appGetProjectPath = appService.GetProjectPath
 	if dbMgr != nil {
 		appService.SetDBManager(dbMgr)
