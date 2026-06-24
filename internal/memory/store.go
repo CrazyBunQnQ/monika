@@ -262,6 +262,7 @@ func (s *KBStore) WriteFile(scope, category, title, content string, tags []strin
 	if tags == nil {
 		tags = []string{}
 	}
+	tags = normalizeTags(tags)
 	if confidence == "" {
 		confidence = "medium"
 	}
