@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useStore } from '../../store'
 import { App } from '../../../bindings/monika'
-import { IconPencilLine, IconPlay, IconRefresh, IconSkipForward, IconClose } from '../Icons'
+import { IconPencilLine, IconPlay, IconRefresh, IconSkipForward, IconClose, IconClock, IconXCircle } from '../Icons'
 
 interface QueueItemProps {
     item: {
@@ -32,10 +32,11 @@ export function QueueItem({ item, sessionId, projectPath, manualMode, onDragStar
                 'var(--yellow)'
 
     const statusIcon =
-        item.status === 'executing' ? '🔄' :
-            item.status === 'error' ? '❌' :
-                '⏳'
-
+        item.status === 'executing'
+            ? <span className="inline-block w-3 h-3 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+            : item.status === 'error'
+                ? <IconXCircle size={13} />
+                : <IconClock size={13} />
     const handleSaveEdit = async () => {
         try {
             await App.EditQueueItem(projectPath, sessionId, item.id, editText)

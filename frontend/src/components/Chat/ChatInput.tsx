@@ -898,27 +898,38 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, isGenerating, quotedM
 
                     <div className="flex-1" />
 
-                    <button
-                        onClick={handleSendClick}
-                        disabled={!value.trim() || disabled || isShellExecuting}
-                        title={isGenerating ? 'Queue message (Enter) · Esc to stop' : 'Send message (Enter)'}
-                        className="flex items-center justify-center rounded transition-colors"
-                        style={{
-                            width: '28px',
-                            height: '28px',
-                            border: 'none',
-                            background: 'none',
-                            color: !value.trim() || disabled || isShellExecuting
-                                ? 'var(--text-dim)'
-                                : isGenerating ? 'var(--yellow)' : 'var(--accent)',
-                            cursor: (!value.trim() || disabled || isShellExecuting) ? 'default' : 'pointer',
-                            opacity: (!value.trim() || disabled || isShellExecuting) ? 0.4 : 1,
-                            transition: 'color 0.15s, opacity 0.15s',
-                            flexShrink: 0,
-                        }}
-                    >
-                        <IconSend size={16} />
-                    </button>
+                    {isGenerating && !value.trim() ? (
+                        <button
+                            onClick={onStop}
+                            title="Stop generating"
+                            className="flex items-center justify-center rounded transition-colors hover:bg-[var(--bg-hover)]"
+                            style={{ width: '28px', height: '28px', border: 'none', background: 'none', cursor: 'pointer', flexShrink: 0 }}
+                        >
+                            <span className="inline-block w-4 h-4 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+                        </button>
+                    ) : (
+                        <button
+                            onClick={handleSendClick}
+                            disabled={!value.trim() || disabled || isShellExecuting}
+                            title={isGenerating ? 'Queue message (Enter) · Esc to stop' : 'Send message (Enter)'}
+                            className="flex items-center justify-center rounded transition-colors"
+                            style={{
+                                width: '28px',
+                                height: '28px',
+                                border: 'none',
+                                background: 'none',
+                                color: !value.trim() || disabled || isShellExecuting
+                                    ? 'var(--text-dim)'
+                                    : isGenerating ? 'var(--yellow)' : 'var(--accent)',
+                                cursor: (!value.trim() || disabled || isShellExecuting) ? 'default' : 'pointer',
+                                opacity: (!value.trim() || disabled || isShellExecuting) ? 0.4 : 1,
+                                transition: 'color 0.15s, opacity 0.15s',
+                                flexShrink: 0,
+                            }}
+                        >
+                            <IconSend size={16} />
+                        </button>
+                    )}
                 </div>
             </div>
         </div>

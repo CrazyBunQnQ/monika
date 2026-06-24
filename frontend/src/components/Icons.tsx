@@ -49,6 +49,7 @@ import {
     Pause,
     ListOrdered,
     SkipForward,
+    Clock,
 } from 'lucide-react'
 
 export function IconClose({ size }: { size?: number }) {
@@ -249,4 +250,8 @@ export function IconListOrdered({ size }: { size?: number }) {
 
 export function IconSkipForward({ size }: { size?: number }) {
     return <SkipForward size={size || 16} strokeWidth={1.5} />
+}
+
+export function IconClock({ size }: { size?: number }) {
+    return <Clock size={size || 16} strokeWidth={1.5} />
 }
