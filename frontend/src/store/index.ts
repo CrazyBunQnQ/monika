@@ -713,6 +713,20 @@ export const useStore = create<AppState>((set, get) => ({
         }
     },
 
+    toggleFavoriteModel: (providerId, modelId) => {
+        const key = `${providerId}:${modelId}`
+        set((s) => {
+            const exists = s.favoriteModels.includes(key)
+            const next = exists
+                ? s.favoriteModels.filter((k) => k !== key)
+                : [...s.favoriteModels, key]
+            try {
+                localStorage.setItem('monika:favorite_models', JSON.stringify(next))
+            } catch { /* ignore quota or disabled */ }
+            return { favoriteModels: next }
+        })
+    },
+
     setDefaultModelGlobal: async (providerId, modelId) => {
         set({ defaultProvider: providerId, defaultModel: modelId })
         try {
