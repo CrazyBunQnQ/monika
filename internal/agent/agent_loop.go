@@ -272,6 +272,7 @@ type AgentLoop struct {
 	taskStore         tool.TaskStore
 	memSearchFn       func(query string) string // memory search callback (auto recall)
 	memQueue          MemoryQueue               // memory update queue (p2-3)
+	dbSchemaNote      string                    // one-shot DB availability hint
 	maxSteps          int
 }
 
@@ -383,6 +384,12 @@ func WithMemQueue(q MemoryQueue) LoopOption {
 	return func(a *AgentLoop) { a.memQueue = q }
 }
 
+// WithDBSchemaNote sets a one-shot database availability hint.
+// Injected as <database-schema-available> at message entry, then cleared.
+func WithDBSchemaNote(note string) LoopOption {
+	return func(a *AgentLoop) { a.dbSchemaNote = note }
+}
+
 func WithMaxSteps(n int) LoopOption {
 	return func(a *AgentLoop) { a.maxSteps = n }
 }
@@ -404,6 +411,13 @@ func NewLoop(provider engine.ProviderEngine, tools *tool.ToolRegistry, opts ...L
 // echoed back into the returned prefix.
 func (a *AgentLoop) buildEntryPrefix(userMessage string) string {
 	var b strings.Builder
+
+	// database-schema-available — one-shot hint when this project has databases.
+	if a.dbSchemaNote != "" {
+		b.WriteString("<database-schema-available>\n")
+		b.WriteString(a.dbSchemaNote)
+		b.WriteString("\n</database-schema-available>\n\n")
+	}
 
 	// recalled-memory (auto search) — injected first so context precedes tasks.
 	if a.memSearchFn != nil && userMessage != "" {

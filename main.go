@@ -274,6 +274,12 @@ changes as you install or configure them. Always search before assuming:
 	// memSearchFn requires kbStore to perform a real search.
 	memQueue := agent.NewMemoryQueue()
 	loopOpts = append(loopOpts, agent.WithMemQueue(memQueue))
+
+	// Database schema availability hint (one-shot, per-message for now).
+	if dbMgr != nil && dbMgr.DefaultConnection() != "" {
+		loopOpts = append(loopOpts, agent.WithDBSchemaNote(
+			"This project has connected databases. Use db_schema to inspect their structure."))
+	}
 	if kbStore != nil {
 		memSearchFn := func(query string) string {
 			results, err := kbStore.Search(query, memory.ScopeAuto, 3)
