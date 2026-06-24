@@ -204,7 +204,7 @@ func main() {
 	}
 	shellName += " (mvdan/sh)"
 	systemParts := []string{
-		fmt.Sprintf("Current date: %s\nOS Version: %s\nWorking directory: {{WorkingDirectory}}\nShell: %s", time.Now().Format("2006-01-02"), runtime.GOOS, shellName),
+		fmt.Sprintf("OS Version: %s\nWorking directory: {{WorkingDirectory}}\nShell: %s", runtime.GOOS, shellName),
 		ps.Identity,
 		`## Knowledge Base (Memory)
 
@@ -212,38 +212,10 @@ You have a self-evolving knowledge base that persists across sessions. It contai
 past lessons (bugs, root causes, solutions), topics (architecture, patterns), and
 core knowledge (your preferences, project conventions, persistent facts).
 
-**MEMORY USAGE — mandatory task lifecycle:**
-
-Every task MUST follow this closed loop. Skipping steps degrades quality over time.
-
-1. **BEFORE any action** — Your FIRST tool call for every task MUST be
-   **memory_search(query)** to check for relevant past experience (similar problems,
-   conventions, user preferences). Only after checking memory may you proceed.
-   - If results look relevant → memory_read(path) for full content → apply what you find
-   - If no results → proceed normally (you now know nothing relevant exists)
-2. **DURING** — execute the task normally, applying any memory you found.
-3. **AFTER completing** — if you learned something worth keeping (a bug root cause,
-   a working pattern, a user preference, a project convention):
-   - memory_search first to check if a similar memory already exists
-   - exists → memory_read full content → merge new insight → memory_update(path, merged)
-   - not exists → memory_write(title, content, category)
-
-   For profile (wiki/profile.md) and core knowledge (wiki/knowledge.md), use
-   memory_update with the specific path. These files have character limits
-   (profile: 1500, knowledge: 3000) — the tool warns on overflow, then you
-   must read back and trim.
-
-**Also:** Before any web search, MCP tool, or asking the user, you MUST first call
-memory_search — only fall back to external sources if no relevant memory exists.
-
-**Tools:**
-- memory_search(query, scope?, category?, limit?) — search; returns title + snippet
-- memory_read(path, scope?) — read a single memory's full content
-- memory_write(title, content, category, scope?, tags?, confidence?) — create NEW memory
-- memory_update(path, content, scope?) — overwrite existing memory with merged content
-- memory_index(scope?) — list all memories by category
-
-**Memory types:** lessons (bugs/causes/solutions), topics (architecture/patterns),
+After completing a task, if you learned something worth keeping, save it with
+memory_write or memory_update. Use memory_search to find relevant past experience.
+Tools: memory_search, memory_read, memory_write, memory_update, memory_index.
+Memory types: lessons (bugs/causes/solutions), topics (architecture/patterns),
 knowledge (preferences/constraints/persistent facts).`,
 		ps.ToolUsage,
 		ps.Planning,
@@ -274,20 +246,54 @@ changes as you install or configure them. Always search before assuming:
 
 	systemParts = append(systemParts, strings.TrimSpace(dynamicCapabilities))
 
-	if dbMgr != nil {
-		if summary := dbMgr.SchemaSummary(); summary != "" {
-			systemParts = append(systemParts, summary)
-		} else {
-			systemParts = append(systemParts, "## Database Schema\nDatabase schema is loading in background and will be available in subsequent queries.")
+	systemPrompt := strings.Join(systemParts, "\n\n")
+
+	// One-time {{WorkingDirectory}} replacement at startup so the system
+	// prompt stays fully static (better for prompt caching).
+	normalized := strings.ReplaceAll(cwd, "\\", "/")
+	systemPrompt = strings.ReplaceAll(systemPrompt, "{{WorkingDirectory}}", normalized)
+
+	// Append a compact memory index to the (static) system prompt so the LLM
+	// can discover existing memories and proactively memory_read relevant ones.
+	// Computed once at App startup; new memories written mid-session are handled
+	// by the memory queue which injects <memory-update> blocks into user messages.
+	if kbStore != nil {
+		memIndex, _ := kbStore.BuildIndex(memory.ScopeAuto, 50)
+		if memIndex != "" {
+			systemPrompt += "\n\n# Memory Index\n\nSaved memories from previous sessions. Use memory_read(path) when one looks relevant.\n\n" + memIndex
 		}
 	}
-
-	systemPrompt := strings.Join(systemParts, "\n\n")
 	loopOpts := []agent.LoopOption{
 		agent.WithProjectDir(cwd),
 		agent.WithModel(pr.Model),
 		agent.WithSystemPrompt(systemPrompt),
 		agent.WithHomeDir(home),
+	}
+	// Memory auto-recall + immediate-write visibility.
+	// memQueue is always wired (memory_write queues regardless of kbStore);
+	// memSearchFn requires kbStore to perform a real search.
+	memQueue := agent.NewMemoryQueue()
+	loopOpts = append(loopOpts, agent.WithMemQueue(memQueue))
+
+	// Database schema availability hint (one-shot, per-message for now).
+	if dbMgr != nil && dbMgr.DefaultConnection() != "" {
+		loopOpts = append(loopOpts, agent.WithDBSchemaNote(
+			"This project has connected databases. Use db_schema to inspect their structure."))
+	}
+	if kbStore != nil {
+		memSearchFn := func(query string) string {
+			results, err := kbStore.Search(query, memory.ScopeAuto, 3)
+			if err != nil || len(results) == 0 {
+				return ""
+			}
+			var b strings.Builder
+			for _, r := range results {
+				fmt.Fprintf(&b, "- **%s** [%s] path: %s\n  snippet: %s\n",
+					r.Title, r.Category, r.Path, r.Snippet)
+			}
+			return b.String()
+		}
+		loopOpts = append(loopOpts, agent.WithMemSearchFn(memSearchFn))
 	}
 
 	// Wire permission pipeline
@@ -385,7 +391,67 @@ changes as you install or configure them. Always search before assuming:
 	appService = api.NewApp(home, cwd, pr.Config, pr.Providers, pr.Model, registry, loopOpts, taskStoreAccessor, agentRegistry, taskRunner, mcpRegistry, kbStore)
 
 	appService.InitTSBridge(tsBridge)
-	// appService.StartBackgroundTasks() // 后台审查/技能生成，暂不实现
+	// Background memory maintenance: decay (archive/delete stale) + review (conflict/upgrade detection).
+	if kbStore != nil {
+		policy := memory.DefaultDecayPolicy()
+		go func() {
+			// Run decay on startup for both scopes if 24h+ since last run.
+			for _, scope := range []string{memory.ScopeProject, memory.ScopeGlobal} {
+				if time.Since(kbStore.LastDecayTime(scope)) >= 24*time.Hour {
+					archived, deleted, _ := kbStore.RunDecay(scope, policy)
+					if archived+deleted > 0 {
+						fmt.Fprintf(os.Stderr, "[monika] memory decay (%s): %d archived, %d deleted\n", scope, archived, deleted)
+					}
+					kbStore.SetLastDecayTime(scope)
+				}
+			}
+			// Then re-check every 24 hours.
+			ticker := time.NewTicker(24 * time.Hour)
+			defer ticker.Stop()
+			for range ticker.C {
+				for _, scope := range []string{memory.ScopeProject, memory.ScopeGlobal} {
+					archived, deleted, _ := kbStore.RunDecay(scope, policy)
+					if archived+deleted > 0 {
+						fmt.Fprintf(os.Stderr, "[monika] memory decay (%s): %d archived, %d deleted\n", scope, archived, deleted)
+					}
+					kbStore.SetLastDecayTime(scope)
+				}
+			}
+		}()
+
+		// Periodic review uses the default provider, wrapped as a ReviewLLM.
+		if defaultProvider != nil {
+			reviewLLM := &memory.GoLLMAdapter{
+				ChatFn: func(ctx context.Context, systemPrompt, userMessage string) (string, error) {
+					msgs := []engine2.ChatMessage{{Role: "system", Content: systemPrompt}}
+					if userMessage != "" {
+						msgs = append(msgs, engine2.ChatMessage{Role: "user", Content: userMessage})
+					}
+					events, err := defaultProvider.StreamChat(ctx, engine2.ChatRequest{
+						Provider: defaultProvider.ID(),
+						Model:    pr.Model,
+						Messages: msgs,
+					})
+					if err != nil {
+						return "", err
+					}
+					var sb strings.Builder
+					for ev := range events {
+						if ev.Kind == engine2.EventContentDelta && ev.Text != "" {
+							sb.WriteString(ev.Text)
+						}
+					}
+					return sb.String(), nil
+				},
+			}
+			go func() {
+				time.Sleep(10 * time.Second) // let the app settle before the first review
+				for _, scope := range []string{memory.ScopeProject, memory.ScopeGlobal} {
+					kbStore.AutoReviewIfNeeded(context.Background(), reviewLLM, scope)
+				}
+			}()
+		}
+	}
 	appGetProjectPath = appService.GetProjectPath
 	if dbMgr != nil {
 		appService.SetDBManager(dbMgr)
