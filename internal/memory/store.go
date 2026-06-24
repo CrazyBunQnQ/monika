@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -376,6 +377,42 @@ func (s *KBStore) ListFiles(scope, category string) ([]KBFile, error) {
 	}
 	defer rows.Close()
 	return scanKBFilesFlat(rows)
+}
+
+// BuildIndex generates a compact one-line-per-entry index of saved memories.
+// Sorted by updated_at DESC. Returns empty string if no memories.
+// The index is intended for inclusion in the system prompt so the LLM can
+// discover existing memories and proactively memory_read relevant ones.
+func (s *KBStore) BuildIndex(scope string, limit int) (string, error) {
+	files, err := s.ListFiles(scope, "")
+	if err != nil || len(files) == 0 {
+		return "", nil
+	}
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].UpdatedAt.After(files[j].UpdatedAt)
+	})
+	if limit > 0 && len(files) > limit {
+		files = files[:limit]
+	}
+
+	var b strings.Builder
+	for i, f := range files {
+		fmt.Fprintf(&b, "%d. [%s] %s (%s)", i+1, categoryLabel(f.Category), f.Title, f.Path)
+		if len(f.Tags) > 0 {
+			fmt.Fprintf(&b, " tags: %s", strings.Join(f.Tags, ", "))
+		}
+		b.WriteString("\n")
+	}
+	return b.String(), nil
+}
+
+// categoryLabel collapses a category path like "wiki/lesson" or "raw/doc"
+// to its trailing segment ("lesson", "doc") for compact index rendering.
+func categoryLabel(category string) string {
+	if i := strings.LastIndex(category, "/"); i >= 0 {
+		return category[i+1:]
+	}
+	return category
 }
 
 func (s *KBStore) SoftDelete(scope, relPath string) error {

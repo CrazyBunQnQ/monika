@@ -252,6 +252,17 @@ changes as you install or configure them. Always search before assuming:
 	// prompt stays fully static (better for prompt caching).
 	normalized := strings.ReplaceAll(cwd, "\\", "/")
 	systemPrompt = strings.ReplaceAll(systemPrompt, "{{WorkingDirectory}}", normalized)
+
+	// Append a compact memory index to the (static) system prompt so the LLM
+	// can discover existing memories and proactively memory_read relevant ones.
+	// Computed once at App startup; new memories written mid-session are handled
+	// by the memory queue which injects <memory-update> blocks into user messages.
+	if kbStore != nil {
+		memIndex, _ := kbStore.BuildIndex(memory.ScopeAuto, 50)
+		if memIndex != "" {
+			systemPrompt += "\n\n# Memory Index\n\nSaved memories from previous sessions. Use memory_read(path) when one looks relevant.\n\n" + memIndex
+		}
+	}
 	loopOpts := []agent.LoopOption{
 		agent.WithProjectDir(cwd),
 		agent.WithModel(pr.Model),
