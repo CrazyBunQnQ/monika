@@ -588,16 +588,20 @@ func extractTitleFromContent(content string) string {
 }
 
 func (s *KBStore) ListFiles(scope, category string) ([]KBFile, error) {
+	db := s.dbFor(scope)
+	if db == nil {
+		return nil, nil
+	}
 	var rows *sql.Rows
 	var err error
 	if category != "" {
-		rows, err = s.dbFor(scope).Query(`
+		rows, err = db.Query(`
 			SELECT id, path, scope, category, title, tags, confidence, status, char_count, linked_to, created_at, updated_at
 			FROM file_index WHERE category = ? AND status != 'trash'
 			ORDER BY updated_at DESC
 		`, category)
 	} else {
-		rows, err = s.dbFor(scope).Query(`
+		rows, err = db.Query(`
 			SELECT id, path, scope, category, title, tags, confidence, status, char_count, linked_to, created_at, updated_at
 			FROM file_index WHERE status != 'trash'
 			ORDER BY updated_at DESC
