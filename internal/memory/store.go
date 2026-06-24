@@ -123,17 +123,17 @@ func (s *KBStore) autoReindex(scope string) {
 	s.ReindexFromDisk(scope)
 }
 
-// sanitizeFTSQuery 转义 FTS5 查询中的特殊字符。
-// FTS5 的 MATCH 操作符将 *, (), :, "", AND/OR/NOT 等视为语法元素。
-// 将每个词用双引号包裹，使其成为短语查询，避免语法错误。
-// 词间用 OR 连接，提升召回率（单词命中即可），由 bm25 排序保证精度。
-func sanitizeFTSQuery(query string) string {
+// buildFTSQuery 构建安全的 FTS5 短语查询。
+// 将每个词用双引号包裹（内部 " 转义为 ""），避免 *, (), :, AND/OR/NOT 等
+// 被 FTS5 当作语法元素；词间用 operator（"AND" 或 "OR"）连接。
+func buildFTSQuery(query, operator string) string {
 	words := strings.Fields(query)
-	for i, w := range words {
+	quoted := make([]string, 0, len(words))
+	for _, w := range words {
 		w = strings.ReplaceAll(w, `"`, `""`)
-		words[i] = `"` + w + `"`
+		quoted = append(quoted, `"`+w+`"`)
 	}
-	return strings.Join(words, " OR ")
+	return strings.Join(quoted, " "+operator+" ")
 }
 
 func containsCJK(s string) bool {
@@ -186,15 +186,52 @@ func (s *KBStore) searchAuto(query string, limit int) ([]KBFile, error) {
 }
 
 func (s *KBStore) searchSingle(query, scope string, limit int) ([]KBFile, error) {
-	if containsCJK(query) {
-		return s.searchLike(query, scope, limit)
+	// FTS5 始终执行：即使查询含 CJK，也能命中被 FTS5 索引的英文/拉丁词。
+	ftsResults, err := s.searchFTS(query, scope, limit)
+	if err != nil {
+		return nil, err
 	}
-	return s.searchFTS(query, scope, limit)
+	// CJK 查询额外跑 LIKE：FTS5 的 unicode61 分词器无法正确切分 CJK，
+	// 用子串匹配补召回，再与 FTS 结果合并去重。
+	if containsCJK(query) {
+		likeResults, err := s.searchLike(query, scope, limit)
+		if err != nil {
+			return nil, err
+		}
+		return mergeSearchResults(ftsResults, likeResults, limit), nil
+	}
+	return ftsResults, nil
+}
+
+// mergeSearchResults 合并两组结果，按 Scope + "/" + Path 去重，并截断到 limit。
+func mergeSearchResults(a, b []KBFile, limit int) []KBFile {
+	seen := make(map[string]bool)
+	merged := make([]KBFile, 0, len(a)+len(b))
+	for _, f := range append(a, b...) {
+		key := f.Scope + "/" + f.Path
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		merged = append(merged, f)
+	}
+	if len(merged) > limit {
+		merged = merged[:limit]
+	}
+	return merged
 }
 
 // searchFTS 使用 FTS5 全文搜索（适用于英文等以空格分词的语言）。
+// 策略：先尝试 AND（所有词都命中，精度高）；若 AND 无结果再回退到 OR（任一词命中，召回高）。
 func (s *KBStore) searchFTS(query, scope string, limit int) ([]KBFile, error) {
-	args := []any{sanitizeFTSQuery(query), limit}
+	if results, err := s.execFTS(buildFTSQuery(query, "AND"), scope, limit); err == nil && len(results) > 0 {
+		return results, nil
+	}
+	return s.execFTS(buildFTSQuery(query, "OR"), scope, limit)
+}
+
+// execFTS 执行给定的（已转义为短语）FTS5 MATCH 查询。
+func (s *KBStore) execFTS(query, scope string, limit int) ([]KBFile, error) {
 	q := `
 		SELECT f.id, f.path, f.scope, f.category, f.title, f.tags,
 		       f.confidence, f.status, f.char_count, f.linked_to,
@@ -206,8 +243,7 @@ func (s *KBStore) searchFTS(query, scope string, limit int) ([]KBFile, error) {
 		ORDER BY bm25(file_fts, 0, 10, 5)
 		LIMIT ?
 	`
-
-	rows, err := s.dbFor(scope).Query(q, args...)
+	rows, err := s.dbFor(scope).Query(q, query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}
