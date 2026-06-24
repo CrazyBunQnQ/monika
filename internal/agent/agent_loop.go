@@ -382,25 +382,30 @@ func NewLoop(provider engine.ProviderEngine, tools *tool.ToolRegistry, opts ...L
 	return a
 }
 
+// buildEntryPrefix assembles dynamic content prepended to a user message once,
+// at the AgentLoop entry. Runs once per message (not per LLM turn).
+func (a *AgentLoop) buildEntryPrefix() string {
+	var b strings.Builder
+	if a.taskStore != nil && a.sessionID != "" {
+		if tasks := a.taskStore.List(a.sessionID); len(tasks) > 0 {
+			b.WriteString("<task-list>\n")
+			b.WriteString("Existing tasks (use task_update to change status; do NOT recreate with task_create):\n")
+			for _, t := range tasks {
+				fmt.Fprintf(&b, "- [%s] %s: %s\n", t.Status, t.ID, t.Subject)
+			}
+			b.WriteString("</task-list>\n\n")
+		}
+	}
+	return b.String()
+}
+
 func (a *AgentLoop) RunBlocking(ctx context.Context, conv *Conversation, userMessage string) (*LoopResult, error) {
 	if conv == nil {
 		conv = &Conversation{}
 	}
 
 	if userMessage != "" {
-		prefix := ""
-		if a.taskStore != nil && a.sessionID != "" {
-			if tasks := a.taskStore.List(a.sessionID); len(tasks) > 0 {
-				var b strings.Builder
-				b.WriteString("<task-list>\n")
-				for _, t := range tasks {
-					fmt.Fprintf(&b, "- [%s] %s: %s\n", t.Status, t.ID, t.Subject)
-				}
-				b.WriteString("</task-list>\n\n")
-				prefix += b.String()
-			}
-		}
-		userMessage = prefix + userMessage
+		userMessage = a.buildEntryPrefix() + userMessage
 	}
 
 	conv.Messages = append(conv.Messages, engine.ChatMessage{
@@ -619,19 +624,7 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 	// Only append a new user message if the conversation doesn't already have
 	// pre-seeded messages (compaction uses pre-built messages from SubTask.Messages).
 	if userMessage != "" {
-		prefix := ""
-		if a.taskStore != nil && a.sessionID != "" {
-			if tasks := a.taskStore.List(a.sessionID); len(tasks) > 0 {
-				var b strings.Builder
-				b.WriteString("<task-list>\n")
-				for _, t := range tasks {
-					fmt.Fprintf(&b, "- [%s] %s: %s\n", t.Status, t.ID, t.Subject)
-				}
-				b.WriteString("</task-list>\n\n")
-				prefix += b.String()
-			}
-		}
-		userMessage = prefix + userMessage
+		userMessage = a.buildEntryPrefix() + userMessage
 
 		conv.Messages = append(conv.Messages, engine.ChatMessage{
 			Role:    "user",
