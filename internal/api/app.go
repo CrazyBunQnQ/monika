@@ -675,6 +675,11 @@ func copyConversationData(dst, src *Session, providerID, model string) {
 
 func (a *App) SendMessage(projectPath, sessionID, text, providerID, model string) error {
 	sm := a.getSessionManager(projectPath)
+
+	a.cancelMu.Lock()
+	_, busy := a.cancelFuncs[sessionID]
+	a.cancelMu.Unlock()
+
 	sm.Lock()
 
 	s, err := sm.Load(sessionID)
@@ -688,31 +693,46 @@ func (a *App) SendMessage(projectPath, sessionID, text, providerID, model string
 		return fmt.Errorf("provider %q not found", providerID)
 	}
 
-	// Always enqueue first
-	item := QueuedMessage{
+	// Enqueue only when the agent is generating or there are pending items;
+	// otherwise send directly for immediate execution.
+	if busy || sm.NextQueuedItem(s) != nil {
+		item := QueuedMessage{
+			ID:         generateID(),
+			Text:       text,
+			ProviderID: providerID,
+			Model:      model,
+			Status:     "queued",
+			CreatedAt:  time.Now().Unix(),
+		}
+		sm.EnqueueQueueItem(s, item)
+		if err := sm.Save(s); err != nil {
+			sm.Unlock()
+			return err
+		}
+		sm.Unlock()
+
+		a.emitQueueUpdated(sessionID, s.Queue)
+		return nil
+	}
+
+	// Agent is idle with an empty queue — execute directly.
+	sm.Unlock()
+
+	a.emitQueueItemStarted(sessionID, QueuedMessage{
 		ID:         generateID(),
 		Text:       text,
 		ProviderID: providerID,
 		Model:      model,
-		Status:     "queued",
+		Status:     "executing",
 		CreatedAt:  time.Now().Unix(),
-	}
-	sm.EnqueueQueueItem(s, item)
-	if err := sm.Save(s); err != nil {
-		sm.Unlock()
-		return err
-	}
-	sm.Unlock()
+	})
 
-	a.emitQueueUpdated(sessionID, s.Queue)
-
-	// If agent is idle and not paused, trigger drain immediately
+	ctx, cancel := context.WithCancel(a.ctx)
 	a.cancelMu.Lock()
-	_, busy := a.cancelFuncs[sessionID]
+	a.cancelFuncs[sessionID] = cancel
 	a.cancelMu.Unlock()
-	if !busy {
-		a.drainQueue(sm, sessionID)
-	}
+
+	a.startAgentLoop(ctx, cancel, sm, s, sessionID, text, providerID, model, "")
 	return nil
 }
 

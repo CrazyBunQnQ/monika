@@ -156,6 +156,9 @@ function ChatArea(props: IDockviewPanelProps) {
                 }
             }, 3000)
         }
+        if (shellExecutingSessionIds.includes(targetId)) {
+            App.CancelShellCommand(targetId)
+        }
     }
 
     const handleRunShell = async (command: string) => {
@@ -190,8 +193,8 @@ function ChatArea(props: IDockviewPanelProps) {
         const store = useStore.getState()
         store.setMsgFilter('all')
 
-        // All messages go through the queue — no optimistic UI
-        // queue_item_started event will add user/assistant messages
+        // Backend decides: enqueue if generating, otherwise execute directly.
+        // queue_item_started event adds user/assistant messages in both paths.
         try {
             await App.SendMessage(projectPath, sessionId, text, selectedProvider, selectedModel)
         } catch (err) {

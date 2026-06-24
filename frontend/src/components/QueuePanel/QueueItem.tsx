@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useStore } from '../../store'
 import { App } from '../../../bindings/monika'
+import { IconPencilLine, IconPlay, IconRefresh, IconSkipForward, IconClose } from '../Icons'
 
 interface QueueItemProps {
     item: {
@@ -27,13 +28,13 @@ export function QueueItem({ item, sessionId, projectPath, manualMode, onDragStar
 
     const statusColor =
         item.status === 'executing' ? 'var(--accent)' :
-        item.status === 'error' ? 'var(--red)' :
-        'var(--yellow)'
+            item.status === 'error' ? 'var(--red)' :
+                'var(--yellow)'
 
     const statusIcon =
         item.status === 'executing' ? '🔄' :
-        item.status === 'error' ? '❌' :
-        '⏳'
+            item.status === 'error' ? '❌' :
+                '⏳'
 
     const handleSaveEdit = async () => {
         try {
@@ -83,9 +84,11 @@ export function QueueItem({ item, sessionId, projectPath, manualMode, onDragStar
     const canEdit = item.status === 'queued' || item.status === 'error'
     const canDrag = item.status !== 'executing'
 
+    const iconBtnClass = 'flex items-center justify-center w-5 h-5 rounded hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors'
+
     return (
         <div
-            className="flex items-start gap-2 rounded border p-1.5 text-[12px]"
+            className="group flex items-start gap-2 rounded border p-1.5 text-[12px]"
             style={{
                 borderColor: 'var(--border)',
                 background: 'var(--bg-elevated)',
@@ -101,7 +104,7 @@ export function QueueItem({ item, sessionId, projectPath, manualMode, onDragStar
                 {editing ? (
                     <div className="flex flex-col gap-1">
                         <textarea
-                            className="w-full rounded p-1 text-[12px] border"
+                            className="w-full rounded p-1 text-[12px] border outline-none"
                             style={{
                                 background: 'var(--bg-sidebar)',
                                 color: 'var(--text-primary)',
@@ -122,24 +125,61 @@ export function QueueItem({ item, sessionId, projectPath, manualMode, onDragStar
                         {item.status === 'error' && item.error && (
                             <p className="text-[10px] mt-0.5" style={{ color: 'var(--red)' }}>{item.error}</p>
                         )}
-                        <div className="flex gap-2 mt-0.5">
-                            {manualMode && item.status === 'queued' && (
-                                <button className="text-[10px] hover:underline" style={{ color: 'var(--accent)' }} onClick={handleExecute}>▶ Run</button>
-                            )}
-                            {canEdit && (
-                                <button className="text-[10px] hover:underline" style={{ color: 'var(--accent)' }} onClick={() => setEditing(true)}>Edit</button>
-                            )}
-                            {item.status === 'error' && (
-                                <>
-                                    <button className="text-[10px] hover:underline" style={{ color: 'var(--green)' }} onClick={handleRetry}>Retry</button>
-                                    <button className="text-[10px] hover:underline" style={{ color: 'var(--yellow)' }} onClick={handleSkip}>Skip</button>
-                                </>
-                            )}
-                            <button className="text-[10px] hover:underline" style={{ color: 'var(--red)' }} onClick={handleCancel}>Cancel</button>
-                        </div>
                     </>
                 )}
             </div>
+            {!editing && (
+                <div className="flex items-center gap-0.5 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                    {manualMode && item.status === 'queued' && (
+                        <button
+                            className={iconBtnClass}
+                            style={{ color: 'var(--text-dim)' }}
+                            onClick={(e) => { e.stopPropagation(); handleExecute() }}
+                            title="Run"
+                        >
+                            <IconPlay size={13} />
+                        </button>
+                    )}
+                    {canEdit && (
+                        <button
+                            className={iconBtnClass}
+                            style={{ color: 'var(--text-dim)' }}
+                            onClick={(e) => { e.stopPropagation(); setEditing(true) }}
+                            title="Edit"
+                        >
+                            <IconPencilLine size={13} />
+                        </button>
+                    )}
+                    {item.status === 'error' && (
+                        <>
+                            <button
+                                className={iconBtnClass}
+                                style={{ color: 'var(--text-dim)' }}
+                                onClick={(e) => { e.stopPropagation(); handleRetry() }}
+                                title="Retry"
+                            >
+                                <IconRefresh size={13} />
+                            </button>
+                            <button
+                                className={iconBtnClass}
+                                style={{ color: 'var(--text-dim)' }}
+                                onClick={(e) => { e.stopPropagation(); handleSkip() }}
+                                title="Skip"
+                            >
+                                <IconSkipForward size={13} />
+                            </button>
+                        </>
+                    )}
+                    <button
+                        className={iconBtnClass}
+                        style={{ color: 'var(--text-dim)' }}
+                        onClick={(e) => { e.stopPropagation(); handleCancel() }}
+                        title="Cancel"
+                    >
+                        <IconClose size={13} />
+                    </button>
+                </div>
+            )}
         </div>
     )
 }

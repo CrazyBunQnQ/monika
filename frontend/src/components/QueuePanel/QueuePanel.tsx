@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useStore } from '../../store'
 import { App } from '../../../bindings/monika'
 import { QueueItem } from './QueueItem'
+import { IconListOrdered, IconPlay, IconPause, IconChevronDown, IconChevronRight, IconXCircle } from '../Icons'
 
 const MAX_VISIBLE = 5
 
@@ -19,6 +20,10 @@ export function QueuePanel() {
 
     const queue = sessionQueues[activeSessionId] || []
     const manualMode = queuePaused[activeSessionId] || false
+
+    const headerBtnClass = 'flex items-center justify-center w-5 h-5 rounded hover:bg-[var(--bg-hover)] transition-colors'
+
+    if (queue.length === 0 && !manualMode) return null
 
     const hasError = queue.some((q) => q.status === 'error')
     const visibleItems = showAll ? queue : queue.slice(0, MAX_VISIBLE)
@@ -72,8 +77,8 @@ export function QueuePanel() {
                 className="flex items-center gap-2 px-3 py-1.5 select-none"
                 style={{ background: 'var(--bg-sidebar)' }}
             >
-                <span className="text-[11px]" style={{ color: hasError ? 'var(--red)' : 'var(--text-dim)' }}>
-                    {hasError ? '⚠' : '⏳'}
+                <span className="flex items-center" style={{ color: hasError ? 'var(--red)' : 'var(--text-dim)' }}>
+                    {hasError ? <IconXCircle size={13} /> : <IconListOrdered size={13} />}
                 </span>
                 <span className="text-[12px]" style={{ color: 'var(--text-primary)' }}>
                     Queue ({queue.length})
@@ -85,28 +90,25 @@ export function QueuePanel() {
                 )}
                 <div className="flex-1" />
                 <button
-                    className="text-[10px] px-2 py-0.5 rounded transition-opacity hover:opacity-80"
-                    style={{
-                        background: manualMode ? 'var(--yellow)' : 'var(--green)',
-                        color: manualMode ? '#000' : '#fff',
-                        border: '1px solid var(--border)',
-                    }}
+                    className={headerBtnClass}
+                    style={{ color: manualMode ? 'var(--text-primary)' : 'var(--text-dim)' }}
                     onClick={(e) => {
                         e.stopPropagation()
                         handleModeToggle()
                     }}
-                    title={manualMode ? 'Click to switch to auto mode' : 'Click to switch to manual mode'}
+                    title={manualMode ? 'Manual mode — click to resume auto execution' : 'Auto mode — click to pause'}
                 >
-                    {manualMode ? 'Manual Mode' : 'Auto Mode'}
+                    {manualMode ? <IconPlay size={13} /> : <IconPause size={13} />}
                 </button>
                 {queue.length > 0 && (
-                    <span
-                        className="text-[10px] cursor-pointer"
+                    <button
+                        className={headerBtnClass}
                         style={{ color: 'var(--text-dim)' }}
-                        onClick={() => setExpanded(!expanded)}
+                        onClick={(e) => { e.stopPropagation(); setExpanded(!expanded) }}
+                        title={expanded ? 'Collapse' : 'Expand'}
                     >
-                        {expanded ? '▴' : '▾'}
-                    </span>
+                        {expanded ? <IconChevronDown size={13} /> : <IconChevronRight size={13} />}
+                    </button>
                 )}
             </div>
             {expanded && queue.length > 0 && (

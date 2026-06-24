@@ -45,6 +45,10 @@ import {
     HardDrive,
     FolderUp,
     BookOpen,
+    Play,
+    Pause,
+    ListOrdered,
+    SkipForward,
 } from 'lucide-react'
 
 export function IconClose({ size }: { size?: number }) {
@@ -229,4 +233,20 @@ export function IconFolderUp({ size }: { size?: number }) {
 
 export function IconBookOpen({ size }: { size?: number }) {
     return <BookOpen size={size || 16} strokeWidth={1.5} />
+}
+
+export function IconPlay({ size }: { size?: number }) {
+    return <Play size={size || 16} strokeWidth={1.5} />
+}
+
+export function IconPause({ size }: { size?: number }) {
+    return <Pause size={size || 16} strokeWidth={1.5} />
+}
+
+export function IconListOrdered({ size }: { size?: number }) {
+    return <ListOrdered size={size || 16} strokeWidth={1.5} />
+}
+
+export function IconSkipForward({ size }: { size?: number }) {
+    return <SkipForward size={size || 16} strokeWidth={1.5} />
 }
