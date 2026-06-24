@@ -3,6 +3,8 @@ import { App } from '../../../bindings/monika'
 import Modal, { ModalHeader, ModalBody, ModalFooter, ModalButton } from '../ui/Modal'
 import ConfirmModal from '../Chat/ConfirmModal'
 import { IconDatabase, IconSearch, IconTrash, IconEdit, IconEye } from '../Icons'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 interface KBFileInfo {
     path: string
@@ -285,7 +287,7 @@ function KnowledgeBaseTab() {
 
             {/* View / Edit Modal */}
             {viewFile && (
-                <Modal onClose={closeModal} width={600}>
+                <Modal onClose={closeModal} width={800}>
                     <ModalHeader icon={<IconDatabase size={15} />}>
                         <div className="min-w-0">
                             <div className="flex items-center gap-2">
@@ -306,7 +308,11 @@ function KnowledgeBaseTab() {
                                 className="w-full min-h-[300px] bg-[var(--bg-input)] border border-[var(--border)] rounded p-3 text-[12px] font-mono resize-none text-[var(--text-primary)] focus:outline-none focus:border-[var(--border-strong)]"
                             />
                         ) : (
-                            <pre className="text-[12px] whitespace-pre-wrap font-sans text-[var(--text-primary)] leading-relaxed m-0">{fileContent}</pre>
+                            <div className="text-[13px] text-[var(--text-primary)] leading-relaxed markdown-body">
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                    {fileContent}
+                                </ReactMarkdown>
+                            </div>
                         )}
                         {!editing && viewFile.tags && viewFile.tags.length > 0 && (
                             <div className="mt-3 pt-3 border-t border-[var(--border)] flex flex-wrap gap-1">
