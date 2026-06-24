@@ -8,6 +8,8 @@ function ModelPicker() {
     const selectedProvider = useStore((s) => s.selectedProvider)
     const selectedModel = useStore((s) => s.selectedModel)
     const modelsByProvider = useStore((s) => s.modelsByProvider)
+    const favoriteModels = useStore((s) => s.favoriteModels)
+    const toggleFavoriteModel = useStore((s) => s.toggleFavoriteModel)
     const setActiveSessionModel = useStore((s) => s.setActiveSessionModel)
     const loadModelsForProvider = useStore((s) => s.loadModelsForProvider)
     const generatingSessionIds = useStore((s) => s.generatingSessionIds)
@@ -62,13 +64,42 @@ function ModelPicker() {
 
     // Build flat list of all visible items for keyboard nav
     type FlatItem =
+        | { type: 'favorite-header' }
         | { type: 'provider'; provider: ProviderInfo }
-        | { type: 'model'; provider: ProviderInfo; model: ModelInfo }
+        | { type: 'model'; provider: ProviderInfo; model: ModelInfo; isFavorite?: boolean }
 
     const flatItems = useMemo((): FlatItem[] => {
         const items: FlatItem[] = []
         const searchLower = search.toLowerCase()
 
+        // Build lookup: "providerId:modelId" -> { provider, model }
+        const allModelsLookup = new Map<string, { provider: ProviderInfo; model: ModelInfo }>()
+        for (const p of availableProviders) {
+            const models = modelsByProvider[p.id] || []
+            for (const m of models) {
+                allModelsLookup.set(`${p.id}:${m.ID}`, { provider: p, model: m })
+            }
+        }
+
+        // Favorite group
+        const validFavorites: { provider: ProviderInfo; model: ModelInfo }[] = []
+        for (const key of favoriteModels) {
+            const entry = allModelsLookup.get(key)
+            if (!entry) continue
+            if (searchLower) {
+                if (!entry.model.DisplayName.toLowerCase().includes(searchLower)
+                    && !entry.model.ID.toLowerCase().includes(searchLower)) continue
+            }
+            validFavorites.push(entry)
+        }
+        if (validFavorites.length > 0) {
+            items.push({ type: 'favorite-header' })
+            for (const { provider, model } of validFavorites) {
+                items.push({ type: 'model', provider, model, isFavorite: true })
+            }
+        }
+
+        // Provider groups
         for (const p of availableProviders) {
             const models = modelsByProvider[p.id] || []
             const filtered = searchLower
@@ -83,11 +114,16 @@ function ModelPicker() {
                 items.push({ type: 'provider', provider: p })
             }
             for (const m of filtered) {
-                items.push({ type: 'model', provider: p, model: m })
+                items.push({
+                    type: 'model',
+                    provider: p,
+                    model: m,
+                    isFavorite: favoriteModels.includes(`${p.id}:${m.ID}`)
+                })
             }
         }
         return items
-    }, [availableProviders, modelsByProvider, search])
+    }, [availableProviders, modelsByProvider, search, favoriteModels])
 
     // Clamp focusIdx when flatItems changes
     useEffect(() => {
