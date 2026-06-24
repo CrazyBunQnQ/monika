@@ -11,6 +11,7 @@ import { findLabels, LabelRegion, renderChipHTML } from './LabelChip'
 import { App } from '../../../bindings/monika'
 import { Call } from '@wailsio/runtime'
 import { IconMaximize, IconSend } from '../Icons'
+import { QueuePanel } from '../QueuePanel/QueuePanel'
 
 const INIT_TEMPLATE = `Please analyze this project and check if an \`AGENTS.md\` file exists in the project root.
 
@@ -211,11 +212,12 @@ function extractText(root: HTMLElement): string {
 
 // ── Component ──
 
-function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuotesConsumed }: {
+function ChatInput({ onSend, onStop, onRunShell, disabled, isGenerating, quotedMessages, onQuotesConsumed }: {
     onSend: (text: string) => void
     onStop: () => void
     onRunShell: (command: string) => void
     disabled: boolean
+    isGenerating: boolean
     quotedMessages?: { id: string; role: string; content: string }[]
     onQuotesConsumed?: () => void
 }) {
@@ -837,6 +839,7 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
 
     return (
         <div className="border-t border-[var(--border)] px-4 py-3" style={{ background: 'var(--bg-sidebar)' }}>
+            <QueuePanel />
             <div
                 className="rounded-md border transition-colors relative"
                 style={{
@@ -864,7 +867,7 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
                         fontFamily: 'inherit',
                         letterSpacing: 'inherit',
                     }}
-                    data-placeholder={disabled ? 'Generating...' : inputMode === 'shell' ? 'Run a shell command... (each command runs independently)' : 'Send a message... (Enter to submit, Shift+Enter for newline)'}
+                    data-placeholder={disabled ? 'Generating...' : isGenerating ? 'Send a message... (will be queued)' : inputMode === 'shell' ? 'Run a shell command... (each command runs independently)' : 'Send a message... (Enter to submit, Shift+Enter for newline)'}
                 />
 
                 <div
@@ -911,26 +914,52 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
                         >
                             <IconMaximize size={14} />
                         </button>
-                    ) : disabled ? (
-                        <button
-                            onClick={onStop}
-                            title="Stop generating (Esc)"
-                            style={{
-                                width: '28px',
-                                height: '28px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                borderRadius: '6px',
-                                border: 'none',
-                                background: 'none',
-                                color: 'var(--accent)',
-                                cursor: 'pointer',
-                                flexShrink: 0,
-                            }}
-                        >
-                            <IconMaximize size={14} />
-                        </button>
+                    ) : disabled || isGenerating ? (
+                        <>
+                            <button
+                                onClick={onStop}
+                                title="Stop generating (Esc)"
+                                style={{
+                                    width: '28px',
+                                    height: '28px',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    borderRadius: '6px',
+                                    border: 'none',
+                                    background: 'none',
+                                    color: 'var(--accent)',
+                                    cursor: 'pointer',
+                                    flexShrink: 0,
+                                }}
+                            >
+                                <IconMaximize size={14} />
+                            </button>
+                            {isGenerating && !disabled && (
+                                <button
+                                    onClick={handleSendClick}
+                                    disabled={!value.trim()}
+                                    title="Queue message (Enter)"
+                                    style={{
+                                        width: '28px',
+                                        height: '28px',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        borderRadius: '6px',
+                                        border: 'none',
+                                        background: 'none',
+                                        color: value.trim() ? 'var(--yellow)' : 'var(--text-dim)',
+                                        cursor: value.trim() ? 'pointer' : 'default',
+                                        opacity: value.trim() ? 1 : 0.4,
+                                        transition: 'color 0.15s, opacity 0.15s',
+                                        flexShrink: 0,
+                                    }}
+                                >
+                                    <IconSend size={16} />
+                                </button>
+                            )}
+                        </>
                     ) : (
                         <button
                             onClick={handleSendClick}

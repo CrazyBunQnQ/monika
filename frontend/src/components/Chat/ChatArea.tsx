@@ -187,25 +187,15 @@ function ChatArea(props: IDockviewPanelProps) {
             return
         }
 
-        if (generatingSessionIds.includes(sessionId)) {
-            useStore.getState().addMessage({ id: crypto.randomUUID(), role: 'error', content: 'This session is already generating.' })
-            return
-        }
-
         const store = useStore.getState()
         store.setMsgFilter('all')
-        const userMsg = { id: crypto.randomUUID(), role: 'user' as const, content: text }
-        const assistantMsg = { id: crypto.randomUUID(), role: 'assistant' as const, content: '', startedAt: Date.now() }
-        store.appendToSession(sessionId, [userMsg, assistantMsg])
-        store.addGeneratingSession(sessionId)
 
+        // All messages go through the queue — no optimistic UI
+        // queue_item_started event will add user/assistant messages
         try {
             await App.SendMessage(projectPath, sessionId, text, selectedProvider, selectedModel)
         } catch (err) {
             useStore.getState().addMessage({ id: crypto.randomUUID(), role: 'error', content: String(err) })
-            store.removeGeneratingSession(sessionId)
-            const currentMsgs = useStore.getState().sessionMessages[sessionId] || []
-            useStore.getState().setMessages(currentMsgs.filter(m => m.id !== assistantMsg.id))
         }
     }
 
@@ -551,7 +541,8 @@ function ChatArea(props: IDockviewPanelProps) {
                                     onSend={handleSend}
                                     onStop={handleStop}
                                     onRunShell={handleRunShell}
-                                    disabled={generatingSessionIds.includes(sessionId) || shellExecutingSessionIds.includes(sessionId)}
+                                    disabled={shellExecutingSessionIds.includes(sessionId)}
+                                    isGenerating={generatingSessionIds.includes(sessionId)}
                                     quotedMessages={quotePreviewMessages.length > 0 ? quotePreviewMessages : undefined}
                                     onQuotesConsumed={() => setQuotePreviewMessages([])}
                                 />

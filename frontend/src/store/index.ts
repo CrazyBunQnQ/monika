@@ -93,7 +93,7 @@ interface QueuedMessage {
     text: string
     provider_id: string
     model: string
-    status: 'queued' | 'executing' | 'error'
+    status: string
     error?: string
     created_at: number
 }
@@ -962,6 +962,12 @@ export const useStore = create<AppState>((set, get) => ({
             if (session?.provider && session?.model) {
                 get().applySessionBinding(id, session.provider, session.model)
             }
+            set((prev) => ({
+                ...session?.queue
+                    ? { sessionQueues: { ...prev.sessionQueues, [id]: session.queue } }
+                    : {},
+                queuePaused: { ...prev.queuePaused, [id]: session?.queue_paused || false },
+            }))
         } catch {
             set((s) => {
                 if (s.activeSessionId !== id) {
@@ -1209,6 +1215,8 @@ export const useStore = create<AppState>((set, get) => ({
                             sess.id === s.id && session?.title ? { ...sess, title: session.title } : sess
                         ),
                         ...(session?.worktree_path ? { sessionWorktrees: { ...prev.sessionWorktrees, [s.id]: session.worktree_path } } : {}),
+                        ...(session?.queue ? { sessionQueues: { ...prev.sessionQueues, [s.id]: session.queue } } : {}),
+                        queuePaused: { ...prev.queuePaused, [s.id]: session?.queue_paused || false },
                     }))
                     if (session?.provider && session?.model) {
                         get().applySessionBinding(s.id, session.provider, session.model)

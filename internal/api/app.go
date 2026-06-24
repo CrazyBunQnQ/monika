@@ -663,6 +663,16 @@ func (a *App) LoadSession(projectPath, sessionID string) (*Session, error) {
 	return s, nil
 }
 
+func copyConversationData(dst, src *Session, providerID, model string) {
+	dst.Messages = src.Messages
+	dst.TokenCount = src.TokenCount
+	dst.TokenMax = src.TokenMax
+	dst.CompactionCount = src.CompactionCount
+	dst.CompactionFrom = src.CompactionFrom
+	dst.Provider = providerID
+	dst.Model = model
+}
+
 func (a *App) SendMessage(projectPath, sessionID, text, providerID, model string) error {
 	sm := a.getSessionManager(projectPath)
 	sm.Lock()
@@ -673,48 +683,36 @@ func (a *App) SendMessage(projectPath, sessionID, text, providerID, model string
 		return err
 	}
 
-	ctx, cancel := context.WithCancel(a.ctx)
-
-	a.cancelMu.Lock()
-	if _, busy := a.cancelFuncs[sessionID]; busy {
-		a.cancelMu.Unlock()
-		cancel()
-
-		// Enqueue the message instead of rejecting
-		item := QueuedMessage{
-			ID:         generateID(),
-			Text:       text,
-			ProviderID: providerID,
-			Model:      model,
-			Status:     "queued",
-			CreatedAt:  time.Now().Unix(),
-		}
-		sm.EnqueueQueueItem(s, item)
-		if err := sm.Save(s); err != nil {
-			sm.Unlock()
-			return err
-		}
+	if _, ok := a.providers[providerID]; !ok {
 		sm.Unlock()
-
-		a.emitQueueUpdated(sessionID, s.Queue)
-		return nil
+		return fmt.Errorf("provider %q not found", providerID)
 	}
 
-	// Not busy — register cancel func (atomic with the busy check above)
-	a.cancelFuncs[sessionID] = cancel
-	a.cancelMu.Unlock()
+	// Always enqueue first
+	item := QueuedMessage{
+		ID:         generateID(),
+		Text:       text,
+		ProviderID: providerID,
+		Model:      model,
+		Status:     "queued",
+		CreatedAt:  time.Now().Unix(),
+	}
+	sm.EnqueueQueueItem(s, item)
+	if err := sm.Save(s); err != nil {
+		sm.Unlock()
+		return err
+	}
 	sm.Unlock()
 
-	// Check provider availability before starting
-	if _, ok := a.providers[providerID]; !ok {
-		a.cancelMu.Lock()
-		delete(a.cancelFuncs, sessionID)
-		a.cancelMu.Unlock()
-		cancel()
-		return fmt.Errorf("provider %q not available", providerID)
-	}
+	a.emitQueueUpdated(sessionID, s.Queue)
 
-	a.startAgentLoop(ctx, cancel, sm, s, sessionID, text, providerID, model, "")
+	// If agent is idle and not paused, trigger drain immediately
+	a.cancelMu.Lock()
+	_, busy := a.cancelFuncs[sessionID]
+	a.cancelMu.Unlock()
+	if !busy {
+		a.drainQueue(sm, sessionID)
+	}
 	return nil
 }
 
@@ -781,16 +779,17 @@ func (a *App) startAgentLoop(ctx context.Context, cancel context.CancelFunc, sm 
 
 	go func() {
 		defer cancel()
-		defer func() {
-			a.cancelMu.Lock()
-			delete(a.cancelFuncs, sessionID)
-			a.cancelMu.Unlock()
-		}()
 
-		// Set generating status
+		// Set generating status (reload from disk to preserve concurrent queue changes)
 		sm.Lock()
-		sm.SetStatus(s, StatusGenerating)
-		sm.Save(s)
+		freshInit, errInit := sm.Load(sessionID)
+		if errInit == nil {
+			sm.SetStatus(freshInit, StatusGenerating)
+			sm.Save(freshInit)
+		} else {
+			sm.SetStatus(s, StatusGenerating)
+			sm.Save(s)
+		}
 		sm.Unlock()
 
 		var hadError bool
@@ -831,29 +830,82 @@ func (a *App) startAgentLoop(ctx context.Context, cancel context.CancelFunc, sm 
 		// Persist tasks alongside the session so they survive restarts.
 		a.syncTasksToSession(sessionID, s)
 
+		// If context was cancelled during a queued message,
+		// CancelQueueItem/CancelGeneration already set the item to "error".
+		// Reload from disk to preserve that state, only updating conversation data.
+		if ctx.Err() != nil && queueItemID != "" {
+			sm.Lock()
+			fresh, err := sm.Load(sessionID)
+			if err == nil {
+				copyConversationData(fresh, s, providerID, model)
+				sm.SetStatus(fresh, StatusPending)
+				sm.Save(fresh)
+			}
+			sm.Unlock()
+			a.cancelMu.Lock()
+			delete(a.cancelFuncs, sessionID)
+			a.cancelMu.Unlock()
+			return
+		}
+
 		// Error during queued message execution — pause queue
 		if hadError && queueItemID != "" {
 			sm.Lock()
-			sm.UpdateQueueItem(s, queueItemID, func(item *QueuedMessage) {
-				item.Status = "error"
-			})
-			s.QueuePaused = true
-			sm.SetStatus(s, StatusPending)
-			sm.Save(s)
+			fresh2, err2 := sm.Load(sessionID)
+			if err2 == nil {
+				copyConversationData(fresh2, s, providerID, model)
+				sm.UpdateQueueItem(fresh2, queueItemID, func(item *QueuedMessage) {
+					item.Status = "error"
+				})
+				fresh2.QueuePaused = true
+				sm.SetStatus(fresh2, StatusPending)
+				sm.Save(fresh2)
+			} else {
+				copyConversationData(s, s, providerID, model)
+				sm.UpdateQueueItem(s, queueItemID, func(item *QueuedMessage) {
+					item.Status = "error"
+				})
+				s.QueuePaused = true
+				sm.SetStatus(s, StatusPending)
+				sm.Save(s)
+			}
 			sm.Unlock()
 			a.emitQueueError(sessionID, queueItemID, "execution failed")
+			a.cancelMu.Lock()
+			delete(a.cancelFuncs, sessionID)
+			a.cancelMu.Unlock()
 			return // Skip normal completion + drain — queue is paused
 		}
 
-		// Auto-drain: if message came from queue, remove it
-		// (This happens inside the sm.Lock() block below)
+		// Auto-drain: reload from disk to preserve concurrent changes (e.g. PauseQueue)
 		sm.Lock()
-		if queueItemID != "" {
-			sm.RemoveQueueItem(s, queueItemID)
+		fresh, err := sm.Load(sessionID)
+		if err == nil {
+			copyConversationData(fresh, s, providerID, model)
+			if queueItemID != "" {
+				sm.RemoveQueueItem(fresh, queueItemID)
+			}
+			sm.SetStatus(fresh, StatusPending)
+			sm.Save(fresh)
+			s.Queue = fresh.Queue
+		} else {
+			if queueItemID != "" {
+				sm.RemoveQueueItem(s, queueItemID)
+			}
+			sm.SetStatus(s, StatusPending)
+			sm.Save(s)
 		}
-		sm.SetStatus(s, StatusPending)
-		sm.Save(s)
 		sm.Unlock()
+
+		// Sync frontend with updated queue (completed item removed)
+		if queueItemID != "" {
+			a.emitQueueUpdated(sessionID, s.Queue)
+		}
+
+		// Clean up cancelFuncs BEFORE drainQueue so it sees the agent as idle
+		a.cancelMu.Lock()
+		delete(a.cancelFuncs, sessionID)
+		a.cancelMu.Unlock()
 
 		if ctx.Err() == nil {
 			a.handleAgentEvent(sessionID, model, agent2.Event{
@@ -911,6 +963,63 @@ func (a *App) drainQueue(sm *SessionManager, sessionID string) {
 
 	// Start agent loop for this queued message
 	a.startAgentLoop(ctx, cancel, sm, s, sessionID, item.Text, item.ProviderID, item.Model, item.ID)
+}
+
+func (a *App) ExecuteQueueItem(projectPath, sessionID, itemID string) error {
+	sm := a.getSessionManager(projectPath)
+
+	// Check agent is idle
+	a.cancelMu.Lock()
+	_, busy := a.cancelFuncs[sessionID]
+	a.cancelMu.Unlock()
+	if busy {
+		return fmt.Errorf("agent is busy, cannot execute item")
+	}
+
+	sm.Lock()
+	defer sm.Unlock()
+
+	s, err := sm.Load(sessionID)
+	if err != nil {
+		return err
+	}
+
+	idx := sm.FindQueueItem(s, itemID)
+	if idx < 0 {
+		return fmt.Errorf("queue item %s not found", itemID)
+	}
+	if s.Queue[idx].Status != "queued" {
+		return fmt.Errorf("can only execute queued items")
+	}
+
+	// Move item to front if not already
+	if idx > 0 {
+		item := s.Queue[idx]
+		s.Queue = append([]QueuedMessage{item}, append(s.Queue[:idx], s.Queue[idx+1:]...)...)
+	}
+
+	// Mark as executing
+	sm.UpdateQueueItem(s, itemID, func(qi *QueuedMessage) {
+		qi.Status = "executing"
+	})
+	if err := sm.Save(s); err != nil {
+		return err
+	}
+
+	// Notify frontend
+	item := s.Queue[0]
+	a.emitQueueItemStarted(sessionID, item)
+	a.emitQueueUpdated(sessionID, s.Queue)
+
+	// Set up cancel func
+	ctx, cancel := context.WithCancel(a.ctx)
+	a.cancelMu.Lock()
+	a.cancelFuncs[sessionID] = cancel
+	a.cancelMu.Unlock()
+
+	// Start agent loop
+	a.startAgentLoop(ctx, cancel, sm, s, sessionID, item.Text, item.ProviderID, item.Model, item.ID)
+	return nil
 }
 
 func (a *App) GetQueue(projectPath, sessionID string) ([]QueuedMessage, error) {
@@ -1044,9 +1153,8 @@ func (a *App) ResumeQueue(projectPath, sessionID string) error {
 		sm.Unlock()
 		return err
 	}
+	a.emitQueueUpdated(sessionID, s.Queue)
 	sm.Unlock()
-
-	// If idle and has queued items, trigger drain
 	a.cancelMu.Lock()
 	_, busy := a.cancelFuncs[sessionID]
 	a.cancelMu.Unlock()
@@ -1176,12 +1284,18 @@ func (a *App) CancelGeneration(sessionID string) {
 	if ok {
 		cancel()
 		if sm := a.getSessionManagerForSession(sessionID); sm != nil {
-			if s, err := sm.Load(sessionID); err == nil {
-				sm.Lock()
+			sm.Lock()
+			s, err := sm.Load(sessionID)
+			if err == nil {
 				sm.SetStatus(s, StatusPending)
+				for i := range s.Queue {
+					if s.Queue[i].Status == "executing" {
+						s.Queue[i].Status = "error"
+					}
+				}
 				sm.Save(s)
-				sm.Unlock()
 			}
+			sm.Unlock()
 		}
 	}
 }
