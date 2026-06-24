@@ -387,6 +387,22 @@ func (a *AgentLoop) RunBlocking(ctx context.Context, conv *Conversation, userMes
 		conv = &Conversation{}
 	}
 
+	if userMessage != "" {
+		prefix := ""
+		if a.taskStore != nil && a.sessionID != "" {
+			if tasks := a.taskStore.List(a.sessionID); len(tasks) > 0 {
+				var b strings.Builder
+				b.WriteString("<task-list>\n")
+				for _, t := range tasks {
+					fmt.Fprintf(&b, "- [%s] %s: %s\n", t.Status, t.ID, t.Subject)
+				}
+				b.WriteString("</task-list>\n\n")
+				prefix += b.String()
+			}
+		}
+		userMessage = prefix + userMessage
+	}
+
 	conv.Messages = append(conv.Messages, engine.ChatMessage{
 		Role:    "user",
 		Content: userMessage,
@@ -603,6 +619,20 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 	// Only append a new user message if the conversation doesn't already have
 	// pre-seeded messages (compaction uses pre-built messages from SubTask.Messages).
 	if userMessage != "" {
+		prefix := ""
+		if a.taskStore != nil && a.sessionID != "" {
+			if tasks := a.taskStore.List(a.sessionID); len(tasks) > 0 {
+				var b strings.Builder
+				b.WriteString("<task-list>\n")
+				for _, t := range tasks {
+					fmt.Fprintf(&b, "- [%s] %s: %s\n", t.Status, t.ID, t.Subject)
+				}
+				b.WriteString("</task-list>\n\n")
+				prefix += b.String()
+			}
+		}
+		userMessage = prefix + userMessage
+
 		conv.Messages = append(conv.Messages, engine.ChatMessage{
 			Role:    "user",
 			Content: userMessage,
@@ -1155,38 +1185,16 @@ func (a *AgentLoop) buildMessages(conv *Conversation) []engine.ChatMessage {
 	if a.systemPrompt != "" || summaryContent != "" {
 		var parts []string
 		if a.systemPrompt != "" {
-			normalized := strings.ReplaceAll(a.projectDir, "\\", "/")
-			parts = append(parts, strings.ReplaceAll(a.systemPrompt, "{{WorkingDirectory}}", normalized))
+			parts = append(parts, a.systemPrompt)
 		}
 		if summaryContent != "" {
 			parts = append(parts, "\n\n<context-summary>\n"+summaryContent+"\n</context-summary>")
-		}
-		if summaryContent != "" && a.taskStore != nil && a.sessionID != "" {
-			if tasks := a.taskStore.List(a.sessionID); len(tasks) > 0 {
-				var b strings.Builder
-				b.WriteString("\n\n<task-list>\nCurrent task list (do NOT call task_create to recreate these — use task_update to change status):\n")
-				for _, t := range tasks {
-					fmt.Fprintf(&b, "- [%s] %s: %s\n", t.Status, t.ID, t.Subject)
-				}
-				b.WriteString("</task-list>")
-				parts = append(parts, b.String())
-			}
 		}
 
 		messages = append(messages, engine.ChatMessage{
 			Role:    "system",
 			Content: strings.Join(parts, ""),
 		})
-	}
-
-	if len(msgs) >= 10 && a.agent.Name != "compaction" {
-		reminder := "\n\n<system-reminder>\nRemember: memory_search FIRST before any task | grep before reading | read before editing | never guess URLs | prefer editing over creating | check MCP before bash | follow project_rules strictly | do the smallest thing | run lint/typecheck after completing\n</system-reminder>"
-		for i := len(messages) - 1; i >= 0; i-- {
-			if messages[i].Role == "system" {
-				messages[i].Content += reminder
-				break
-			}
-		}
 	}
 
 	messages = append(messages, filteredMsgs...)
