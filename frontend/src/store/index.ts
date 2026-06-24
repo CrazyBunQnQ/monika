@@ -211,6 +211,7 @@ interface AppState {
     selectedProvider: string
     modelsByProvider: Record<string, ModelInfo[]>
     selectedModel: string
+    favoriteModels: string[]
     sessionBindings: Record<string, { provider: string; model: string }>
     defaultProvider: string
     defaultModel: string
@@ -312,6 +313,7 @@ interface AppState {
     loadProviders: () => Promise<void>
     applySessionBinding: (id: string, provider?: string, model?: string) => void
     setActiveSessionModel: (providerId: string, modelId: string) => Promise<void>
+    toggleFavoriteModel: (providerId: string, modelId: string) => void
     setDefaultModelGlobal: (providerId: string, modelId: string) => Promise<void>
     loadModelsForProvider: (providerId: string) => Promise<void>
     setChangeStats: (st: Partial<{ stats: ChangeStat[]; loading: boolean; error: string }>) => void
@@ -383,6 +385,18 @@ interface AppState {
     toggleQueuePause: (sessionId: string, paused: boolean) => void
 }
 
+function loadFavoriteModels(): string[] {
+    try {
+        const raw = localStorage.getItem('monika:favorite_models')
+        if (!raw) return []
+        const parsed = JSON.parse(raw)
+        if (!Array.isArray(parsed)) return []
+        return parsed.filter((item: unknown): item is string => typeof item === 'string')
+    } catch {
+        return []
+    }
+}
+
 const INITIAL_DISPLAY_COUNT = 15
 const LOAD_MORE_COUNT = 20
 
@@ -427,6 +441,7 @@ export const useStore = create<AppState>((set, get) => ({
     selectedProvider: '',
     modelsByProvider: {},
     selectedModel: '',
+    favoriteModels: loadFavoriteModels(),
     sessionBindings: {} as Record<string, { provider: string; model: string }>,
     defaultProvider: '',
     defaultModel: '',
@@ -2240,7 +2255,7 @@ export function setupWailsEvents() {
                 try {
                     const items = data.content ? JSON.parse(data.content) : []
                     store.setQueue(sid, items)
-                } catch {}
+                } catch { }
                 break
             }
             case 'queue_item_started': {
@@ -2262,7 +2277,7 @@ export function setupWailsEvents() {
                         store.appendToSession(sid, [userMsg, assistantMsg])
                         store.addGeneratingSession(sid)
                     }
-                } catch {}
+                } catch { }
                 break
             }
             case 'queue_error': {
@@ -2275,7 +2290,7 @@ export function setupWailsEvents() {
                         })
                         store.toggleQueuePause(sid, true)
                     }
-                } catch {}
+                } catch { }
                 break
             }
         }
