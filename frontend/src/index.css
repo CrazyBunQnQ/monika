@@ -267,6 +267,9 @@
   ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 3px; }
   ::-webkit-scrollbar-corner { background: transparent; }
 
+  /* Suppress browser focus ring globally — desktop app uses custom hover/active states */
+  :focus { outline: none; }
+
   /* Tool call scrollbar: hidden by default, visible on hover */
   .tool-scroll::-webkit-scrollbar-thumb {
     visibility: hidden;

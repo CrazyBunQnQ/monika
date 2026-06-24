@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"monika/internal/agent"
 	"monika/internal/memory"
 	"monika/internal/tool"
 )
@@ -69,6 +70,9 @@ func (t *memoryWriteTool) Execute(ctx context.Context, args json.RawMessage) (to
 	}
 	if err := t.store.WriteFile(p.Scope, cat, p.Title, p.Content, p.Tags, p.Confidence); err != nil {
 		return tool.ExecutionResult{Content: fmt.Sprintf("Failed to write: %s", err), IsError: true}, nil
+	}
+	if q, ok := agent.MemoryQueueFromContext(ctx); ok {
+		q.QueueMemory(fmt.Sprintf("Saved memory \"%s\" [%s] in %s scope", p.Title, p.Category, p.Scope))
 	}
 	return tool.ExecutionResult{Content: fmt.Sprintf("Memory '%s' written to %s scope. If you intended to update an existing memory, use memory_update instead.", p.Title, p.Scope)}, nil
 }

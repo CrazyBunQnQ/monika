@@ -270,6 +270,9 @@ type AgentLoop struct {
 	mcpRegistry       *engine.MCPRegistry
 	askUserFn         tool.AskUserFunc
 	taskStore         tool.TaskStore
+	memSearchFn       func(query string) string // memory search callback (auto recall)
+	memQueue          MemoryQueue               // memory update queue (p2-3)
+	dbSchemaNote      string                    // one-shot DB availability hint
 	maxSteps          int
 }
 
@@ -367,6 +370,26 @@ func WithTaskStore(ts tool.TaskStore) LoopOption {
 	return func(a *AgentLoop) { a.taskStore = ts }
 }
 
+// WithMemSearchFn registers a memory search callback. The returned string is
+// injected as a <recalled-memory> block at the start of each user message,
+// giving the LLM automatic memory recall without requiring a tool call.
+func WithMemSearchFn(fn func(query string) string) LoopOption {
+	return func(a *AgentLoop) { a.memSearchFn = fn }
+}
+
+// WithMemQueue registers a MemoryQueue. Notes queued by memory tools (e.g.
+// memory_write) are drained and injected as a <memory-update> block at the
+// start of the next user message, so writes take effect immediately.
+func WithMemQueue(q MemoryQueue) LoopOption {
+	return func(a *AgentLoop) { a.memQueue = q }
+}
+
+// WithDBSchemaNote sets a one-shot database availability hint.
+// Injected as <database-schema-available> at message entry, then cleared.
+func WithDBSchemaNote(note string) LoopOption {
+	return func(a *AgentLoop) { a.dbSchemaNote = note }
+}
+
 func WithMaxSteps(n int) LoopOption {
 	return func(a *AgentLoop) { a.maxSteps = n }
 }
@@ -382,9 +405,61 @@ func NewLoop(provider engine.ProviderEngine, tools *tool.ToolRegistry, opts ...L
 	return a
 }
 
+// buildEntryPrefix assembles dynamic content prepended to a user message once,
+// at the AgentLoop entry. Runs once per message (not per LLM turn).
+// userMessage is used ONLY as the search query for memSearchFn; it is not
+// echoed back into the returned prefix.
+func (a *AgentLoop) buildEntryPrefix(userMessage string) string {
+	var b strings.Builder
+
+	// database-schema-available — one-shot hint when this project has databases.
+	if a.dbSchemaNote != "" {
+		b.WriteString("<database-schema-available>\n")
+		b.WriteString(a.dbSchemaNote)
+		b.WriteString("\n</database-schema-available>\n\n")
+	}
+
+	// recalled-memory (auto search) — injected first so context precedes tasks.
+	if a.memSearchFn != nil && userMessage != "" {
+		if recalled := a.memSearchFn(userMessage); recalled != "" {
+			b.WriteString("<recalled-memory>\n")
+			b.WriteString(recalled)
+			b.WriteString("\n</recalled-memory>\n\n")
+		}
+	}
+
+	// memory-update — drain notes queued by memory tools since the last message.
+	if a.memQueue != nil {
+		if notes := a.memQueue.DrainPending(); len(notes) > 0 {
+			b.WriteString("<memory-update>\n")
+			for _, n := range notes {
+				b.WriteString("- " + n + "\n")
+			}
+			b.WriteString("</memory-update>\n\n")
+		}
+	}
+
+	// task-list (existing)
+	if a.taskStore != nil && a.sessionID != "" {
+		if tasks := a.taskStore.List(a.sessionID); len(tasks) > 0 {
+			b.WriteString("<task-list>\n")
+			b.WriteString("Existing tasks (use task_update to change status; do NOT recreate with task_create):\n")
+			for _, t := range tasks {
+				fmt.Fprintf(&b, "- [%s] %s: %s\n", t.Status, t.ID, t.Subject)
+			}
+			b.WriteString("</task-list>\n\n")
+		}
+	}
+	return b.String()
+}
+
 func (a *AgentLoop) RunBlocking(ctx context.Context, conv *Conversation, userMessage string) (*LoopResult, error) {
 	if conv == nil {
 		conv = &Conversation{}
+	}
+
+	if userMessage != "" {
+		userMessage = a.buildEntryPrefix(userMessage) + userMessage
 	}
 
 	conv.Messages = append(conv.Messages, engine.ChatMessage{
@@ -559,6 +634,9 @@ func (a *AgentLoop) RunBlocking(ctx context.Context, conv *Conversation, userMes
 			if a.askUserFn != nil {
 				toolCtx = tool.WithAskUserFunc(toolCtx, a.askUserFn)
 			}
+			if a.memQueue != nil {
+				toolCtx = WithMemoryQueueInContext(toolCtx, a.memQueue)
+			}
 			execResult, err := t.Execute(toolCtx, json.RawMessage(tc.Function.Arguments))
 			if err != nil {
 				conv.Messages = append(conv.Messages, engine.ChatMessage{
@@ -603,6 +681,8 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 	// Only append a new user message if the conversation doesn't already have
 	// pre-seeded messages (compaction uses pre-built messages from SubTask.Messages).
 	if userMessage != "" {
+		userMessage = a.buildEntryPrefix(userMessage) + userMessage
+
 		conv.Messages = append(conv.Messages, engine.ChatMessage{
 			Role:    "user",
 			Content: userMessage,
@@ -968,6 +1048,9 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 			if a.askUserFn != nil {
 				toolCtx = tool.WithAskUserFunc(toolCtx, a.askUserFn)
 			}
+			if a.memQueue != nil {
+				toolCtx = WithMemoryQueueInContext(toolCtx, a.memQueue)
+			}
 			// Check for streaming execution (e.g. SpawnAgent forwards child events)
 			type streamingTool interface {
 				ExecuteStreaming(ctx context.Context, args json.RawMessage) (<-chan Event, error)
@@ -1155,38 +1238,16 @@ func (a *AgentLoop) buildMessages(conv *Conversation) []engine.ChatMessage {
 	if a.systemPrompt != "" || summaryContent != "" {
 		var parts []string
 		if a.systemPrompt != "" {
-			normalized := strings.ReplaceAll(a.projectDir, "\\", "/")
-			parts = append(parts, strings.ReplaceAll(a.systemPrompt, "{{WorkingDirectory}}", normalized))
+			parts = append(parts, a.systemPrompt)
 		}
 		if summaryContent != "" {
 			parts = append(parts, "\n\n<context-summary>\n"+summaryContent+"\n</context-summary>")
-		}
-		if summaryContent != "" && a.taskStore != nil && a.sessionID != "" {
-			if tasks := a.taskStore.List(a.sessionID); len(tasks) > 0 {
-				var b strings.Builder
-				b.WriteString("\n\n<task-list>\nCurrent task list (do NOT call task_create to recreate these — use task_update to change status):\n")
-				for _, t := range tasks {
-					fmt.Fprintf(&b, "- [%s] %s: %s\n", t.Status, t.ID, t.Subject)
-				}
-				b.WriteString("</task-list>")
-				parts = append(parts, b.String())
-			}
 		}
 
 		messages = append(messages, engine.ChatMessage{
 			Role:    "system",
 			Content: strings.Join(parts, ""),
 		})
-	}
-
-	if len(msgs) >= 10 && a.agent.Name != "compaction" {
-		reminder := "\n\n<system-reminder>\nRemember: memory_search FIRST before any task | grep before reading | read before editing | never guess URLs | prefer editing over creating | check MCP before bash | follow project_rules strictly | do the smallest thing | run lint/typecheck after completing\n</system-reminder>"
-		for i := len(messages) - 1; i >= 0; i-- {
-			if messages[i].Role == "system" {
-				messages[i].Content += reminder
-				break
-			}
-		}
 	}
 
 	messages = append(messages, filteredMsgs...)
@@ -1213,8 +1274,7 @@ func (a *AgentLoop) buildMessages(conv *Conversation) []engine.ChatMessage {
 }
 
 func (a *AgentLoop) buildMaxStepsPrompt(conv *Conversation) []engine.ChatMessage {
-	normalized := strings.ReplaceAll(a.projectDir, "\\", "/")
-	sysPrompt := strings.ReplaceAll(a.systemPrompt, "{{WorkingDirectory}}", normalized)
+	sysPrompt := a.systemPrompt // already had {{WorkingDirectory}} replaced at startup
 
 	maxStepsPrompt := `CRITICAL - MAXIMUM STEPS REACHED
 

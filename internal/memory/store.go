@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -186,17 +187,17 @@ func (s *KBStore) autoReindex(scope string) {
 	s.ReindexFromDisk(scope)
 }
 
-// sanitizeFTSQuery 转义 FTS5 查询中的特殊字符。
-// FTS5 的 MATCH 操作符将 *, (), :, "", AND/OR/NOT 等视为语法元素。
-// 将每个词用双引号包裹，使其成为短语查询，避免语法错误。
-// 词间用 OR 连接，提升召回率（单词命中即可），由 bm25 排序保证精度。
-func sanitizeFTSQuery(query string) string {
+// buildFTSQuery 构建安全的 FTS5 短语查询。
+// 将每个词用双引号包裹（内部 " 转义为 ""），避免 *, (), :, AND/OR/NOT 等
+// 被 FTS5 当作语法元素；词间用 operator（"AND" 或 "OR"）连接。
+func buildFTSQuery(query, operator string) string {
 	words := strings.Fields(query)
-	for i, w := range words {
+	quoted := make([]string, 0, len(words))
+	for _, w := range words {
 		w = strings.ReplaceAll(w, `"`, `""`)
-		words[i] = `"` + w + `"`
+		quoted = append(quoted, `"`+w+`"`)
 	}
-	return strings.Join(words, " OR ")
+	return strings.Join(quoted, " "+operator+" ")
 }
 
 func containsCJK(s string) bool {
@@ -218,23 +219,93 @@ func (s *KBStore) Search(query, scope string, limit int) ([]KBFile, error) {
 	if scope == ScopeAuto {
 		return s.searchAuto(query, limit)
 	}
-	return s.searchSingle(query, scope, limit)
+	return s.SearchHybrid(query, scope, limit)
 }
 
-// searchAuto 合并搜索 project 和 global 两个 DB，project 结果优先。
-func (s *KBStore) searchAuto(query string, limit int) ([]KBFile, error) {
-	proj, err := s.searchSingle(query, ScopeProject, limit)
-	if err != nil {
-		return nil, err
+// SearchHybrid performs multi-channel lexical search (FTS5 + LIKE) on a single
+// scope and reranks the candidate pool. The wider-than-requested pool gives the
+// reranker room to improve ordering over raw BM25 output.
+//
+// Graceful degradation: when no embedding provider is configured (the current
+// default), this is pure lexical search + rerank. The TODO marks where semantic
+// search will be folded in once a provider is wired.
+func (s *KBStore) SearchHybrid(query, scope string, limit int) ([]KBFile, error) {
+	if limit <= 0 {
+		limit = 5
 	}
-	glob, err := s.searchSingle(query, ScopeGlobal, limit)
+
+	// Candidate pool is 2x the requested limit so reranking can reorder rather
+	// than just truncate. Capped to keep latency bounded on large matches.
+	poolSize := limit * 2
+	if poolSize > 20 {
+		poolSize = 20
+	}
+
+	candidates, err := s.searchSingle(query, scope, poolSize)
 	if err != nil {
 		return nil, err
 	}
 
-	seen := map[string]bool{}
-	var merged []KBFile
-	for _, f := range append(proj, glob...) {
+	// TODO(p3-2): when an EmbeddingProvider is configured on the store, run
+	// semantic search (cosineSimilarity over the embeddings table) and merge
+	// its top-k into the candidate pool before reranking. Intentionally
+	// skipped on the lexical-only path to avoid touching the DB when no
+	// provider is present.
+
+	if len(candidates) > limit {
+		candidates = rerankCandidates(query, candidates, limit)
+	}
+	return candidates, nil
+}
+
+// searchAuto 合并搜索 project 和 global 两个 DB，然后用 rerankCandidates 统一排序。
+// project 不再天然优先——rerank 会基于 tag/title 重叠和 BM25 排名决定最终顺序。
+func (s *KBStore) searchAuto(query string, limit int) ([]KBFile, error) {
+	// 两个 scope 都拉更宽的候选池（2x limit），给统一 rerank 留出重排空间。
+	poolSize := limit * 2
+	if poolSize > 20 {
+		poolSize = 20
+	}
+
+	proj, err := s.searchSingle(query, ScopeProject, poolSize)
+	if err != nil {
+		return nil, err
+	}
+	glob, err := s.searchSingle(query, ScopeGlobal, poolSize)
+	if err != nil {
+		return nil, err
+	}
+
+	merged := mergeSearchResults(proj, glob, poolSize)
+	if len(merged) > limit {
+		merged = rerankCandidates(query, merged, limit)
+	}
+	return merged, nil
+}
+
+func (s *KBStore) searchSingle(query, scope string, limit int) ([]KBFile, error) {
+	// FTS5 始终执行：即使查询含 CJK，也能命中被 FTS5 索引的英文/拉丁词。
+	ftsResults, err := s.searchFTS(query, scope, limit)
+	if err != nil {
+		return nil, err
+	}
+	// CJK 查询额外跑 LIKE：FTS5 的 unicode61 分词器无法正确切分 CJK，
+	// 用子串匹配补召回，再与 FTS 结果合并去重。
+	if containsCJK(query) {
+		likeResults, err := s.searchLike(query, scope, limit)
+		if err != nil {
+			return nil, err
+		}
+		return mergeSearchResults(ftsResults, likeResults, limit), nil
+	}
+	return ftsResults, nil
+}
+
+// mergeSearchResults 合并两组结果，按 Scope + "/" + Path 去重，并截断到 limit。
+func mergeSearchResults(a, b []KBFile, limit int) []KBFile {
+	seen := make(map[string]bool)
+	merged := make([]KBFile, 0, len(a)+len(b))
+	for _, f := range append(a, b...) {
 		key := f.Scope + "/" + f.Path
 		if seen[key] {
 			continue
@@ -245,22 +316,20 @@ func (s *KBStore) searchAuto(query string, limit int) ([]KBFile, error) {
 	if len(merged) > limit {
 		merged = merged[:limit]
 	}
-	return merged, nil
-}
-
-func (s *KBStore) searchSingle(query, scope string, limit int) ([]KBFile, error) {
-	if s.dbFor(scope) == nil {
-		return nil, nil
-	}
-	if containsCJK(query) {
-		return s.searchLike(query, scope, limit)
-	}
-	return s.searchFTS(query, scope, limit)
+	return merged
 }
 
 // searchFTS 使用 FTS5 全文搜索（适用于英文等以空格分词的语言）。
+// 策略：先尝试 AND（所有词都命中，精度高）；若 AND 无结果再回退到 OR（任一词命中，召回高）。
 func (s *KBStore) searchFTS(query, scope string, limit int) ([]KBFile, error) {
-	args := []any{sanitizeFTSQuery(query), limit}
+	if results, err := s.execFTS(buildFTSQuery(query, "AND"), scope, limit); err == nil && len(results) > 0 {
+		return results, nil
+	}
+	return s.execFTS(buildFTSQuery(query, "OR"), scope, limit)
+}
+
+// execFTS 执行给定的（已转义为短语）FTS5 MATCH 查询。
+func (s *KBStore) execFTS(query, scope string, limit int) ([]KBFile, error) {
 	q := `
 		SELECT f.id, f.path, f.scope, f.category, f.title, f.tags,
 		       f.confidence, f.status, f.char_count, f.linked_to,
@@ -272,8 +341,7 @@ func (s *KBStore) searchFTS(query, scope string, limit int) ([]KBFile, error) {
 		ORDER BY bm25(file_fts, 0, 10, 5)
 		LIMIT ?
 	`
-
-	rows, err := s.dbFor(scope).Query(q, args...)
+	rows, err := s.dbFor(scope).Query(q, query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}
@@ -313,7 +381,65 @@ func (s *KBStore) searchLike(query, scope string, limit int) ([]KBFile, error) {
 		return nil, fmt.Errorf("search: %w", err)
 	}
 	defer rows.Close()
-	return scanKBFiles(rows)
+	results, err := scanKBFiles(rows)
+	if err != nil {
+		return nil, err
+	}
+	// Re-window snippets around the first query-word match. The SQL preview is
+	// always substr(content,1,200), so when the match lives later in the body
+	// the user sees irrelevant leading text. Windowing here helps for the
+	// common case where the match is within the first 200 chars.
+	for i, f := range results {
+		if f.Snippet == "" {
+			continue
+		}
+		if pos := findMatchPosition(f.Snippet, query); pos > 0 {
+			results[i].Snippet = buildContextualSnippet(f.Snippet, pos, 120)
+		}
+	}
+	return results, nil
+}
+
+// findMatchPosition returns the byte index of the first occurrence of any query
+// word (length > 1) in s, case-insensitive. Returns -1 when no query word is
+// present. Used to center LIKE-search snippets on the actual match.
+func findMatchPosition(s, query string) int {
+	sLower := strings.ToLower(s)
+	minPos := -1
+	for _, w := range strings.Fields(strings.ToLower(query)) {
+		if len(w) <= 1 {
+			continue
+		}
+		if pos := strings.Index(sLower, w); pos >= 0 && (minPos == -1 || pos < minPos) {
+			minPos = pos
+		}
+	}
+	return minPos
+}
+
+// buildContextualSnippet returns a window of approximately windowLen bytes
+// centered on pos, with ellipses marking truncation. pos must be a valid byte
+// offset into s.
+func buildContextualSnippet(s string, pos, windowLen int) string {
+	if pos < 0 || windowLen <= 0 || pos >= len(s) {
+		return s
+	}
+	start := pos - windowLen/2
+	if start < 0 {
+		start = 0
+	}
+	end := start + windowLen
+	if end > len(s) {
+		end = len(s)
+	}
+	out := s[start:end]
+	if start > 0 {
+		out = "…" + out
+	}
+	if end < len(s) {
+		out += "…"
+	}
+	return out
 }
 
 func likeEscape(s string) string {
@@ -324,10 +450,40 @@ func likeEscape(s string) string {
 }
 
 func (s *KBStore) WriteFile(scope, category, title, content string, tags []string, confidence string) error {
+	if tags == nil {
+		tags = []string{}
+	}
+	tags = normalizeTags(tags)
+	if confidence == "" {
+		confidence = "medium"
+	}
+
+	// Dedup check: lexical signals only (no LLM). Runs on every write, so it
+	// must stay cheap. Rejects near-duplicates; guides caller to memory_update.
+	queryText := title + " " + content
+	if existing, _ := s.Search(queryText, scope, 3); len(existing) > 0 {
+		for _, e := range existing {
+			if sim := computeWriteSimilarity(title, tags, e); sim >= 0.75 {
+				return fmt.Errorf("similar memory already exists: %s (path: %s, similarity: %.2f). Use memory_update to merge instead",
+					e.Title, e.Path, sim)
+			} else if sim >= 0.5 && detectContradiction(title, content, e.Title) {
+				_ = s.markConflict(scope, title, e.Path)
+			}
+		}
+	}
+
+	return s.writeFileUnchecked(scope, category, title, content, tags, confidence)
+}
+
+// writeFileUnchecked writes the memory without running the dedup check.
+// Used by bulkImport/ReindexFromDisk where the file already exists on disk
+// and must be indexed as-is rather than rejected as a near-duplicate.
+func (s *KBStore) writeFileUnchecked(scope, category, title, content string, tags []string, confidence string) error {
 	root := s.rootFor(scope)
 	if tags == nil {
 		tags = []string{}
 	}
+	tags = normalizeTags(tags)
 	if confidence == "" {
 		confidence = "medium"
 	}
@@ -367,6 +523,15 @@ func (s *KBStore) WriteFile(scope, category, title, content string, tags []strin
 		return fmt.Errorf("upsert: %w", err)
 	}
 	return nil
+}
+
+// computeWriteSimilarity returns a 0-1 lexical similarity for write-time dedup.
+// Title keyword overlap weighted higher than tags: two memories with the same
+// title word-set are almost always the same fact regardless of body wording.
+func computeWriteSimilarity(title string, tags []string, existing KBFile) float64 {
+	tagSim := tagOverlap(tags, existing.Tags)
+	titleSim := keywordOverlap(title, existing.Title)
+	return tagSim*0.4 + titleSim*0.6
 }
 
 func (s *KBStore) ReadFile(scope, relPath string) (string, error) {
@@ -443,6 +608,42 @@ func (s *KBStore) ListFiles(scope, category string) ([]KBFile, error) {
 	}
 	defer rows.Close()
 	return scanKBFilesFlat(rows)
+}
+
+// BuildIndex generates a compact one-line-per-entry index of saved memories.
+// Sorted by updated_at DESC. Returns empty string if no memories.
+// The index is intended for inclusion in the system prompt so the LLM can
+// discover existing memories and proactively memory_read relevant ones.
+func (s *KBStore) BuildIndex(scope string, limit int) (string, error) {
+	files, err := s.ListFiles(scope, "")
+	if err != nil || len(files) == 0 {
+		return "", nil
+	}
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].UpdatedAt.After(files[j].UpdatedAt)
+	})
+	if limit > 0 && len(files) > limit {
+		files = files[:limit]
+	}
+
+	var b strings.Builder
+	for i, f := range files {
+		fmt.Fprintf(&b, "%d. [%s] %s (%s)", i+1, categoryLabel(f.Category), f.Title, f.Path)
+		if len(f.Tags) > 0 {
+			fmt.Fprintf(&b, " tags: %s", strings.Join(f.Tags, ", "))
+		}
+		b.WriteString("\n")
+	}
+	return b.String(), nil
+}
+
+// categoryLabel collapses a category path like "wiki/lesson" or "raw/doc"
+// to its trailing segment ("lesson", "doc") for compact index rendering.
+func categoryLabel(category string) string {
+	if i := strings.LastIndex(category, "/"); i >= 0 {
+		return category[i+1:]
+	}
+	return category
 }
 
 func (s *KBStore) SoftDelete(scope, relPath string) error {
@@ -673,7 +874,7 @@ func (s *KBStore) ReindexFromDisk(scope string) (int, error) {
 		links := parseFMLinks(content)
 		body := extractMDBody(content)
 
-		if err := s.WriteFile(scope, category, title, body, tags, confidence); err != nil {
+		if err := s.writeFileUnchecked(scope, category, title, body, tags, confidence); err != nil {
 			return nil
 		}
 		// 回填 linked_to：WriteFile 总是写 '[]'，这里把正文里解析到的链接同步进 DB，

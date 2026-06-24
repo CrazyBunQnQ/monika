@@ -671,34 +671,88 @@ func (a *App) LoadSession(projectPath, sessionID string) (*Session, error) {
 	return s, nil
 }
 
+func copyConversationData(dst, src *Session, providerID, model string) {
+	dst.Messages = src.Messages
+	dst.TokenCount = src.TokenCount
+	dst.TokenMax = src.TokenMax
+	dst.CompactionCount = src.CompactionCount
+	dst.CompactionFrom = src.CompactionFrom
+	dst.Provider = providerID
+	dst.Model = model
+}
+
 func (a *App) SendMessage(projectPath, sessionID, text, providerID, model string) error {
 	sm := a.getSessionManager(projectPath)
+
+	a.cancelMu.Lock()
+	_, busy := a.cancelFuncs[sessionID]
+	a.cancelMu.Unlock()
+
 	sm.Lock()
-	defer sm.Unlock()
 
 	s, err := sm.Load(sessionID)
 	if err != nil {
+		sm.Unlock()
 		return err
 	}
 
+	if _, ok := a.providers[providerID]; !ok {
+		sm.Unlock()
+		return fmt.Errorf("provider %q not found", providerID)
+	}
+
+	// Enqueue only when the agent is generating or there are pending items;
+	// otherwise send directly for immediate execution.
+	if busy || sm.NextQueuedItem(s) != nil {
+		item := QueuedMessage{
+			ID:         generateID(),
+			Text:       text,
+			ProviderID: providerID,
+			Model:      model,
+			Status:     "queued",
+			CreatedAt:  time.Now().Unix(),
+		}
+		sm.EnqueueQueueItem(s, item)
+		if err := sm.Save(s); err != nil {
+			sm.Unlock()
+			return err
+		}
+		sm.Unlock()
+
+		a.emitQueueUpdated(sessionID, s.Queue)
+		return nil
+	}
+
+	// Agent is idle with an empty queue — execute directly.
+	sm.Unlock()
+
+	a.emitQueueItemStarted(sessionID, QueuedMessage{
+		ID:         generateID(),
+		Text:       text,
+		ProviderID: providerID,
+		Model:      model,
+		Status:     "executing",
+		CreatedAt:  time.Now().Unix(),
+	})
+
 	ctx, cancel := context.WithCancel(a.ctx)
 	a.cancelMu.Lock()
-	if _, exists := a.cancelFuncs[sessionID]; exists {
-		a.cancelMu.Unlock()
-		cancel()
-		return fmt.Errorf("session %s is already generating", sessionID)
-	}
 	a.cancelFuncs[sessionID] = cancel
 	a.cancelMu.Unlock()
 
+	a.startAgentLoop(ctx, cancel, sm, s, sessionID, text, providerID, model, "")
+	return nil
+}
+
+func (a *App) startAgentLoop(ctx context.Context, cancel context.CancelFunc, sm *SessionManager, s *Session, sessionID, text, providerID, model, queueItemID string) {
 	// Route /skill-name [msg] to skill tool
 	if strings.HasPrefix(text, "/") {
 		parts := strings.SplitN(strings.TrimPrefix(text, "/"), " ", 2)
 		skillName := parts[0]
 		if skillName != "" {
 			skills := a.ListSkills()
-			for _, s := range skills {
-				if s.Name == skillName {
+			for _, sk := range skills {
+				if sk.Name == skillName {
 					var sb strings.Builder
 					sb.WriteString(fmt.Sprintf("Load the skill %q and execute its full workflow.", skillName))
 					if len(parts) > 1 && strings.TrimSpace(parts[1]) != "" {
@@ -711,10 +765,7 @@ func (a *App) SendMessage(projectPath, sessionID, text, providerID, model string
 		}
 	}
 
-	providerEng, ok := a.providers[providerID]
-	if !ok {
-		return fmt.Errorf("provider %q not available", providerID)
-	}
+	providerEng, _ := a.providers[providerID]
 
 	conv := &agent2.Conversation{
 		ID:              s.ID,
@@ -756,24 +807,29 @@ func (a *App) SendMessage(projectPath, sessionID, text, providerID, model string
 
 	go func() {
 		defer cancel()
-		defer func() {
-			a.cancelMu.Lock()
-			delete(a.cancelFuncs, sessionID)
-			a.cancelMu.Unlock()
-		}()
 
-		// Set generating status
+		// Set generating status (reload from disk to preserve concurrent queue changes)
 		sm.Lock()
-		sm.SetStatus(s, StatusGenerating)
-		sm.Save(s)
+		freshInit, errInit := sm.Load(sessionID)
+		if errInit == nil {
+			sm.SetStatus(freshInit, StatusGenerating)
+			sm.Save(freshInit)
+		} else {
+			sm.SetStatus(s, StatusGenerating)
+			sm.Save(s)
+		}
 		sm.Unlock()
 
+		var hadError bool
 		events := loop.Run(ctx, conv, text)
 		for ev := range events {
 			select {
 			case <-ctx.Done():
 				_ = ctx.Err()
 			default:
+			}
+			if ev.Type == agent2.EventError {
+				hadError = true
 			}
 			a.handleAgentEvent(sessionID, model, ev)
 		}
@@ -802,25 +858,451 @@ func (a *App) SendMessage(projectPath, sessionID, text, providerID, model string
 		// Persist tasks alongside the session so they survive restarts.
 		a.syncTasksToSession(sessionID, s)
 
+		// If context was cancelled during a queued message,
+		// CancelQueueItem/CancelGeneration already set the item to "error".
+		// Reload from disk to preserve that state, only updating conversation data.
+		if ctx.Err() != nil && queueItemID != "" {
+			sm.Lock()
+			fresh, err := sm.Load(sessionID)
+			if err == nil {
+				copyConversationData(fresh, s, providerID, model)
+				sm.SetStatus(fresh, StatusPending)
+				sm.Save(fresh)
+			}
+			sm.Unlock()
+			a.cancelMu.Lock()
+			delete(a.cancelFuncs, sessionID)
+			a.cancelMu.Unlock()
+			return
+		}
+
+		// Error during queued message execution — pause queue
+		if hadError && queueItemID != "" {
+			sm.Lock()
+			fresh2, err2 := sm.Load(sessionID)
+			if err2 == nil {
+				copyConversationData(fresh2, s, providerID, model)
+				sm.UpdateQueueItem(fresh2, queueItemID, func(item *QueuedMessage) {
+					item.Status = "error"
+				})
+				fresh2.QueuePaused = true
+				sm.SetStatus(fresh2, StatusPending)
+				sm.Save(fresh2)
+			} else {
+				copyConversationData(s, s, providerID, model)
+				sm.UpdateQueueItem(s, queueItemID, func(item *QueuedMessage) {
+					item.Status = "error"
+				})
+				s.QueuePaused = true
+				sm.SetStatus(s, StatusPending)
+				sm.Save(s)
+			}
+			sm.Unlock()
+			a.emitQueueError(sessionID, queueItemID, "execution failed")
+			a.cancelMu.Lock()
+			delete(a.cancelFuncs, sessionID)
+			a.cancelMu.Unlock()
+			return // Skip normal completion + drain — queue is paused
+		}
+
+		// Auto-drain: reload from disk to preserve concurrent changes (e.g. PauseQueue)
 		sm.Lock()
-		if ctx.Err() != nil {
-			sm.SetStatus(s, StatusPending)
-			sm.Save(s)
+		fresh, err := sm.Load(sessionID)
+		if err == nil {
+			copyConversationData(fresh, s, providerID, model)
+			if queueItemID != "" {
+				sm.RemoveQueueItem(fresh, queueItemID)
+			}
+			sm.SetStatus(fresh, StatusPending)
+			sm.Save(fresh)
+			s.Queue = fresh.Queue
 		} else {
+			if queueItemID != "" {
+				sm.RemoveQueueItem(s, queueItemID)
+			}
 			sm.SetStatus(s, StatusPending)
 			sm.Save(s)
 		}
 		sm.Unlock()
+
+		// Sync frontend with updated queue (completed item removed)
+		if queueItemID != "" {
+			a.emitQueueUpdated(sessionID, s.Queue)
+		}
+
+		// Clean up cancelFuncs BEFORE drainQueue so it sees the agent as idle
+		a.cancelMu.Lock()
+		delete(a.cancelFuncs, sessionID)
+		a.cancelMu.Unlock()
 
 		if ctx.Err() == nil {
 			a.handleAgentEvent(sessionID, model, agent2.Event{
 				Type:    agent2.EventSessionUpdated,
 				Content: s.Title,
 			})
+			// Auto-drain only on normal completion (not on cancel)
+			a.drainQueue(sm, sessionID)
 		}
 	}()
+}
 
+func (a *App) drainQueue(sm *SessionManager, sessionID string) {
+	sm.Lock()
+	defer sm.Unlock()
+
+	s, err := sm.Load(sessionID)
+	if err != nil {
+		return
+	}
+
+	// Don't drain if paused
+	if s.QueuePaused {
+		return
+	}
+
+	// Find next queued item
+	item := sm.NextQueuedItem(s)
+	if item == nil {
+		return
+	}
+
+	// Check not busy
+	a.cancelMu.Lock()
+	_, busy := a.cancelFuncs[sessionID]
+	a.cancelMu.Unlock()
+	if busy {
+		return
+	}
+
+	// Mark as executing
+	sm.UpdateQueueItem(s, item.ID, func(qi *QueuedMessage) {
+		qi.Status = "executing"
+	})
+	sm.Save(s)
+
+	// Notify frontend that this item is starting
+	a.emitQueueItemStarted(sessionID, *item)
+
+	// Set up cancel func
+	ctx, cancel := context.WithCancel(a.ctx)
+	a.cancelMu.Lock()
+	a.cancelFuncs[sessionID] = cancel
+	a.cancelMu.Unlock()
+
+	// Start agent loop for this queued message
+	a.startAgentLoop(ctx, cancel, sm, s, sessionID, item.Text, item.ProviderID, item.Model, item.ID)
+}
+
+func (a *App) ExecuteQueueItem(projectPath, sessionID, itemID string) error {
+	sm := a.getSessionManager(projectPath)
+
+	// Check agent is idle
+	a.cancelMu.Lock()
+	_, busy := a.cancelFuncs[sessionID]
+	a.cancelMu.Unlock()
+	if busy {
+		return fmt.Errorf("agent is busy, cannot execute item")
+	}
+
+	sm.Lock()
+	defer sm.Unlock()
+
+	s, err := sm.Load(sessionID)
+	if err != nil {
+		return err
+	}
+
+	idx := sm.FindQueueItem(s, itemID)
+	if idx < 0 {
+		return fmt.Errorf("queue item %s not found", itemID)
+	}
+	if s.Queue[idx].Status != "queued" {
+		return fmt.Errorf("can only execute queued items")
+	}
+
+	// Move item to front if not already
+	if idx > 0 {
+		item := s.Queue[idx]
+		s.Queue = append([]QueuedMessage{item}, append(s.Queue[:idx], s.Queue[idx+1:]...)...)
+	}
+
+	// Mark as executing
+	sm.UpdateQueueItem(s, itemID, func(qi *QueuedMessage) {
+		qi.Status = "executing"
+	})
+	if err := sm.Save(s); err != nil {
+		return err
+	}
+
+	// Notify frontend
+	item := s.Queue[0]
+	a.emitQueueItemStarted(sessionID, item)
+	a.emitQueueUpdated(sessionID, s.Queue)
+
+	// Set up cancel func
+	ctx, cancel := context.WithCancel(a.ctx)
+	a.cancelMu.Lock()
+	a.cancelFuncs[sessionID] = cancel
+	a.cancelMu.Unlock()
+
+	// Start agent loop
+	a.startAgentLoop(ctx, cancel, sm, s, sessionID, item.Text, item.ProviderID, item.Model, item.ID)
 	return nil
+}
+
+func (a *App) GetQueue(projectPath, sessionID string) ([]QueuedMessage, error) {
+	sm := a.getSessionManager(projectPath)
+	sm.Lock()
+	defer sm.Unlock()
+	s, err := sm.Load(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return s.Queue, nil
+}
+
+func (a *App) EditQueueItem(projectPath, sessionID, itemID, newText string) error {
+	sm := a.getSessionManager(projectPath)
+	sm.Lock()
+	defer sm.Unlock()
+	s, err := sm.Load(sessionID)
+	if err != nil {
+		return err
+	}
+	idx := sm.FindQueueItem(s, itemID)
+	if idx < 0 {
+		return fmt.Errorf("queue item %s not found", itemID)
+	}
+	if s.Queue[idx].Status == "executing" {
+		return fmt.Errorf("cannot edit an executing message")
+	}
+	sm.UpdateQueueItem(s, itemID, func(item *QueuedMessage) {
+		item.Text = newText
+	})
+	if err := sm.Save(s); err != nil {
+		return err
+	}
+	a.emitQueueUpdated(sessionID, s.Queue)
+	return nil
+}
+
+func (a *App) ReorderQueue(projectPath, sessionID string, itemIDs []string) error {
+	sm := a.getSessionManager(projectPath)
+	sm.Lock()
+	defer sm.Unlock()
+	s, err := sm.Load(sessionID)
+	if err != nil {
+		return err
+	}
+	sm.ReorderQueue(s, itemIDs)
+	if err := sm.Save(s); err != nil {
+		return err
+	}
+	a.emitQueueUpdated(sessionID, s.Queue)
+	return nil
+}
+
+func (a *App) CancelQueueItem(projectPath, sessionID, itemID string) error {
+	sm := a.getSessionManager(projectPath)
+	sm.Lock()
+	s, err := sm.Load(sessionID)
+	if err != nil {
+		sm.Unlock()
+		return err
+	}
+	idx := sm.FindQueueItem(s, itemID)
+	if idx < 0 {
+		sm.Unlock()
+		return fmt.Errorf("queue item %s not found", itemID)
+	}
+
+	if s.Queue[idx].Status == "executing" {
+		// Cancel current generation + pause queue
+		sm.UpdateQueueItem(s, itemID, func(item *QueuedMessage) {
+			item.Status = "error"
+			item.Error = "cancelled by user"
+		})
+		s.QueuePaused = true
+		if err := sm.Save(s); err != nil {
+			sm.Unlock()
+			return err
+		}
+		sm.Unlock()
+
+		// Cancel the running agent loop
+		a.cancelMu.Lock()
+		cancel, ok := a.cancelFuncs[sessionID]
+		a.cancelMu.Unlock()
+		if ok {
+			cancel()
+		}
+
+		a.emitQueueError(sessionID, itemID, "cancelled by user")
+		return nil
+	}
+
+	// Simple removal for queued/error items
+	sm.RemoveQueueItem(s, itemID)
+	if err := sm.Save(s); err != nil {
+		sm.Unlock()
+		return err
+	}
+	sm.Unlock()
+	a.emitQueueUpdated(sessionID, s.Queue)
+	return nil
+}
+
+func (a *App) PauseQueue(projectPath, sessionID string) error {
+	sm := a.getSessionManager(projectPath)
+	sm.Lock()
+	defer sm.Unlock()
+	s, err := sm.Load(sessionID)
+	if err != nil {
+		return err
+	}
+	s.QueuePaused = true
+	if err := sm.Save(s); err != nil {
+		return err
+	}
+	a.emitQueueUpdated(sessionID, s.Queue)
+	return nil
+}
+
+func (a *App) ResumeQueue(projectPath, sessionID string) error {
+	sm := a.getSessionManager(projectPath)
+	sm.Lock()
+	s, err := sm.Load(sessionID)
+	if err != nil {
+		sm.Unlock()
+		return err
+	}
+	s.QueuePaused = false
+	if err := sm.Save(s); err != nil {
+		sm.Unlock()
+		return err
+	}
+	a.emitQueueUpdated(sessionID, s.Queue)
+	sm.Unlock()
+	a.cancelMu.Lock()
+	_, busy := a.cancelFuncs[sessionID]
+	a.cancelMu.Unlock()
+	if !busy {
+		a.drainQueue(sm, sessionID)
+	}
+	return nil
+}
+
+func (a *App) RetryQueueItem(projectPath, sessionID, itemID string) error {
+	sm := a.getSessionManager(projectPath)
+	sm.Lock()
+	s, err := sm.Load(sessionID)
+	if err != nil {
+		sm.Unlock()
+		return err
+	}
+	idx := sm.FindQueueItem(s, itemID)
+	if idx < 0 {
+		sm.Unlock()
+		return fmt.Errorf("queue item %s not found", itemID)
+	}
+	if s.Queue[idx].Status != "error" {
+		sm.Unlock()
+		return fmt.Errorf("can only retry failed items")
+	}
+	sm.UpdateQueueItem(s, itemID, func(item *QueuedMessage) {
+		item.Status = "queued"
+		item.Error = ""
+	})
+	s.QueuePaused = false
+	if err := sm.Save(s); err != nil {
+		sm.Unlock()
+		return err
+	}
+	sm.Unlock()
+
+	// Trigger drain if idle
+	a.cancelMu.Lock()
+	_, busy := a.cancelFuncs[sessionID]
+	a.cancelMu.Unlock()
+	if !busy {
+		a.drainQueue(sm, sessionID)
+	}
+	return nil
+}
+
+func (a *App) SkipQueueItem(projectPath, sessionID, itemID string) error {
+	sm := a.getSessionManager(projectPath)
+	sm.Lock()
+	s, err := sm.Load(sessionID)
+	if err != nil {
+		sm.Unlock()
+		return err
+	}
+	sm.RemoveQueueItem(s, itemID)
+	s.QueuePaused = false
+	if err := sm.Save(s); err != nil {
+		sm.Unlock()
+		return err
+	}
+	sm.Unlock()
+
+	// Trigger drain if idle
+	a.cancelMu.Lock()
+	_, busy := a.cancelFuncs[sessionID]
+	a.cancelMu.Unlock()
+	if !busy {
+		a.drainQueue(sm, sessionID)
+	}
+	return nil
+}
+
+func (a *App) emitQueueUpdated(sessionID string, queue []QueuedMessage) {
+	se := StreamEvent{
+		SessionID: sessionID,
+		Type:      "queue_updated",
+		Content:   queueToJSON(queue),
+		Seq:       a.eventSeq.Add(1),
+	}
+	a.eventBus.Emit(se)
+	application.Get().Event.Emit("stream", se)
+}
+
+func (a *App) emitQueueItemStarted(sessionID string, item QueuedMessage) {
+	se := StreamEvent{
+		SessionID: sessionID,
+		Type:      "queue_item_started",
+		Content:   queueItemToJSON(item),
+		Seq:       a.eventSeq.Add(1),
+	}
+	a.eventBus.Emit(se)
+	application.Get().Event.Emit("stream", se)
+}
+
+func (a *App) emitQueueError(sessionID, itemID, errorMsg string) {
+	se := StreamEvent{
+		SessionID: sessionID,
+		Type:      "queue_error",
+		Content:   fmt.Sprintf(`{"item_id":%q,"error":%q}`, itemID, errorMsg),
+		Seq:       a.eventSeq.Add(1),
+	}
+	a.eventBus.Emit(se)
+	application.Get().Event.Emit("stream", se)
+}
+
+func queueToJSON(queue []QueuedMessage) string {
+	data, err := json.Marshal(queue)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
+}
+
+func queueItemToJSON(item QueuedMessage) string {
+	data, err := json.Marshal(item)
+	if err != nil {
+		return "{}"
+	}
+	return string(data)
 }
 
 func (a *App) CancelGeneration(sessionID string) {
@@ -830,12 +1312,18 @@ func (a *App) CancelGeneration(sessionID string) {
 	if ok {
 		cancel()
 		if sm := a.getSessionManagerForSession(sessionID); sm != nil {
-			if s, err := sm.Load(sessionID); err == nil {
-				sm.Lock()
+			sm.Lock()
+			s, err := sm.Load(sessionID)
+			if err == nil {
 				sm.SetStatus(s, StatusPending)
+				for i := range s.Queue {
+					if s.Queue[i].Status == "executing" {
+						s.Queue[i].Status = "error"
+					}
+				}
 				sm.Save(s)
-				sm.Unlock()
 			}
+			sm.Unlock()
 		}
 	}
 }
@@ -1568,15 +2056,40 @@ func (a *App) resetStaleSessions(projectPath string) {
 		return
 	}
 	for _, info := range sessions {
-		if info.Status == StatusGenerating {
-			s, err := sm.Load(info.ID)
-			if err != nil {
-				continue
+		s, err := sm.Load(info.ID)
+		if err != nil {
+			continue
+		}
+		needsSave := false
+
+		// Reset stale generating status
+		if s.Status == StatusGenerating {
+			s.Status = StatusPending
+			needsSave = true
+		}
+
+		// Recover queue: reset "executing" items to "queued"
+		for i := range s.Queue {
+			if s.Queue[i].Status == "executing" {
+				s.Queue[i].Status = "queued"
+				needsSave = true
 			}
+		}
+
+		if needsSave {
 			sm.Lock()
-			sm.SetStatus(s, StatusPending)
 			sm.Save(s)
 			sm.Unlock()
+		}
+
+		// Auto-trigger queue if not paused and has queued items
+		if !s.QueuePaused && s.Status != StatusGenerating {
+			for _, item := range s.Queue {
+				if item.Status == "queued" {
+					go a.drainQueue(sm, info.ID)
+					break
+				}
+			}
 		}
 	}
 }

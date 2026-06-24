@@ -42,6 +42,8 @@ type Session struct {
 	CreatedAt       time.Time            `json:"created_at"`
 	UpdatedAt       time.Time            `json:"updated_at"`
 	WorktreePath    string               `json:"worktree_path,omitempty"`
+	Queue           []QueuedMessage      `json:"queue,omitempty"`
+	QueuePaused     bool                 `json:"queue_paused,omitempty"`
 }
 
 type SessionManager struct {
@@ -219,4 +221,63 @@ func (sm *SessionManager) Lock() {
 
 func (sm *SessionManager) Unlock() {
 	sm.mu.Unlock()
+}
+
+func (sm *SessionManager) EnqueueQueueItem(s *Session, item QueuedMessage) {
+	s.Queue = append(s.Queue, item)
+}
+
+func (sm *SessionManager) FindQueueItem(s *Session, itemID string) int {
+	for i, item := range s.Queue {
+		if item.ID == itemID {
+			return i
+		}
+	}
+	return -1
+}
+
+func (sm *SessionManager) UpdateQueueItem(s *Session, itemID string, fn func(*QueuedMessage)) {
+	for i := range s.Queue {
+		if s.Queue[i].ID == itemID {
+			fn(&s.Queue[i])
+			return
+		}
+	}
+}
+
+func (sm *SessionManager) RemoveQueueItem(s *Session, itemID string) {
+	idx := sm.FindQueueItem(s, itemID)
+	if idx >= 0 {
+		s.Queue = append(s.Queue[:idx], s.Queue[idx+1:]...)
+	}
+}
+
+func (sm *SessionManager) ReorderQueue(s *Session, itemIDs []string) {
+	itemMap := make(map[string]QueuedMessage)
+	for _, item := range s.Queue {
+		itemMap[item.ID] = item
+	}
+	seen := make(map[string]bool)
+	var reordered []QueuedMessage
+	for _, id := range itemIDs {
+		if item, ok := itemMap[id]; ok {
+			reordered = append(reordered, item)
+			seen[id] = true
+		}
+	}
+	for _, item := range s.Queue {
+		if !seen[item.ID] {
+			reordered = append(reordered, item)
+		}
+	}
+	s.Queue = reordered
+}
+
+func (sm *SessionManager) NextQueuedItem(s *Session) *QueuedMessage {
+	for i := range s.Queue {
+		if s.Queue[i].Status == "queued" {
+			return &s.Queue[i]
+		}
+	}
+	return nil
 }

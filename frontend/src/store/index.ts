@@ -6,6 +6,7 @@ import { App, StreamEvent } from '../../bindings/monika'
 import type { RecentProject, BranchInfo, ModelInfo, ProviderInfo, ChangeStat, SessionInfo, CommitInfo, CommitDetail } from '../../bindings/monika'
 import type { DockviewApi } from 'dockview'
 import { lspService, LspDiagnostic, LspSymbol } from '../lib/lspService'
+import { stripTransientBlocks } from '../lib/stripTransientBlocks'
 
 export interface PermissionRequiredEvent {
     type: string
@@ -86,6 +87,16 @@ interface Message {
     compactionNum?: number
     beforeTokens?: number
     afterTokens?: number
+}
+
+interface QueuedMessage {
+    id: string
+    text: string
+    provider_id: string
+    model: string
+    status: string
+    error?: string
+    created_at: number
 }
 
 interface SessionTabInfo {
@@ -201,6 +212,7 @@ interface AppState {
     selectedProvider: string
     modelsByProvider: Record<string, ModelInfo[]>
     selectedModel: string
+    favoriteModels: string[]
     sessionBindings: Record<string, { provider: string; model: string }>
     defaultProvider: string
     defaultModel: string
@@ -233,6 +245,9 @@ interface AppState {
     bgTasks: BgTaskInfo[]
     selectedBgTaskId: string | null
     bgTaskLogs: Record<string, string[]>
+
+    sessionQueues: Record<string, QueuedMessage[]>
+    queuePaused: Record<string, boolean>
 
     addMessage: (msg: Message) => void
     setPermissionMode: (mode: 'auto' | 'manual') => void
@@ -299,6 +314,7 @@ interface AppState {
     loadProviders: () => Promise<void>
     applySessionBinding: (id: string, provider?: string, model?: string) => void
     setActiveSessionModel: (providerId: string, modelId: string) => Promise<void>
+    toggleFavoriteModel: (providerId: string, modelId: string) => void
     setDefaultModelGlobal: (providerId: string, modelId: string) => Promise<void>
     loadModelsForProvider: (providerId: string) => Promise<void>
     setChangeStats: (st: Partial<{ stats: ChangeStat[]; loading: boolean; error: string }>) => void
@@ -364,6 +380,24 @@ interface AppState {
     appendBgTaskLog: (taskId: string, line: string) => void
     stopBgTask: (taskId: string) => Promise<void>
     startBgTask: (command: string) => Promise<void>
+
+    setQueue: (sessionId: string, items: QueuedMessage[]) => void
+    updateQueueItem: (sessionId: string, itemId: string, changes: Partial<QueuedMessage>) => void
+    removeQueueItem: (sessionId: string, itemId: string) => void
+    reorderQueue: (sessionId: string, itemIds: string[]) => void
+    toggleQueuePause: (sessionId: string, paused: boolean) => void
+}
+
+function loadFavoriteModels(): string[] {
+    try {
+        const raw = localStorage.getItem('monika:favorite_models')
+        if (!raw) return []
+        const parsed = JSON.parse(raw)
+        if (!Array.isArray(parsed)) return []
+        return parsed.filter((item: unknown): item is string => typeof item === 'string')
+    } catch {
+        return []
+    }
 }
 
 const INITIAL_DISPLAY_COUNT = 15
@@ -410,6 +444,7 @@ export const useStore = create<AppState>((set, get) => ({
     selectedProvider: '',
     modelsByProvider: {},
     selectedModel: '',
+    favoriteModels: loadFavoriteModels(),
     sessionBindings: {} as Record<string, { provider: string; model: string }>,
     defaultProvider: '',
     defaultModel: '',
@@ -442,6 +477,9 @@ export const useStore = create<AppState>((set, get) => ({
     bgTasks: [] as BgTaskInfo[],
     selectedBgTaskId: null as string | null,
     bgTaskLogs: {} as Record<string, string[]>,
+
+    sessionQueues: {},
+    queuePaused: {},
 
     addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
 
@@ -678,6 +716,20 @@ export const useStore = create<AppState>((set, get) => ({
         }
     },
 
+    toggleFavoriteModel: (providerId, modelId) => {
+        const key = `${providerId}:${modelId}`
+        set((s) => {
+            const exists = s.favoriteModels.includes(key)
+            const next = exists
+                ? s.favoriteModels.filter((k) => k !== key)
+                : [...s.favoriteModels, key]
+            try {
+                localStorage.setItem('monika:favorite_models', JSON.stringify(next))
+            } catch { /* ignore quota or disabled */ }
+            return { favoriteModels: next }
+        })
+    },
+
     setDefaultModelGlobal: async (providerId, modelId) => {
         set({ defaultProvider: providerId, defaultModel: modelId })
         try {
@@ -747,6 +799,47 @@ export const useStore = create<AppState>((set, get) => ({
             console.error('[monika] failed to start bg task:', e)
         }
     },
+
+    setQueue: (sessionId, items) => set((state) => ({
+        sessionQueues: { ...state.sessionQueues, [sessionId]: items },
+    })),
+
+    updateQueueItem: (sessionId, itemId, changes) => set((state) => {
+        const queue = state.sessionQueues[sessionId] || []
+        return {
+            sessionQueues: {
+                ...state.sessionQueues,
+                [sessionId]: queue.map((item) =>
+                    item.id === itemId ? { ...item, ...changes } : item
+                ),
+            },
+        }
+    }),
+
+    removeQueueItem: (sessionId, itemId) => set((state) => {
+        const queue = state.sessionQueues[sessionId] || []
+        return {
+            sessionQueues: {
+                ...state.sessionQueues,
+                [sessionId]: queue.filter((item) => item.id !== itemId),
+            },
+        }
+    }),
+
+    reorderQueue: (sessionId, itemIds) => set((state) => {
+        const queue = state.sessionQueues[sessionId] || []
+        const map = new Map(queue.map((item) => [item.id, item]))
+        return {
+            sessionQueues: {
+                ...state.sessionQueues,
+                [sessionId]: itemIds.map((id) => map.get(id)!).filter(Boolean),
+            },
+        }
+    }),
+
+    toggleQueuePause: (sessionId, paused) => set((state) => ({
+        queuePaused: { ...state.queuePaused, [sessionId]: paused },
+    })),
 
 
     setLastAssistantMeta: (sessionId, meta) => {
@@ -901,6 +994,12 @@ export const useStore = create<AppState>((set, get) => ({
             if (session?.provider && session?.model) {
                 get().applySessionBinding(id, session.provider, session.model)
             }
+            set((prev) => ({
+                ...session?.queue
+                    ? { sessionQueues: { ...prev.sessionQueues, [id]: session.queue } }
+                    : {},
+                queuePaused: { ...prev.queuePaused, [id]: session?.queue_paused || false },
+            }))
         } catch {
             set((s) => {
                 if (s.activeSessionId !== id) {
@@ -1148,6 +1247,8 @@ export const useStore = create<AppState>((set, get) => ({
                             sess.id === s.id && session?.title ? { ...sess, title: session.title } : sess
                         ),
                         ...(session?.worktree_path ? { sessionWorktrees: { ...prev.sessionWorktrees, [s.id]: session.worktree_path } } : {}),
+                        ...(session?.queue ? { sessionQueues: { ...prev.sessionQueues, [s.id]: session.queue } } : {}),
+                        queuePaused: { ...prev.queuePaused, [s.id]: session?.queue_paused || false },
                     }))
                     if (session?.provider && session?.model) {
                         get().applySessionBinding(s.id, session.provider, session.model)
@@ -1771,7 +1872,7 @@ export function loadSessionMessages(raw: { role: string; content: string; reason
             result.push({
                 id: crypto.randomUUID(),
                 role: 'user',
-                content: m.content || '',
+                content: stripTransientBlocks(m.content || ''),
                 quotedMessages: (m as any).quoted_messages?.map((qm: any) => ({
                     id: qm.id || '',
                     role: qm.role || '',
@@ -2186,6 +2287,49 @@ export function setupWailsEvents() {
                     })
                 }
                 break
+
+            case 'queue_updated': {
+                try {
+                    const items = data.content ? JSON.parse(data.content) : []
+                    store.setQueue(sid, items)
+                } catch { }
+                break
+            }
+            case 'queue_item_started': {
+                try {
+                    const item = data.content ? JSON.parse(data.content) : null
+                    if (item) {
+                        store.updateQueueItem(sid, item.id, { status: 'executing' })
+                        const userMsg: Message = {
+                            id: crypto.randomUUID(),
+                            role: 'user',
+                            content: stripTransientBlocks(item.text),
+                        }
+                        const assistantMsg: Message = {
+                            id: crypto.randomUUID(),
+                            role: 'assistant',
+                            content: '',
+                            startedAt: Date.now(),
+                        }
+                        store.appendToSession(sid, [userMsg, assistantMsg])
+                        store.addGeneratingSession(sid)
+                    }
+                } catch { }
+                break
+            }
+            case 'queue_error': {
+                try {
+                    const info = data.content ? JSON.parse(data.content) : null
+                    if (info) {
+                        store.updateQueueItem(sid, info.item_id, {
+                            status: 'error',
+                            error: info.error,
+                        })
+                        store.toggleQueuePause(sid, true)
+                    }
+                } catch { }
+                break
+            }
         }
     }
 

@@ -26,6 +26,22 @@ type ExtractionLLM interface {
 }
 
 func ExtractMemories(ctx context.Context, llm ExtractionLLM, scope, sessionID, compactionSummary string) (*ExtractResult, error) {
+	result, err := extractStage1(ctx, llm, scope, sessionID, compactionSummary)
+	if err != nil {
+		return nil, err
+	}
+
+	// Stage 2: self-questioning pass (ProMem pattern). Best-effort —
+	// failures do not invalidate Stage 1 results.
+	gapFacts, gapErr := extractStage2SelfQuestion(ctx, llm, compactionSummary, result)
+	if gapErr == nil && len(gapFacts) > 0 {
+		result.Candidates = append(result.Candidates, gapFacts...)
+	}
+
+	return result, nil
+}
+
+func extractStage1(ctx context.Context, llm ExtractionLLM, scope, sessionID, compactionSummary string) (*ExtractResult, error) {
 	systemPrompt := `你是一个知识提取器。从以下 session 总结中提取值得长期保留的知识。
 
 类型定义：
@@ -81,4 +97,50 @@ func ExtractMemories(ctx context.Context, llm ExtractionLLM, scope, sessionID, c
 		return nil, fmt.Errorf("parse extraction: %w\nresponse: %s", err, resp)
 	}
 	return &result, nil
+}
+
+// extractStage2SelfQuestion asks the LLM to identify knowledge that Stage 1
+// missed. Returns additional candidates (may be empty). Errors are non-fatal;
+// the caller treats them as "no gaps found".
+func extractStage2SelfQuestion(ctx context.Context, llm ExtractionLLM, summary string, stage1 *ExtractResult) ([]ExtractCandidate, error) {
+	var extractedSB strings.Builder
+	for i, c := range stage1.Candidates {
+		fmt.Fprintf(&extractedSB, "%d. [%s] %s\n", i+1, c.Category, c.Title)
+	}
+
+	prompt := `You are reviewing a knowledge extraction for gaps. Based on the conversation summary and already-extracted knowledge below, identify important facts or lessons that were MISSED.
+
+Rules:
+- Only identify genuinely missing items, not refinements of existing ones
+- Focus on actionable knowledge: root causes, patterns, preferences, constraints
+- If nothing important was missed, return an empty array
+
+Conversation summary:
+` + summary + `
+
+Already extracted:
+` + extractedSB.String() + `
+
+Return JSON with the same format as the extraction (candidates array). If nothing is missing, return {"candidates":[]}.`
+
+	resp, err := llm.Chat(ctx, "", prompt)
+	if err != nil {
+		return nil, err
+	}
+
+	jsonStr := strings.TrimSpace(resp)
+	if idx := strings.Index(jsonStr, "```json"); idx >= 0 {
+		jsonStr = jsonStr[idx+7:]
+		if end := strings.Index(jsonStr, "```"); end >= 0 {
+			jsonStr = jsonStr[:end]
+		}
+	} else if idx := strings.Index(jsonStr, "{"); idx >= 0 {
+		jsonStr = jsonStr[idx:]
+	}
+
+	var result ExtractResult
+	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
+		return nil, fmt.Errorf("parse stage2: %w", err)
+	}
+	return result.Candidates, nil
 }

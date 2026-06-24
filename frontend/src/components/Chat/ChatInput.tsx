@@ -10,7 +10,8 @@ import AutocompleteDropdown, { AcItem, AcState } from './AutocompleteDropdown'
 import { findLabels, LabelRegion, renderChipHTML } from './LabelChip'
 import { App } from '../../../bindings/monika'
 import { Call } from '@wailsio/runtime'
-import { IconMaximize, IconSend } from '../Icons'
+import { IconSend } from '../Icons'
+import { QueuePanel } from '../QueuePanel/QueuePanel'
 
 const INIT_TEMPLATE = `Please analyze this project and check if an \`AGENTS.md\` file exists in the project root.
 
@@ -211,11 +212,12 @@ function extractText(root: HTMLElement): string {
 
 // ── Component ──
 
-function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuotesConsumed }: {
+function ChatInput({ onSend, onStop, onRunShell, disabled, isGenerating, quotedMessages, onQuotesConsumed }: {
     onSend: (text: string) => void
     onStop: () => void
     onRunShell: (command: string) => void
     disabled: boolean
+    isGenerating: boolean
     quotedMessages?: { id: string; role: string; content: string }[]
     onQuotesConsumed?: () => void
 }) {
@@ -316,20 +318,24 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
 
     onStopRef.current = onStop
 
+    const acOpenRef = useRef(false)
+    acOpenRef.current = ac.open
+
     const prevDisabledRef = useRef(disabled)
 
-    // ESC key to stop generation
+    // ESC key to stop generation / cancel shell
     useEffect(() => {
-        if (!disabled) return
+        if (!disabled && !isGenerating && !isShellExecuting) return
         const handleKeyDown = (e: globalThis.KeyboardEvent) => {
             if (e.key === 'Escape') {
+                if (acOpenRef.current) return
                 e.preventDefault()
                 onStopRef.current()
             }
         }
         document.addEventListener('keydown', handleKeyDown)
         return () => document.removeEventListener('keydown', handleKeyDown)
-    }, [disabled])
+    }, [disabled, isGenerating, isShellExecuting])
 
     // Auto-focus when generation completes
     useEffect(() => {
@@ -837,6 +843,7 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
 
     return (
         <div className="border-t border-[var(--border)] px-4 py-3" style={{ background: 'var(--bg-sidebar)' }}>
+            <QueuePanel />
             <div
                 className="rounded-md border transition-colors relative"
                 style={{
@@ -864,7 +871,7 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
                         fontFamily: 'inherit',
                         letterSpacing: 'inherit',
                     }}
-                    data-placeholder={disabled ? 'Generating...' : inputMode === 'shell' ? 'Run a shell command... (each command runs independently)' : 'Send a message... (Enter to submit, Shift+Enter for newline)'}
+                    data-placeholder={disabled ? 'Generating...' : isGenerating ? 'Send a message... (will be queued)' : inputMode === 'shell' ? 'Run a shell command... (each command runs independently)' : 'Send a message... (Enter to submit, Shift+Enter for newline)'}
                 />
 
                 <div
@@ -891,63 +898,31 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, quotedMessages, onQuo
 
                     <div className="flex-1" />
 
-                    {isShellExecuting ? (
-                        <button
-                            onClick={() => { if (activeSessionId) App.CancelShellCommand(activeSessionId) }}
-                            title="Cancel shell command"
-                            style={{
-                                width: '28px',
-                                height: '28px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                borderRadius: '6px',
-                                border: 'none',
-                                background: 'none',
-                                color: 'var(--yellow)',
-                                cursor: 'pointer',
-                                flexShrink: 0,
-                            }}
-                        >
-                            <IconMaximize size={14} />
-                        </button>
-                    ) : disabled ? (
+                    {isGenerating && !value.trim() ? (
                         <button
                             onClick={onStop}
-                            title="Stop generating (Esc)"
-                            style={{
-                                width: '28px',
-                                height: '28px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                borderRadius: '6px',
-                                border: 'none',
-                                background: 'none',
-                                color: 'var(--accent)',
-                                cursor: 'pointer',
-                                flexShrink: 0,
-                            }}
+                            title="Stop generating"
+                            className="flex items-center justify-center rounded transition-colors hover:bg-[var(--bg-hover)]"
+                            style={{ width: '28px', height: '28px', border: 'none', background: 'none', cursor: 'pointer', flexShrink: 0 }}
                         >
-                            <IconMaximize size={14} />
+                            <span className="inline-block w-4 h-4 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
                         </button>
                     ) : (
                         <button
                             onClick={handleSendClick}
-                            disabled={!value.trim()}
-                            title="Send message (Enter)"
+                            disabled={!value.trim() || disabled || isShellExecuting}
+                            title={isGenerating ? 'Queue message (Enter) · Esc to stop' : 'Send message (Enter)'}
+                            className="flex items-center justify-center rounded transition-colors"
                             style={{
                                 width: '28px',
                                 height: '28px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                borderRadius: '6px',
                                 border: 'none',
                                 background: 'none',
-                                color: value.trim() ? 'var(--accent)' : 'var(--text-dim)',
-                                cursor: value.trim() ? 'pointer' : 'default',
-                                opacity: value.trim() ? 1 : 0.4,
+                                color: !value.trim() || disabled || isShellExecuting
+                                    ? 'var(--text-dim)'
+                                    : isGenerating ? 'var(--yellow)' : 'var(--accent)',
+                                cursor: (!value.trim() || disabled || isShellExecuting) ? 'default' : 'pointer',
+                                opacity: (!value.trim() || disabled || isShellExecuting) ? 0.4 : 1,
                                 transition: 'color 0.15s, opacity 0.15s',
                                 flexShrink: 0,
                             }}
