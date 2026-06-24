@@ -58,7 +58,7 @@ type FlatItem =
 2. 搜索过滤时按 `DisplayName` / `ID` 匹配
 3. 有效收藏模型非空 → 先插入 `favorite-header`，再插入所有收藏模型项（每项携带 provider 信息和 `isFavorite: true`）
 4. 然后按原逻辑遍历各 provider，构建 model 项时附带 `isFavorite` 标记
-5. 收藏模型在偏好分组中不重复出现在原 provider 分组中（仅在偏好分组展示）
+5. 收藏模型同时出现在偏好分组和原 provider 分组中（两处均显示星标）
 
 **渲染分支：**
 
