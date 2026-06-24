@@ -6,6 +6,7 @@ import { App, StreamEvent } from '../../bindings/monika'
 import type { RecentProject, BranchInfo, ModelInfo, ProviderInfo, ChangeStat, SessionInfo, CommitInfo, CommitDetail } from '../../bindings/monika'
 import type { DockviewApi } from 'dockview'
 import { lspService, LspDiagnostic, LspSymbol } from '../lib/lspService'
+import { stripTransientBlocks } from '../lib/stripTransientBlocks'
 
 export interface PermissionRequiredEvent {
     type: string
@@ -1849,7 +1850,7 @@ export function loadSessionMessages(raw: { role: string; content: string; reason
             result.push({
                 id: crypto.randomUUID(),
                 role: 'user',
-                content: m.content || '',
+                content: stripTransientBlocks(m.content || ''),
                 quotedMessages: (m as any).quoted_messages?.map((qm: any) => ({
                     id: qm.id || '',
                     role: qm.role || '',
@@ -2280,7 +2281,7 @@ export function setupWailsEvents() {
                         const userMsg: Message = {
                             id: crypto.randomUUID(),
                             role: 'user',
-                            content: item.text,
+                            content: stripTransientBlocks(item.text),
                         }
                         const assistantMsg: Message = {
                             id: crypto.randomUUID(),
