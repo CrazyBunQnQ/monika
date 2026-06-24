@@ -155,32 +155,66 @@ func (s *KBStore) Search(query, scope string, limit int) ([]KBFile, error) {
 	if scope == ScopeAuto {
 		return s.searchAuto(query, limit)
 	}
-	return s.searchSingle(query, scope, limit)
+	return s.SearchHybrid(query, scope, limit)
 }
 
-// searchAuto 合并搜索 project 和 global 两个 DB，project 结果优先。
-func (s *KBStore) searchAuto(query string, limit int) ([]KBFile, error) {
-	proj, err := s.searchSingle(query, ScopeProject, limit)
-	if err != nil {
-		return nil, err
+// SearchHybrid performs multi-channel lexical search (FTS5 + LIKE) on a single
+// scope and reranks the candidate pool. The wider-than-requested pool gives the
+// reranker room to improve ordering over raw BM25 output.
+//
+// Graceful degradation: when no embedding provider is configured (the current
+// default), this is pure lexical search + rerank. The TODO marks where semantic
+// search will be folded in once a provider is wired.
+func (s *KBStore) SearchHybrid(query, scope string, limit int) ([]KBFile, error) {
+	if limit <= 0 {
+		limit = 5
 	}
-	glob, err := s.searchSingle(query, ScopeGlobal, limit)
+
+	// Candidate pool is 2x the requested limit so reranking can reorder rather
+	// than just truncate. Capped to keep latency bounded on large matches.
+	poolSize := limit * 2
+	if poolSize > 20 {
+		poolSize = 20
+	}
+
+	candidates, err := s.searchSingle(query, scope, poolSize)
 	if err != nil {
 		return nil, err
 	}
 
-	seen := map[string]bool{}
-	var merged []KBFile
-	for _, f := range append(proj, glob...) {
-		key := f.Scope + "/" + f.Path
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		merged = append(merged, f)
+	// TODO(p3-2): when an EmbeddingProvider is configured on the store, run
+	// semantic search (cosineSimilarity over the embeddings table) and merge
+	// its top-k into the candidate pool before reranking. Intentionally
+	// skipped on the lexical-only path to avoid touching the DB when no
+	// provider is present.
+
+	if len(candidates) > limit {
+		candidates = rerankCandidates(query, candidates, limit)
 	}
+	return candidates, nil
+}
+
+// searchAuto 合并搜索 project 和 global 两个 DB，然后用 rerankCandidates 统一排序。
+// project 不再天然优先——rerank 会基于 tag/title 重叠和 BM25 排名决定最终顺序。
+func (s *KBStore) searchAuto(query string, limit int) ([]KBFile, error) {
+	// 两个 scope 都拉更宽的候选池（2x limit），给统一 rerank 留出重排空间。
+	poolSize := limit * 2
+	if poolSize > 20 {
+		poolSize = 20
+	}
+
+	proj, err := s.searchSingle(query, ScopeProject, poolSize)
+	if err != nil {
+		return nil, err
+	}
+	glob, err := s.searchSingle(query, ScopeGlobal, poolSize)
+	if err != nil {
+		return nil, err
+	}
+
+	merged := mergeSearchResults(proj, glob, poolSize)
 	if len(merged) > limit {
-		merged = merged[:limit]
+		merged = rerankCandidates(query, merged, limit)
 	}
 	return merged, nil
 }
@@ -283,7 +317,65 @@ func (s *KBStore) searchLike(query, scope string, limit int) ([]KBFile, error) {
 		return nil, fmt.Errorf("search: %w", err)
 	}
 	defer rows.Close()
-	return scanKBFiles(rows)
+	results, err := scanKBFiles(rows)
+	if err != nil {
+		return nil, err
+	}
+	// Re-window snippets around the first query-word match. The SQL preview is
+	// always substr(content,1,200), so when the match lives later in the body
+	// the user sees irrelevant leading text. Windowing here helps for the
+	// common case where the match is within the first 200 chars.
+	for i, f := range results {
+		if f.Snippet == "" {
+			continue
+		}
+		if pos := findMatchPosition(f.Snippet, query); pos > 0 {
+			results[i].Snippet = buildContextualSnippet(f.Snippet, pos, 120)
+		}
+	}
+	return results, nil
+}
+
+// findMatchPosition returns the byte index of the first occurrence of any query
+// word (length > 1) in s, case-insensitive. Returns -1 when no query word is
+// present. Used to center LIKE-search snippets on the actual match.
+func findMatchPosition(s, query string) int {
+	sLower := strings.ToLower(s)
+	minPos := -1
+	for _, w := range strings.Fields(strings.ToLower(query)) {
+		if len(w) <= 1 {
+			continue
+		}
+		if pos := strings.Index(sLower, w); pos >= 0 && (minPos == -1 || pos < minPos) {
+			minPos = pos
+		}
+	}
+	return minPos
+}
+
+// buildContextualSnippet returns a window of approximately windowLen bytes
+// centered on pos, with ellipses marking truncation. pos must be a valid byte
+// offset into s.
+func buildContextualSnippet(s string, pos, windowLen int) string {
+	if pos < 0 || windowLen <= 0 || pos >= len(s) {
+		return s
+	}
+	start := pos - windowLen/2
+	if start < 0 {
+		start = 0
+	}
+	end := start + windowLen
+	if end > len(s) {
+		end = len(s)
+	}
+	out := s[start:end]
+	if start > 0 {
+		out = "…" + out
+	}
+	if end < len(s) {
+		out += "…"
+	}
+	return out
 }
 
 func likeEscape(s string) string {
