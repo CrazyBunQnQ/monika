@@ -402,6 +402,8 @@ func (s *KBStore) WriteFile(scope, category, title, content string, tags []strin
 			if sim := computeWriteSimilarity(title, tags, e); sim >= 0.75 {
 				return fmt.Errorf("similar memory already exists: %s (path: %s, similarity: %.2f). Use memory_update to merge instead",
 					e.Title, e.Path, sim)
+			} else if sim >= 0.5 && detectContradiction(title, content, e.Title) {
+				_ = s.markConflict(scope, title, e.Path)
 			}
 		}
 	}
