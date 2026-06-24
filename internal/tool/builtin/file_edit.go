@@ -30,7 +30,7 @@ func (f *fileEdit) SetDiagFunc(fn LSPDiagFunc) { f.diagFunc = fn }
 func (f *fileEdit) Name() string { return "file_edit" }
 
 func (f *fileEdit) Description() string {
-	return "Replaces lines in a file using line-number positioning with hash verification. The anchor (from file_read output, format 'hash:lineNumber') identifies the starting line and verifies it has not changed. line_count specifies how many lines to replace (default 1). Set line_count to 0 to insert new_string after the anchor line without replacing anything. The new_string parameter is REQUIRED. Refuses to edit files containing merge conflict markers."
+	return "Replaces lines in a file using line-number positioning with hash verification. The anchor (from file_read output, format 'hash:lineNumber') identifies the starting line and verifies it has not changed. line_count specifies how many lines to replace (default 1). Set line_count to 0 to insert new_string after the anchor line without replacing anything. The new_string parameter is REQUIRED. Refuses to edit files containing merge conflict markers. WARNING: do NOT call file_edit on the same file in parallel — LSP diagnostics triggered by one edit can lock the file and cause the other to fail. Serialize multiple edits to the same file."
 }
 
 func (f *fileEdit) Parameters() map[string]any {

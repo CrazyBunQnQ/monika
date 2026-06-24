@@ -54,6 +54,7 @@ const defaultToolUsage = `## Tool Usage
 - When multiple INDEPENDENT tool calls are needed, invoke them in a single message
 - Example: reading 3 different files in parallel, running git status + git diff together
 - Do NOT invoke the same tool with identical arguments more than once — duplicates waste time
+- Do NOT parallelize file_edit/patch on the SAME file — concurrent edits to one file cause LSP lock conflicts and write races. Serialize same-file edits; parallelize only across different files
 
 ### MCP tool usage
 **MCP tools provide external capabilities (web search, documentation lookup, database access, browser automation). Always check MCP before using bash workarounds.**

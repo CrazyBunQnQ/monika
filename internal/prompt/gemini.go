@@ -49,6 +49,7 @@ const geminiToolUsage = `## Tool Usage
 ### Parallel tool calls
 - When multiple INDEPENDENT tool calls are needed, invoke them in a single message
 - Execute multiple independent tool calls in parallel when feasible
+- Do NOT parallelize file_edit/patch on the SAME file — concurrent edits to one file cause LSP lock conflicts and write races. Serialize same-file edits; parallelize only across different files
 
 ### Editing files
 - ALWAYS read with file_read before editing — never edit blind

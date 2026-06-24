@@ -24,7 +24,7 @@ func (f *filePatch) SetDiagFunc(fn LSPDiagFunc) { f.diagFunc = fn }
 func (f *filePatch) Name() string { return "patch" }
 
 func (f *filePatch) Description() string {
-	return "Applies a search/replace patch to a file. Finds the exact occurrence of `search` in the file content and replaces it with `replace`. The `search` string must match exactly one location in the file (whitespace-sensitive). Fails if `search` is not found or matches multiple locations."
+	return "Applies a search/replace patch to a file. Finds the exact occurrence of `search` in the file content and replaces it with `replace`. The `search` string must match exactly one location in the file (whitespace-sensitive). Fails if `search` is not found or matches multiple locations. WARNING: do NOT call patch on the same file in parallel — LSP diagnostics triggered by one edit can lock the file and cause the other to fail. Serialize multiple edits to the same file."
 }
 
 func (f *filePatch) Parameters() map[string]any {
