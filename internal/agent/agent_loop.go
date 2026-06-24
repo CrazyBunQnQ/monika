@@ -270,6 +270,8 @@ type AgentLoop struct {
 	mcpRegistry       *engine.MCPRegistry
 	askUserFn         tool.AskUserFunc
 	taskStore         tool.TaskStore
+	memSearchFn       func(query string) string // memory search callback (auto recall)
+	memQueue          MemoryQueue               // memory update queue (p2-3)
 	maxSteps          int
 }
 
@@ -367,6 +369,20 @@ func WithTaskStore(ts tool.TaskStore) LoopOption {
 	return func(a *AgentLoop) { a.taskStore = ts }
 }
 
+// WithMemSearchFn registers a memory search callback. The returned string is
+// injected as a <recalled-memory> block at the start of each user message,
+// giving the LLM automatic memory recall without requiring a tool call.
+func WithMemSearchFn(fn func(query string) string) LoopOption {
+	return func(a *AgentLoop) { a.memSearchFn = fn }
+}
+
+// WithMemQueue registers a MemoryQueue. Notes queued by memory tools (e.g.
+// memory_write) are drained and injected as a <memory-update> block at the
+// start of the next user message, so writes take effect immediately.
+func WithMemQueue(q MemoryQueue) LoopOption {
+	return func(a *AgentLoop) { a.memQueue = q }
+}
+
 func WithMaxSteps(n int) LoopOption {
 	return func(a *AgentLoop) { a.maxSteps = n }
 }
@@ -384,8 +400,32 @@ func NewLoop(provider engine.ProviderEngine, tools *tool.ToolRegistry, opts ...L
 
 // buildEntryPrefix assembles dynamic content prepended to a user message once,
 // at the AgentLoop entry. Runs once per message (not per LLM turn).
-func (a *AgentLoop) buildEntryPrefix() string {
+// userMessage is used ONLY as the search query for memSearchFn; it is not
+// echoed back into the returned prefix.
+func (a *AgentLoop) buildEntryPrefix(userMessage string) string {
 	var b strings.Builder
+
+	// recalled-memory (auto search) — injected first so context precedes tasks.
+	if a.memSearchFn != nil && userMessage != "" {
+		if recalled := a.memSearchFn(userMessage); recalled != "" {
+			b.WriteString("<recalled-memory>\n")
+			b.WriteString(recalled)
+			b.WriteString("\n</recalled-memory>\n\n")
+		}
+	}
+
+	// memory-update — drain notes queued by memory tools since the last message.
+	if a.memQueue != nil {
+		if notes := a.memQueue.DrainPending(); len(notes) > 0 {
+			b.WriteString("<memory-update>\n")
+			for _, n := range notes {
+				b.WriteString("- " + n + "\n")
+			}
+			b.WriteString("</memory-update>\n\n")
+		}
+	}
+
+	// task-list (existing)
 	if a.taskStore != nil && a.sessionID != "" {
 		if tasks := a.taskStore.List(a.sessionID); len(tasks) > 0 {
 			b.WriteString("<task-list>\n")
@@ -405,7 +445,7 @@ func (a *AgentLoop) RunBlocking(ctx context.Context, conv *Conversation, userMes
 	}
 
 	if userMessage != "" {
-		userMessage = a.buildEntryPrefix() + userMessage
+		userMessage = a.buildEntryPrefix(userMessage) + userMessage
 	}
 
 	conv.Messages = append(conv.Messages, engine.ChatMessage{
@@ -580,6 +620,9 @@ func (a *AgentLoop) RunBlocking(ctx context.Context, conv *Conversation, userMes
 			if a.askUserFn != nil {
 				toolCtx = tool.WithAskUserFunc(toolCtx, a.askUserFn)
 			}
+			if a.memQueue != nil {
+				toolCtx = WithMemoryQueueInContext(toolCtx, a.memQueue)
+			}
 			execResult, err := t.Execute(toolCtx, json.RawMessage(tc.Function.Arguments))
 			if err != nil {
 				conv.Messages = append(conv.Messages, engine.ChatMessage{
@@ -624,7 +667,7 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 	// Only append a new user message if the conversation doesn't already have
 	// pre-seeded messages (compaction uses pre-built messages from SubTask.Messages).
 	if userMessage != "" {
-		userMessage = a.buildEntryPrefix() + userMessage
+		userMessage = a.buildEntryPrefix(userMessage) + userMessage
 
 		conv.Messages = append(conv.Messages, engine.ChatMessage{
 			Role:    "user",
@@ -990,6 +1033,9 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 			}
 			if a.askUserFn != nil {
 				toolCtx = tool.WithAskUserFunc(toolCtx, a.askUserFn)
+			}
+			if a.memQueue != nil {
+				toolCtx = WithMemoryQueueInContext(toolCtx, a.memQueue)
 			}
 			// Check for streaming execution (e.g. SpawnAgent forwards child events)
 			type streamingTool interface {

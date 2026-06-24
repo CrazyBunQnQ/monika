@@ -269,6 +269,26 @@ changes as you install or configure them. Always search before assuming:
 		agent.WithSystemPrompt(systemPrompt),
 		agent.WithHomeDir(home),
 	}
+	// Memory auto-recall + immediate-write visibility.
+	// memQueue is always wired (memory_write queues regardless of kbStore);
+	// memSearchFn requires kbStore to perform a real search.
+	memQueue := agent.NewMemoryQueue()
+	loopOpts = append(loopOpts, agent.WithMemQueue(memQueue))
+	if kbStore != nil {
+		memSearchFn := func(query string) string {
+			results, err := kbStore.Search(query, memory.ScopeAuto, 3)
+			if err != nil || len(results) == 0 {
+				return ""
+			}
+			var b strings.Builder
+			for _, r := range results {
+				fmt.Fprintf(&b, "- **%s** [%s] path: %s\n  snippet: %s\n",
+					r.Title, r.Category, r.Path, r.Snippet)
+			}
+			return b.String()
+		}
+		loopOpts = append(loopOpts, agent.WithMemSearchFn(memSearchFn))
+	}
 
 	// Wire permission pipeline
 	rules, _ := permission.LoadRules(home, cwd)
