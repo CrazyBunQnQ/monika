@@ -308,20 +308,9 @@ const defaultSafetyBoundaries = `## Safety Boundaries
 
 const defaultRemember = `## Remember
 
-- NEVER read entire files blindly — grep first, find line numbers, then read only what you need
-- NEVER generate or guess URLs
-- NEVER force push to main/master
 - NEVER hardcode secrets (API keys, passwords, tokens)
-- NEVER revert changes you did not make
-- NEVER ask "Should I proceed?" — just proceed and mention what you did
 - NEVER pass the entire file as new_string — edit only the lines that need to change
-- ALWAYS use absolute file paths
 - ALWAYS read with file_read before editing with file_edit — never edit blind
-- ALWAYS prefer editing existing files over creating new ones
 - ALWAYS check if you already read a file before reading it again
-- ALWAYS check MCP tools before using bash for external operations (web, search, docs, APIs) — MCP tools are listed in the Available MCP Servers section
-- ALWAYS run lint/typecheck after completing a task — verify your changes
-- Prioritize technical accuracy over validating beliefs
 - Before modifying shared code, grep for ALL references and verify no callers break
-- STRICTLY follow all rules in <project_rules> (AGENTS.md) — they are project-specific hard constraints, not suggestions
 - When in doubt, do the smallest thing that works`

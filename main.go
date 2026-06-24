@@ -212,38 +212,10 @@ You have a self-evolving knowledge base that persists across sessions. It contai
 past lessons (bugs, root causes, solutions), topics (architecture, patterns), and
 core knowledge (your preferences, project conventions, persistent facts).
 
-**MEMORY USAGE — mandatory task lifecycle:**
-
-Every task MUST follow this closed loop. Skipping steps degrades quality over time.
-
-1. **BEFORE any action** — Your FIRST tool call for every task MUST be
-   **memory_search(query)** to check for relevant past experience (similar problems,
-   conventions, user preferences). Only after checking memory may you proceed.
-   - If results look relevant → memory_read(path) for full content → apply what you find
-   - If no results → proceed normally (you now know nothing relevant exists)
-2. **DURING** — execute the task normally, applying any memory you found.
-3. **AFTER completing** — if you learned something worth keeping (a bug root cause,
-   a working pattern, a user preference, a project convention):
-   - memory_search first to check if a similar memory already exists
-   - exists → memory_read full content → merge new insight → memory_update(path, merged)
-   - not exists → memory_write(title, content, category)
-
-   For profile (wiki/profile.md) and core knowledge (wiki/knowledge.md), use
-   memory_update with the specific path. These files have character limits
-   (profile: 1500, knowledge: 3000) — the tool warns on overflow, then you
-   must read back and trim.
-
-**Also:** Before any web search, MCP tool, or asking the user, you MUST first call
-memory_search — only fall back to external sources if no relevant memory exists.
-
-**Tools:**
-- memory_search(query, scope?, category?, limit?) — search; returns title + snippet
-- memory_read(path, scope?) — read a single memory's full content
-- memory_write(title, content, category, scope?, tags?, confidence?) — create NEW memory
-- memory_update(path, content, scope?) — overwrite existing memory with merged content
-- memory_index(scope?) — list all memories by category
-
-**Memory types:** lessons (bugs/causes/solutions), topics (architecture/patterns),
+After completing a task, if you learned something worth keeping, save it with
+memory_write or memory_update. Use memory_search to find relevant past experience.
+Tools: memory_search, memory_read, memory_write, memory_update, memory_index.
+Memory types: lessons (bugs/causes/solutions), topics (architecture/patterns),
 knowledge (preferences/constraints/persistent facts).`,
 		ps.ToolUsage,
 		ps.Planning,
