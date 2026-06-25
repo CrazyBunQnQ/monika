@@ -85,6 +85,8 @@ type App struct {
 	pipeline *permission.Pipeline
 	checker  *update.Checker
 
+	projectRules string // AGENTS.md content for current project, injected into system prompt
+
 	trayMgr   *TrayManager
 	tsBridge  *tsBridge
 	bgTaskMgr *BackgroundTaskManager
@@ -417,7 +419,8 @@ func (a *App) OpenProject(path string) (*ProjectInfo, error) {
 }
 
 // onProjectSwitch propagates the new project path to subsystems that were
-// previously bound to cwd at startup: permission pipeline, DAP manager.
+// previously bound to cwd at startup: permission pipeline, DAP manager,
+// AGENTS.md project rules, database discovery.
 func (a *App) onProjectSwitch(path string) {
 	if a.pipeline != nil {
 		a.pipeline.SetProject(a.home, path)
@@ -427,6 +430,49 @@ func (a *App) onProjectSwitch(path string) {
 	if a.dapManager != nil {
 		a.dapManager.SetProjectDir(path)
 	}
+	a.projectRules = loadProjectRules(path)
+	a.discoverProjectDatabases(path)
+}
+
+// discoverProjectDatabases scans the project for database connections and
+// registers db tools if found. Called on project switch.
+func (a *App) discoverProjectDatabases(projectPath string) {
+	if projectPath == "" {
+		return
+	}
+	wsRoot := memory.ResolveWorkspaceRoot(projectPath)
+	cache, err := dbdiscovery.LoadCache(wsRoot)
+	if err != nil {
+		cache, _ = dbdiscovery.Scan(wsRoot)
+	}
+	if cache == nil || len(cache.Connections) == 0 {
+		return
+	}
+	if a.dbMgr == nil {
+		a.dbMgr = NewDBManager(wsRoot)
+		a.dbMgr.Init(cache)
+		a.dbMgr.StartSchemaBackground()
+		builtin.RegisterDatabase(a.registry, a.dbMgr)
+	} else {
+		a.dbMgr.Reset(cache)
+	}
+}
+
+func loadProjectRules(projectDir string) string {
+	paths := []string{
+		filepath.Join(projectDir, "AGENTS.md"),
+		filepath.Join(projectDir, ".monika", "AGENTS.md"),
+	}
+	for _, p := range paths {
+		if data, err := os.ReadFile(p); err == nil {
+			return `<project_rules>
+The content below is your PROJECT RULES from AGENTS.md. These rules are NON-NEGOTIABLE — they represent the project's architectural decisions, coding conventions, and hard constraints. You MUST follow them as strictly as the rules above. Violating project rules is as serious as violating core safety boundaries.
+
+` + string(data) + `
+</project_rules>`
+		}
+	}
+	return ""
 }
 
 func (a *App) ListSessions(projectPath string) ([]SessionInfo, error) {
@@ -818,6 +864,9 @@ func (a *App) startAgentLoop(ctx context.Context, cancel context.CancelFunc, sm 
 		opts = append(opts, agent2.WithContextLimit(ctxLimit), agent2.WithOutputLimit(outLimit))
 	}
 	generalAgent, _ := a.agentRegistry.Get("general")
+	if a.projectRules != "" && generalAgent.SystemPrompt != "" {
+		generalAgent.SystemPrompt += "\n\n" + a.projectRules
+	}
 	opts = append(opts, agent2.WithAgent(generalAgent))
 	// Replace {{WorkingDirectory}} in the system prompt with the actual project directory.
 	projectDir := a.resolveWorkingDir(sessionID)
@@ -1410,6 +1459,9 @@ func (a *App) TriggerCompact(projectPath, sessionID, providerID, model string) e
 		opts = append(opts, agent2.WithContextLimit(ctxLimit), agent2.WithOutputLimit(outLimit))
 	}
 	generalAgent, _ := a.agentRegistry.Get("general")
+	if a.projectRules != "" && generalAgent.SystemPrompt != "" {
+		generalAgent.SystemPrompt += "\n\n" + a.projectRules
+	}
 	opts = append(opts, agent2.WithAgent(generalAgent))
 	normalizedDir := strings.ReplaceAll(projectPath, "\\", "/")
 	opts = append(opts, agent2.WithSystemPrompt(strings.ReplaceAll(a.rawSystemPrompt, "{{WorkingDirectory}}", normalizedDir)))

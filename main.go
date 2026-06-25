@@ -90,9 +90,6 @@ func main() {
 	taskStore := builtin.NewTaskStore(nil)
 	builtin.RegisterTasks(registry, taskStore)
 
-	var dbMgr *api.DBManager
-	// Database discovery happens on project open, not at startup.
-
 	// Create MCP registry and connect servers asynchronously
 	mcpRegistry := engine2.NewMCPRegistry()
 	mcpEng, err := engine2.EngineByID("mcp")
@@ -208,14 +205,6 @@ knowledge (preferences/constraints/persistent facts).`,
 		ps.SafetyBoundaries,
 		ps.Remember,
 	}
-	if p := loadSystemPrompt(""); p != "" {
-		wrapped := `<project_rules>
-The content below is your PROJECT RULES from AGENTS.md. These rules are NON-NEGOTIABLE — they represent the project's architectural decisions, coding conventions, and hard constraints. You MUST follow them as strictly as the rules above. Violating project rules is as serious as violating core safety boundaries.
-
-` + p + `
-</project_rules>`
-		systemParts = append(systemParts, wrapped)
-	}
 	dynamicCapabilities := `
 ## Dynamic Capabilities
 
@@ -255,11 +244,6 @@ changes as you install or configure them. Always search before assuming:
 	memQueue := agent.NewMemoryQueue()
 	loopOpts = append(loopOpts, agent.WithMemQueue(memQueue))
 
-	// Database schema availability hint (one-shot, per-message for now).
-	if dbMgr != nil && dbMgr.DefaultConnection() != "" {
-		loopOpts = append(loopOpts, agent.WithDBSchemaNote(
-			"This project has connected databases. Use db_schema to inspect their structure."))
-	}
 	if kbStore != nil {
 		memSearchFn := func(query string) string {
 			results, err := kbStore.Search(query, memory.ScopeAuto, 3)
@@ -433,9 +417,6 @@ changes as you install or configure them. Always search before assuming:
 		}
 	}
 	appGetProjectPath = appService.GetProjectPath
-	if dbMgr != nil {
-		appService.SetDBManager(dbMgr)
-	}
 
 	// Wire DAP debugger
 	dapManager := dap.NewDapManager("")
@@ -695,20 +676,6 @@ func syncModelsDev(home string, cfg *config2.Config) {
 		return
 	}
 	_ = os.WriteFile(configPath, data, 0600)
-}
-
-func loadSystemPrompt(projectDir string) string {
-	paths := []string{
-		filepath.Join(projectDir, "AGENTS.md"),
-		filepath.Join(projectDir, ".monika", "AGENTS.md"),
-	}
-	for _, p := range paths {
-		if data, err := os.ReadFile(p); err == nil {
-			return string(data)
-		}
-	}
-
-	return ""
 }
 
 func normalizeID(id string) string {
