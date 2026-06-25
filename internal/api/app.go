@@ -130,6 +130,10 @@ func NewApp(home, initialProject string, cfg config2.Config, providers map[strin
 	}
 	if initialProject != "" {
 		a.OpenProject(initialProject)
+	} else if lastPath := a.loadLastProjectPath(); lastPath != "" {
+		if _, err := os.Stat(lastPath); err == nil {
+			a.OpenProject(lastPath)
+		}
 	}
 	return a
 }
