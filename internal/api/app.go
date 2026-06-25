@@ -281,6 +281,8 @@ func (a *App) ServiceStartup(ctx context.Context, options application.ServiceOpt
 		}
 	}()
 
+	go a.bgTaskMgr.CleanOldLogs()
+
 	return nil
 }
 
@@ -330,6 +332,10 @@ func (a *App) StartBgTask(command string) (string, error) {
 
 func (a *App) GetBgTaskLogs(taskID string) ([]string, error) {
 	return a.bgTaskMgr.Logs(taskID, 100)
+}
+
+func (a *App) BgTaskLogLines(taskID string, offset, limit int) ([]string, error) {
+	return a.bgTaskMgr.LogLines(taskID, offset, limit)
 }
 
 func (a *App) BgTaskManager() *BackgroundTaskManager {
@@ -386,7 +392,7 @@ func (a *App) OpenProject(path string) (*ProjectInfo, error) {
 	// Reset any sessions left in StatusGenerating status from a previous crash
 	a.resetStaleSessions(path)
 	a.getFileService(path)
-	a.bgTaskMgr.SetLogDir(filepath.Join(a.home, ".monika", "projects", projectSlug(path), "logs"))
+	a.bgTaskMgr.SetLogDir(filepath.Join(path, ".monika", "temp", "logs"))
 	a.writeRecentProject(info.Path, info.Name)
 	a.saveLastProjectPath(path)
 
