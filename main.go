@@ -66,6 +66,7 @@ func main() {
 		os.Exit(1)
 	}
 	workspaceRoot := memory.ResolveWorkspaceRoot(cwd)
+	cwd = workspaceRoot
 
 	// Refresh models.dev catalog (background, non-blocking).
 	go func() {
@@ -248,11 +249,8 @@ changes as you install or configure them. Always search before assuming:
 
 	systemPrompt := strings.Join(systemParts, "\n\n")
 
-	// One-time {{WorkingDirectory}} replacement at startup so the system
-	// prompt stays fully static (better for prompt caching).
-	normalized := strings.ReplaceAll(cwd, "\\", "/")
-	systemPrompt = strings.ReplaceAll(systemPrompt, "{{WorkingDirectory}}", normalized)
-
+	// {{WorkingDirectory}} is kept as a placeholder; it's replaced with the
+	// actual project directory at agent-loop creation time (see app.go startAgentLoop).
 	// Append a compact memory index to the (static) system prompt so the LLM
 	// can discover existing memories and proactively memory_read relevant ones.
 	// Computed once at App startup; new memories written mid-session are handled
@@ -266,7 +264,6 @@ changes as you install or configure them. Always search before assuming:
 	loopOpts := []agent.LoopOption{
 		agent.WithProjectDir(cwd),
 		agent.WithModel(pr.Model),
-		agent.WithSystemPrompt(systemPrompt),
 		agent.WithHomeDir(home),
 	}
 	// Memory auto-recall + immediate-write visibility.
@@ -388,7 +385,7 @@ changes as you install or configure them. Always search before assuming:
 		taskStoreAccessor = accessor
 	}
 
-	appService = api.NewApp(home, cwd, pr.Config, pr.Providers, pr.Model, registry, loopOpts, taskStoreAccessor, agentRegistry, taskRunner, mcpRegistry, kbStore)
+	appService = api.NewApp(home, cwd, pr.Config, pr.Providers, pr.Model, registry, loopOpts, taskStoreAccessor, agentRegistry, taskRunner, mcpRegistry, kbStore, systemPrompt)
 
 	appService.InitTSBridge(tsBridge)
 	// Background memory maintenance: decay (archive/delete stale) + review (conflict/upgrade detection).

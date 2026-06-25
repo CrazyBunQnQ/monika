@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"monika/internal/tool"
 	"monika/pkg/engine"
@@ -81,6 +82,17 @@ func (r *TaskRunner) Dispatch(ctx context.Context, task SubTask, parent *AgentLo
 			opts = append(opts, WithProjectDir(task.ProjectDir))
 		} else if parent != nil && parent.projectDir != "" {
 			opts = append(opts, WithProjectDir(parent.projectDir))
+		}
+		// Replace {{WorkingDirectory}} in the agent system prompt with the actual project directory.
+		if ag.SystemPrompt != "" {
+			resolvedDir := task.ProjectDir
+			if resolvedDir == "" && parent != nil {
+				resolvedDir = parent.projectDir
+			}
+			if resolvedDir != "" {
+				normalizedDir := strings.ReplaceAll(resolvedDir, "\\", "/")
+				opts = append(opts, WithSystemPrompt(strings.ReplaceAll(ag.SystemPrompt, "{{WorkingDirectory}}", normalizedDir)))
+			}
 		}
 		// Resolve model: agent explicit > task override > parent inheritance
 		if ag.Model == "" {

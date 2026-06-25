@@ -73,6 +73,7 @@ type App struct {
 	childSessions   map[string]*agent2.ChildSession // keyed by child session ID
 	pendingChildren map[string]string               // parentSessionID → childSessionID
 	loopOpts        []agent2.LoopOption
+	rawSystemPrompt string
 	mcpRegistry     *engine2.MCPRegistry
 	kbStore         *memory.KBStore
 
@@ -101,7 +102,7 @@ type App struct {
 	eventSeq atomic.Int64
 }
 
-func NewApp(home, cwd string, cfg config2.Config, providers map[string]engine2.ProviderEngine, model string, registry *tool2.ToolRegistry, loopOpts []agent2.LoopOption, taskStoreAccessor TaskStoreAccessor, agentRegistry *agent2.AgentRegistry, taskRunner *agent2.TaskRunner, mcpRegistry *engine2.MCPRegistry, kbStore *memory.KBStore) *App {
+func NewApp(home, cwd string, cfg config2.Config, providers map[string]engine2.ProviderEngine, model string, registry *tool2.ToolRegistry, loopOpts []agent2.LoopOption, taskStoreAccessor TaskStoreAccessor, agentRegistry *agent2.AgentRegistry, taskRunner *agent2.TaskRunner, mcpRegistry *engine2.MCPRegistry, kbStore *memory.KBStore, rawSystemPrompt string) *App {
 	return &App{
 		home:              home,
 		cfg:               cfg,
@@ -120,6 +121,7 @@ func NewApp(home, cwd string, cfg config2.Config, providers map[string]engine2.P
 		childSessions:     make(map[string]*agent2.ChildSession),
 		pendingChildren:   make(map[string]string),
 		loopOpts:          loopOpts,
+		rawSystemPrompt:   rawSystemPrompt,
 		mcpRegistry:       mcpRegistry,
 		kbStore:           kbStore,
 		checker:           update.NewChecker(),
@@ -799,6 +801,10 @@ func (a *App) startAgentLoop(ctx context.Context, cancel context.CancelFunc, sm 
 	}
 	generalAgent, _ := a.agentRegistry.Get("general")
 	opts = append(opts, agent2.WithAgent(generalAgent))
+	// Replace {{WorkingDirectory}} in the system prompt with the actual project directory.
+	projectDir := a.resolveWorkingDir(sessionID)
+	normalizedDir := strings.ReplaceAll(projectDir, "\\", "/")
+	opts = append(opts, agent2.WithSystemPrompt(strings.ReplaceAll(a.rawSystemPrompt, "{{WorkingDirectory}}", normalizedDir)))
 
 	loop := agent2.NewLoop(providerEng, a.registry, opts...)
 	loop.SetDispatchFn(func(ctx context.Context, task agent2.SubTask) <-chan agent2.Event {
@@ -1387,6 +1393,8 @@ func (a *App) TriggerCompact(projectPath, sessionID, providerID, model string) e
 	}
 	generalAgent, _ := a.agentRegistry.Get("general")
 	opts = append(opts, agent2.WithAgent(generalAgent))
+	normalizedDir := strings.ReplaceAll(projectPath, "\\", "/")
+	opts = append(opts, agent2.WithSystemPrompt(strings.ReplaceAll(a.rawSystemPrompt, "{{WorkingDirectory}}", normalizedDir)))
 
 	loop := agent2.NewLoop(providerEng, a.registry, opts...)
 
