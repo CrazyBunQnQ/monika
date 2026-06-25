@@ -61,7 +61,6 @@ func ResolveServersFromConfig(workdir string, userServers map[string]ServerConfi
 		}
 	}
 	return result
-	return result
 }
 
 func hasRootMarker(workdir string, markers []string) bool {

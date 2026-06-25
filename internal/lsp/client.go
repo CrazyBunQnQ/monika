@@ -19,6 +19,9 @@ import (
 var lspLogFile *os.File
 
 func init() {
+	if os.Getenv("MONIKA_LSP_DEBUG") == "" {
+		return
+	}
 	exe, err := os.Executable()
 	if err == nil {
 		dir := filepath.Dir(exe)

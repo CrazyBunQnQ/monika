@@ -931,10 +931,6 @@ export const useStore = create<AppState>((set, get) => ({
             state.switchSessionTab(id)
             return
         }
-        if (state.openSessions.length >= 8) {
-            state.addMessage({ id: crypto.randomUUID(), role: 'error', content: 'Too many sessions open. Close one first.' })
-            return
-        }
         set((s) => {
             const binding = s.sessionBindings[id]
             return {
@@ -1070,7 +1066,7 @@ export const useStore = create<AppState>((set, get) => ({
             const currentCache = { ...s.sessionMessages }
             if (s.activeSessionId) {
                 const bgUpdated = s.sessionMessages[s.activeSessionId]
-                currentCache[s.activeSessionId] = bgUpdated || s.messages
+                currentCache[s.activeSessionId] = (bgUpdated && bgUpdated.length > 0) ? bgUpdated : s.messages
             }
             const restored = currentCache[id] || []
             const binding = s.sessionBindings[id]

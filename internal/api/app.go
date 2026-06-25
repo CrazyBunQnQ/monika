@@ -744,6 +744,7 @@ func copyConversationData(dst, src *Session, providerID, model string) {
 	dst.CompactionFrom = src.CompactionFrom
 	dst.Provider = providerID
 	dst.Model = model
+	dst.Title = src.Title
 }
 
 func (a *App) SendMessage(projectPath, sessionID, text, providerID, model string) error {
