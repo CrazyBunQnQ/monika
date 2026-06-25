@@ -204,11 +204,20 @@ func (sm *SessionManager) SetTitle(s *Session) {
 	}
 	for _, m := range s.Messages {
 		if m.Role == "user" && m.Content != "" {
-			runes := []rune(m.Content)
+			content := m.Content
+			// Strip injected prefix blocks (<env>, <recalled-memory>, etc.)
+			for strings.HasPrefix(content, "<") {
+				idx := strings.Index(content, ">\n\n")
+				if idx < 0 {
+					break
+				}
+				content = content[idx+len(">\n\n"):]
+			}
+			runes := []rune(content)
 			if len(runes) > 40 {
 				s.Title = string(runes[:40])
 			} else {
-				s.Title = m.Content
+				s.Title = content
 			}
 			return
 		}
