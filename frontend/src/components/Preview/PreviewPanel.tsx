@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import React, { useEffect, useRef, useState, useCallback, useMemo, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { IDockviewPanelProps } from 'dockview'
 import { EditorState } from '@codemirror/state'
@@ -615,7 +615,9 @@ function PreviewPanel(props: IDockviewPanelProps) {
 
     const selectedBgTaskId = useStore((s) => s.selectedBgTaskId)
     const bgTasks = useStore((s) => s.bgTasks)
-    const bgTaskLogs = useStore((s) => s.bgTaskLogs)
+    const bgTaskLineCounts = useStore((s) => s.bgTaskLineCounts)
+    const bgTaskLogCache = useStore((s) => s.bgTaskLogCache)
+    const bgTaskDisplayCount = useStore((s) => s.bgTaskDisplayCount)
     const stopBgTask = useStore((s) => s.stopBgTask)
     const containerRef = useRef<HTMLDivElement>(null)
     const editorRef = useRef<EditorView | null>(null)
@@ -627,6 +629,9 @@ function PreviewPanel(props: IDockviewPanelProps) {
     const prevFilePathRef = useRef<string | null>(null)
     const diagTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
     const bgLogRef = useRef<HTMLDivElement>(null)
+    const bgSentinelRef = useRef<HTMLDivElement>(null)
+    const bgPrevScrollHeightRef = useRef(0)
+    const bgStickToBottomRef = useRef(true)
     const [bgSearchOpen, setBgSearchOpen] = useState(false)
     const [bgSearchQuery, setBgSearchQuery] = useState('')
     const [lspEnabled, setLspEnabled] = useState(true)
@@ -735,7 +740,16 @@ function PreviewPanel(props: IDockviewPanelProps) {
     const showMarkdownPreview = showFile && isMarkdown && mdPreviewMode
 
     const bgTask = selectedBgTaskId ? bgTasks.find(t => t.id === selectedBgTaskId) : null
-    const bgLogs = selectedBgTaskId ? (bgTaskLogs[selectedBgTaskId] || []) : []
+    const bgLineCount = selectedBgTaskId ? (bgTaskLineCounts[selectedBgTaskId] || 0) : 0
+    const bgCache = selectedBgTaskId ? bgTaskLogCache[selectedBgTaskId] : undefined
+    const bgDisplayCount = selectedBgTaskId ? (bgTaskDisplayCount[selectedBgTaskId] || 50) : 50
+
+    const bgLogs = useMemo(() => {
+        if (!bgCache) return []
+        return bgCache.lines.slice(Math.max(0, bgCache.lines.length - bgDisplayCount))
+    }, [bgCache, bgDisplayCount])
+
+    const bgHasMore = bgCache ? (bgCache.offset > 0 || bgDisplayCount < bgCache.lines.length) : false
     const showTask = preview.mode === 'task' && !maximized
 
     const saveContent = useCallback(async (content: string) => {
@@ -888,15 +902,86 @@ function PreviewPanel(props: IDockviewPanelProps) {
     const lspEnabledRef = useRef(lspEnabled)
     lspEnabledRef.current = lspEnabled
 
-    // Auto-scroll background task logs to bottom when new output arrives
-    const bgLogsLen = bgLogs.length
-    const bgTaskStatus = bgTask?.status
+    // Initial load when task is selected
+    useEffect(() => {
+        if (!selectedBgTaskId || !showTask) return
+        const store = useStore.getState()
+        store.loadBgTaskLogs(selectedBgTaskId, -200, 200)
+        bgStickToBottomRef.current = true
+        const timer = setTimeout(() => {
+            const el = bgLogRef.current
+            if (el) el.scrollTop = el.scrollHeight
+        }, 100)
+        return () => clearTimeout(timer)
+    }, [selectedBgTaskId, showTask])
+
+    // Debounced refresh when line count changes
+    const bgLineCountRef = useRef(bgLineCount)
+    const bgDebounceRef = useRef<ReturnType<typeof setTimeout>>()
+    useEffect(() => {
+        if (!showTask || !selectedBgTaskId) return
+        if (bgLineCount === bgLineCountRef.current) return
+        bgLineCountRef.current = bgLineCount
+
+        clearTimeout(bgDebounceRef.current)
+        bgDebounceRef.current = setTimeout(() => {
+            const store = useStore.getState()
+            store.loadBgTaskLogs(selectedBgTaskId, -200, 200)
+            if (bgStickToBottomRef.current) {
+                requestAnimationFrame(() => {
+                    const el = bgLogRef.current
+                    if (el) el.scrollTop = el.scrollHeight
+                })
+            }
+        }, 300)
+
+        return () => clearTimeout(bgDebounceRef.current)
+    }, [bgLineCount, showTask, selectedBgTaskId])
+
+    // IntersectionObserver for lazy loading older lines on scroll to top
+    useEffect(() => {
+        const el = bgSentinelRef.current
+        const scrollEl = bgLogRef.current
+        if (!el || !scrollEl || !bgHasMore || !selectedBgTaskId) return
+
+        const observer = new IntersectionObserver(
+            ([entry]) => {
+                if (entry.isIntersecting) {
+                    bgPrevScrollHeightRef.current = scrollEl.scrollHeight
+                    useStore.getState().loadMoreBgTaskLines(selectedBgTaskId)
+                }
+            },
+            { root: scrollEl, threshold: 0 }
+        )
+        observer.observe(el)
+        return () => observer.disconnect()
+    }, [bgHasMore, selectedBgTaskId])
+
+    // Restore scroll position after prepending older messages
+    useLayoutEffect(() => {
+        if (bgPrevScrollHeightRef.current > 0) {
+            const scrollEl = bgLogRef.current
+            if (scrollEl) {
+                const delta = scrollEl.scrollHeight - bgPrevScrollHeightRef.current
+                if (delta > 0) {
+                    scrollEl.scrollTop += delta
+                }
+            }
+            bgPrevScrollHeightRef.current = 0
+        }
+    }, [bgDisplayCount, bgCache?.lines.length])
+
+    // Track stick-to-bottom state
     useEffect(() => {
         const el = bgLogRef.current
-        if (!el || !showTask) return
-        el.scrollTop = el.scrollHeight
-    }, [bgLogsLen, bgTaskStatus, showTask, selectedBgTaskId])
-
+        if (!el) return
+        const onScroll = () => {
+            const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 50
+            bgStickToBottomRef.current = nearBottom
+        }
+        el.addEventListener('scroll', onScroll)
+        return () => el.removeEventListener('scroll', onScroll)
+    }, [showTask, selectedBgTaskId])
     // Ctrl+F toggles search in task mode
     useEffect(() => {
         if (!showTask) return
@@ -1401,6 +1486,7 @@ function PreviewPanel(props: IDockviewPanelProps) {
                 )}
                 {/* Log output — terminal area */}
                 <div ref={bgLogRef} className="flex-1 overflow-auto" style={{ background: '#080a0e' }}>
+                    {bgHasMore && <div ref={bgSentinelRef} style={{ height: 1 }} />}
                     <pre className="p-4 text-xs font-mono text-[#abb2bf] whitespace-pre-wrap leading-relaxed"><AnsiText text={(bgSearchQuery ? bgLogs.filter(l => stripAnsi(l).toLowerCase().includes(bgSearchQuery.toLowerCase())) : bgLogs).join('\n')} /></pre>
                 </div>
                 {/* Bottom status bar */}

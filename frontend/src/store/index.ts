@@ -244,7 +244,9 @@ interface AppState {
     sessionWorktrees: Record<string, string>
     bgTasks: BgTaskInfo[]
     selectedBgTaskId: string | null
-    bgTaskLogs: Record<string, string[]>
+    bgTaskLineCounts: Record<string, number>
+    bgTaskLogCache: Record<string, { offset: number; lines: string[] }>
+    bgTaskDisplayCount: Record<string, number>
 
     sessionQueues: Record<string, QueuedMessage[]>
     queuePaused: Record<string, boolean>
@@ -377,7 +379,10 @@ interface AppState {
 
     selectBgTask: (id: string | null) => void
     updateBgTask: (info: BgTaskInfo) => void
-    appendBgTaskLog: (taskId: string, line: string) => void
+    updateBgTaskLineCount: (taskId: string, count: number) => void
+    setBgTaskLogCache: (taskId: string, offset: number, lines: string[]) => void
+    loadBgTaskLogs: (taskId: string, offset: number, limit: number) => Promise<void>
+    loadMoreBgTaskLines: (taskId: string) => void
     stopBgTask: (taskId: string) => Promise<void>
     startBgTask: (command: string) => Promise<void>
 
@@ -402,6 +407,9 @@ function loadFavoriteModels(): string[] {
 
 const INITIAL_DISPLAY_COUNT = 15
 const LOAD_MORE_COUNT = 20
+const BG_LOG_INITIAL_DISPLAY = 50
+const BG_LOG_LOAD_MORE = 50
+const BG_LOG_FETCH_BATCH = 200
 
 export const useStore = create<AppState>((set, get) => ({
     messages: [{ id: 'welcome', role: 'system', content: 'Welcome to Monika. Type /help for commands.' }],
@@ -476,7 +484,9 @@ export const useStore = create<AppState>((set, get) => ({
 
     bgTasks: [] as BgTaskInfo[],
     selectedBgTaskId: null as string | null,
-    bgTaskLogs: {} as Record<string, string[]>,
+    bgTaskLineCounts: {} as Record<string, number>,
+    bgTaskLogCache: {} as Record<string, { offset: number; lines: string[] }>,
+    bgTaskDisplayCount: {} as Record<string, number>,
 
     sessionQueues: {},
     queuePaused: {},
@@ -772,7 +782,11 @@ export const useStore = create<AppState>((set, get) => ({
         set((state) => ({
             sessionWorktrees: { ...state.sessionWorktrees, [sessionId]: path },
         })),
-    selectBgTask: (id) => set({ selectedBgTaskId: id, preview: { mode: 'task', filePath: null, fileName: null, fileContent: null, diffLines: null, conflictAiContent: null, conflictActive: false, commitDetail: null, commitFiles: null, commitHash: null } }),
+    selectBgTask: (id) => set((state) => ({
+        selectedBgTaskId: id,
+        bgTaskDisplayCount: id ? { ...state.bgTaskDisplayCount, [id]: BG_LOG_INITIAL_DISPLAY } : state.bgTaskDisplayCount,
+        preview: { mode: 'task', filePath: null, fileName: null, fileContent: null, diffLines: null, conflictAiContent: null, conflictActive: false, commitDetail: null, commitFiles: null, commitHash: null },
+    })),
     updateBgTask: (info) => set((state) => {
         const idx = state.bgTasks.findIndex(t => t.id === info.id)
         if (idx >= 0) {
@@ -782,9 +796,53 @@ export const useStore = create<AppState>((set, get) => ({
         }
         return { bgTasks: [...state.bgTasks, info] }
     }),
-    appendBgTaskLog: (taskId, line) => set((state) => ({
-        bgTaskLogs: { ...state.bgTaskLogs, [taskId]: [...(state.bgTaskLogs[taskId] || []), line].slice(-500) },
+    updateBgTaskLineCount: (taskId, count) => set((state) => ({
+        bgTaskLineCounts: { ...state.bgTaskLineCounts, [taskId]: count },
     })),
+
+    setBgTaskLogCache: (taskId, offset, lines) => set((state) => ({
+        bgTaskLogCache: { ...state.bgTaskLogCache, [taskId]: { offset, lines } },
+    })),
+
+    loadBgTaskLogs: async (taskId, offset, limit) => {
+        try {
+            const lines = await Call.ByName('monika/internal/api.App.BgTaskLogLines', taskId, offset, limit) as string[]
+            const store = useStore.getState()
+            const existing = store.bgTaskLogCache[taskId]
+            let mergedLines: string[]
+            let mergedOffset: number
+
+            if (existing && offset < existing.offset) {
+                mergedLines = [...lines, ...existing.lines]
+                mergedOffset = offset
+            } else {
+                mergedLines = lines
+                mergedOffset = offset
+            }
+
+            store.setBgTaskLogCache(taskId, mergedOffset, mergedLines)
+        } catch (e) {
+            console.error('[monika] failed to load bg task logs:', e)
+        }
+    },
+
+    loadMoreBgTaskLines: (taskId) => {
+        const store = useStore.getState()
+        const current = store.bgTaskDisplayCount[taskId] || BG_LOG_INITIAL_DISPLAY
+        const next = current + BG_LOG_LOAD_MORE
+        const cache = store.bgTaskLogCache[taskId]
+
+        if (cache && next > cache.lines.length) {
+            const newOffset = cache.offset - BG_LOG_FETCH_BATCH
+            if (newOffset >= 0) {
+                store.loadBgTaskLogs(taskId, newOffset, BG_LOG_FETCH_BATCH)
+            }
+        }
+
+        set((state) => ({
+            bgTaskDisplayCount: { ...state.bgTaskDisplayCount, [taskId]: next },
+        }))
+    },
     stopBgTask: async (taskId: string) => {
         try {
             await Call.ByName('monika/internal/api.App.StopBgTask', taskId)
@@ -2372,8 +2430,8 @@ export function setupWailsEvents() {
                             started_at: new Date().toISOString(),
                         })
                         break
-                    case 'log':
-                        store.appendBgTaskLog(ev.task_id, ev.log_line)
+                    case 'log_update':
+                        store.updateBgTaskLineCount(ev.task_id, ev.line_count)
                         break
                     case 'stopped':
                     case 'exited': {
