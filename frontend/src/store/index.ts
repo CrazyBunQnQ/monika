@@ -834,7 +834,9 @@ export const useStore = create<AppState>((set, get) => ({
 
         if (cache && next > cache.lines.length) {
             const newOffset = cache.offset - BG_LOG_FETCH_BATCH
-            if (newOffset >= 0) {
+            const absOffset = Math.abs(newOffset)
+            const totalKnown = store.bgTaskLineCounts[taskId] || 0
+            if (absOffset < totalKnown) {
                 store.loadBgTaskLogs(taskId, newOffset, BG_LOG_FETCH_BATCH)
             }
         }
