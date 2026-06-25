@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useStore } from '../../store'
 import type { ProviderInfo, ModelInfo } from '../../../bindings/monika'
-import { IconChevronDown, IconCheck } from '../Icons'
+import { IconChevronDown, IconCheck, IconStar } from '../Icons'
 
 function ModelPicker() {
     const availableProviders = useStore((s) => s.availableProviders)
@@ -77,14 +77,14 @@ function ModelPicker() {
         for (const p of availableProviders) {
             const models = modelsByProvider[p.id] || []
             for (const m of models) {
-                allModelsLookup.set(`${p.id}:${m.ID}`, { provider: p, model: m })
+                allModelsLookup.set(`${p.id}:${m.ID}`.toLowerCase(), { provider: p, model: m })
             }
         }
 
         // Favorite group
         const validFavorites: { provider: ProviderInfo; model: ModelInfo }[] = []
         for (const key of favoriteModels) {
-            const entry = allModelsLookup.get(key)
+            const entry = allModelsLookup.get(key.toLowerCase())
             if (!entry) continue
             if (searchLower) {
                 if (!entry.model.DisplayName.toLowerCase().includes(searchLower)
@@ -118,7 +118,7 @@ function ModelPicker() {
                     type: 'model',
                     provider: p,
                     model: m,
-                    isFavorite: favoriteModels.includes(`${p.id}:${m.ID}`)
+                    isFavorite: favoriteModels.some(k => k.toLowerCase() === `${p.id}:${m.ID}`.toLowerCase())
                 })
             }
         }
@@ -243,9 +243,9 @@ function ModelPicker() {
                                     <div
                                         key="favorite-header"
                                         className="text-[10px] font-semibold uppercase tracking-[0.05em] px-2 pt-2 pb-0.5"
-                                        style={{ color: '#ffd700' }}
+                                        style={{ color: 'var(--text-dim)' }}
                                     >
-                                        ★ Favorite models
+                                        Favorite models
                                     </div>
                                 )
                             }
@@ -265,7 +265,7 @@ function ModelPicker() {
                                 m.ID === selectedModel && item.provider.id === selectedProvider
                             return (
                                 <button
-                                    key={`m-${item.provider.id}-${m.ID}`}
+                                    key={`${item.inFavoriteGroup ? 'fav' : 'm'}-${item.provider.id}-${m.ID}`}
                                     onClick={() => handleSelect(item.provider.id, m.ID)}
                                     onMouseEnter={() => setFocusIdx(idx)}
                                     className="text-[11px] w-full text-left px-2 py-1 rounded cursor-pointer flex items-center justify-between fav-row"
@@ -292,20 +292,21 @@ function ModelPicker() {
                                     <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                                         <span
                                             onClick={(e) => {
+                                                e.preventDefault()
                                                 e.stopPropagation()
                                                 toggleFavoriteModel(item.provider.id, m.ID)
                                             }}
                                             className="fav-star"
                                             style={{
-                                                fontSize: 14,
+                                                padding: '4px',
                                                 cursor: 'pointer',
-                                                color: item.isFavorite ? '#ffd700' : 'var(--text-dim)',
+                                                color: item.isFavorite ? 'var(--accent)' : 'var(--text-dim)',
                                                 opacity: item.isFavorite ? 1 : 0,
                                                 transition: 'opacity 0.15s',
                                             }}
                                             title={item.isFavorite ? 'Remove from favorites' : 'Add to favorites'}
                                         >
-                                            {item.isFavorite ? '★' : '☆'}
+                                            <IconStar filled={item.isFavorite} size={14} />
                                         </span>
                                         {isSelected && (
                                             <IconCheck size={12} />
