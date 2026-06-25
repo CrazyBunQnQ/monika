@@ -935,20 +935,25 @@ export const useStore = create<AppState>((set, get) => ({
             state.addMessage({ id: crypto.randomUUID(), role: 'error', content: 'Too many sessions open. Close one first.' })
             return
         }
-        set((s) => ({
-            openSessions: [...s.openSessions, { id, title }],
-            sessionMessages: {
-                ...s.sessionMessages,
-                ...(s.activeSessionId ? { [s.activeSessionId]: s.messages } : {}),
-                [id]: s.sessionMessages[id] || [],
-            },
-            displayCounts: { ...s.displayCounts, [id]: INITIAL_DISPLAY_COUNT },
-            activeSessionId: id,
-            sessionParents: s.sessionParents,
-            messages: [],
-            tokenCount: s.sessionTokens[id]?.count ?? 0,
-            tokenMax: s.sessionTokens[id]?.max ?? 0,
-        }))
+        set((s) => {
+            const binding = s.sessionBindings[id]
+            return {
+                openSessions: [...s.openSessions, { id, title }],
+                sessionMessages: {
+                    ...s.sessionMessages,
+                    ...(s.activeSessionId ? { [s.activeSessionId]: s.messages } : {}),
+                    [id]: s.sessionMessages[id] || [],
+                },
+                displayCounts: { ...s.displayCounts, [id]: INITIAL_DISPLAY_COUNT },
+                activeSessionId: id,
+                selectedProvider: binding?.provider || s.selectedProvider,
+                selectedModel: binding?.model || s.selectedModel,
+                sessionParents: s.sessionParents,
+                messages: [],
+                tokenCount: s.sessionTokens[id]?.count ?? 0,
+                tokenMax: s.sessionTokens[id]?.max ?? 0,
+            }
+        })
         try {
             const project = useStore.getState().projectPath
             const session = await App.LoadSession(project, id)
@@ -1208,9 +1213,12 @@ export const useStore = create<AppState>((set, get) => ({
                 if (recent.length > 0) activeId = recent[0].id
             } catch { }
             const msgs = get().sessionMessages[activeId] || []
+            const binding = get().sessionBindings[activeId]
             set({
                 activeSessionId: activeId,
                 messages: msgs,
+                selectedProvider: binding?.provider || get().defaultProvider,
+                selectedModel: binding?.model || get().defaultModel,
                 tokenCount: get().sessionTokens[activeId]?.count ?? 0,
                 tokenMax: get().sessionTokens[activeId]?.max ?? 0,
                 displayCounts: { ...get().displayCounts, [activeId]: INITIAL_DISPLAY_COUNT },
@@ -1264,9 +1272,12 @@ export const useStore = create<AppState>((set, get) => ({
             if (!get().activeSessionId) {
                 const mostRecent = sessions[0]
                 const msgs = get().sessionMessages[mostRecent.id] || []
+                const binding = get().sessionBindings[mostRecent.id]
                 set({
                     activeSessionId: mostRecent.id,
                     messages: msgs,
+                    selectedProvider: binding?.provider || get().defaultProvider,
+                    selectedModel: binding?.model || get().defaultModel,
                     tokenCount: get().sessionTokens[mostRecent.id]?.count ?? 0,
                     tokenMax: get().sessionTokens[mostRecent.id]?.max ?? 0,
                 })
