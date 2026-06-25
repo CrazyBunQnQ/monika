@@ -3263,9 +3263,15 @@ func (a *App) RespondAskUser(args json.RawMessage) error {
 	return nil
 }
 
-// SetPipeline stores the permission pipeline reference for runtime mode changes.
+// SetPipeline stores the permission pipeline and configures it for the
+// current project if one is already open (handles late binding after NewApp).
 func (a *App) SetPipeline(p *permission.Pipeline) {
 	a.pipeline = p
+	if pp := a.projectPath(); pp != "" {
+		p.SetProject(a.home, pp)
+		rules, _ := permission.LoadRules(a.home, pp)
+		p.SetHardRules(permission.NewHardRuleEngine(rules, pp))
+	}
 }
 
 // SetPermissionMode updates the session-level permission mode ("auto" or "manual").
@@ -5044,6 +5050,9 @@ func (a *App) SetDapManager(mgr *dap.DapManager) {
 			Seq:       a.eventSeq.Add(1),
 		})
 	})
+	if pp := a.projectPath(); pp != "" {
+		mgr.SetProjectDir(pp)
+	}
 }
 
 // Debug API methods (delegate to debugAPI)
