@@ -4,8 +4,8 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"io"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -22,127 +22,80 @@ const (
 	BgTaskExited  = builtin.BgTaskExited
 )
 
-// BgTaskEventType represents the type of a background task event.
 type BgTaskEventType string
 
 const (
-	BgEventStarted BgTaskEventType = "started"
-	BgEventLog     BgTaskEventType = "log"
-	BgEventStopped BgTaskEventType = "stopped"
-	BgEventExited  BgTaskEventType = "exited"
+	BgEventStarted   BgTaskEventType = "started"
+	BgEventLogUpdate BgTaskEventType = "log_update"
+	BgEventStopped   BgTaskEventType = "stopped"
+	BgEventExited    BgTaskEventType = "exited"
 )
 
-// BgTaskEvent is emitted for background task lifecycle and log events.
 type BgTaskEvent struct {
-	Type     BgTaskEventType `json:"type"`
-	TaskID   string          `json:"task_id"`
-	Command  string          `json:"command,omitempty"`
-	WorkDir  string          `json:"work_dir,omitempty"`
-	PID      int             `json:"pid,omitempty"`
-	Status   BgTaskStatus    `json:"status,omitempty"`
-	ExitCode int             `json:"exit_code,omitempty"`
-	LogLine  string          `json:"log_line,omitempty"`
+	Type      BgTaskEventType `json:"type"`
+	TaskID    string          `json:"task_id"`
+	Command   string          `json:"command,omitempty"`
+	WorkDir   string          `json:"work_dir,omitempty"`
+	PID       int             `json:"pid,omitempty"`
+	Status    BgTaskStatus    `json:"status,omitempty"`
+	ExitCode  int             `json:"exit_code,omitempty"`
+	LineCount int             `json:"line_count,omitempty"`
 }
 
-// BgTaskInfo is a snapshot of a background task's current state.
-// BgTaskInfo is a snapshot of a background task's current state.
 type BgTaskInfo = builtin.BgTaskInfo
 
-// ringBuffer is a fixed-size circular buffer for log lines.
-type ringBuffer struct {
-	mu    sync.Mutex
-	buf   []string
-	size  int
-	head  int // next write position
-	count int // number of items written (up to size)
-}
-
-func newRingBuffer(size int) *ringBuffer {
-	return &ringBuffer{
-		buf:  make([]string, size),
-		size: size,
-	}
-}
-
-func (rb *ringBuffer) Write(line string) {
-	rb.mu.Lock()
-	defer rb.mu.Unlock()
-	rb.buf[rb.head] = line
-	rb.head = (rb.head + 1) % rb.size
-	if rb.count < rb.size {
-		rb.count++
-	}
-}
-
-func (rb *ringBuffer) LastN(n int) []string {
-	rb.mu.Lock()
-	defer rb.mu.Unlock()
-	if n > rb.count {
-		n = rb.count
-	}
-	if n == 0 {
-		return nil
-	}
-	result := make([]string, 0, n)
-	start := (rb.head - n + rb.size) % rb.size
-	for i := 0; i < n; i++ {
-		idx := (start + i) % rb.size
-		result = append(result, rb.buf[idx])
-	}
-	return result
-}
-
-// bgTask holds internal state for a background task.
 type bgTask struct {
-	info    BgTaskInfo
-	ringBuf *ringBuffer
-	cancel  context.CancelFunc
+	mu        sync.Mutex
+	info      BgTaskInfo
+	logFile   *os.File
+	logPath   string
+	lineCount int
+	cancel    context.CancelFunc
 }
 
 const (
-	defaultRingBufferSize  = 500
 	bgSubscriberBufferSize = 256
+	bgLogRetention         = 7 * 24 * time.Hour
 )
 
-// BackgroundTaskManager manages background processes with log buffering and event broadcasting.
 type BackgroundTaskManager struct {
 	mu          sync.Mutex
 	tasks       map[string]*bgTask
 	subscribers map[chan BgTaskEvent]struct{}
 	engine      *builtin.ShellEngine
+	logDir      string
 }
 
-// NewBackgroundTaskManager creates a new BackgroundTaskManager.
-func NewBackgroundTaskManager() *BackgroundTaskManager {
+func NewBackgroundTaskManager(logDir string) *BackgroundTaskManager {
 	return &BackgroundTaskManager{
 		tasks:       make(map[string]*bgTask),
 		subscribers: make(map[chan BgTaskEvent]struct{}),
 		engine:      builtin.NewShellEngine(),
+		logDir:      logDir,
 	}
 }
 
-// Start begins a background process and returns its task ID.
+func (m *BackgroundTaskManager) SetLogDir(dir string) {
+	m.mu.Lock()
+	m.logDir = dir
+	m.mu.Unlock()
+	os.MkdirAll(dir, 0755)
+}
+
 func (m *BackgroundTaskManager) Start(command, workdir string) (string, error) {
 	id := uuid.New().String()
-	ringBuf := newRingBuffer(defaultRingBufferSize)
+
+	if err := os.MkdirAll(m.logDir, 0755); err != nil {
+		return "", fmt.Errorf("create log dir: %w", err)
+	}
+
+	logPath := filepath.Join(m.logDir, id+".log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return "", fmt.Errorf("create log file: %w", err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-
-	onLine := func(line string) {
-		line = stripANSI(line)
-		ringBuf.Write(line)
-		m.emit(BgTaskEvent{
-			Type:    BgEventLog,
-			TaskID:  id,
-			LogLine: line,
-		})
-	}
-
-	bgCancel, exitCh, err := m.engine.StartBackground(ctx, command, workdir, os.Environ(), onLine)
-	if err != nil {
-		cancel()
-		return "", fmt.Errorf("start process: %w", err)
-	}
 
 	task := &bgTask{
 		info: BgTaskInfo{
@@ -152,11 +105,34 @@ func (m *BackgroundTaskManager) Start(command, workdir string) (string, error) {
 			Status:    BgTaskRunning,
 			StartedAt: time.Now(),
 		},
-		ringBuf: ringBuf,
-		cancel: func() {
-			bgCancel()
-			cancel()
-		},
+		logFile: logFile,
+		logPath: logPath,
+	}
+
+	onLine := func(line string) {
+		line = stripANSI(line)
+		fmt.Fprintln(logFile, line)
+		task.mu.Lock()
+		task.lineCount++
+		count := task.lineCount
+		task.mu.Unlock()
+		m.emit(BgTaskEvent{
+			Type:      BgEventLogUpdate,
+			TaskID:    id,
+			LineCount: count,
+		})
+	}
+
+	bgCancel, exitCh, err := m.engine.StartBackground(ctx, command, workdir, os.Environ(), onLine)
+	if err != nil {
+		cancel()
+		logFile.Close()
+		return "", fmt.Errorf("start process: %w", err)
+	}
+
+	task.cancel = func() {
+		bgCancel()
+		cancel()
 	}
 
 	m.mu.Lock()
@@ -176,7 +152,6 @@ func (m *BackgroundTaskManager) Start(command, workdir string) (string, error) {
 	return id, nil
 }
 
-// Stop kills a running background task.
 func (m *BackgroundTaskManager) Stop(taskID string) error {
 	m.mu.Lock()
 	task, ok := m.tasks[taskID]
@@ -190,9 +165,6 @@ func (m *BackgroundTaskManager) Stop(taskID string) error {
 	}
 	task.info.Status = BgTaskStopped
 	m.mu.Unlock()
-
-	// Cancel the context — mvdan/sh will propagate to child processes.
-	task.cancel()
 
 	task.cancel()
 
@@ -208,18 +180,60 @@ func (m *BackgroundTaskManager) Stop(taskID string) error {
 	return nil
 }
 
-// Logs returns the last N log lines from a task's ring buffer.
 func (m *BackgroundTaskManager) Logs(taskID string, lines int) ([]string, error) {
+	return m.LogLines(taskID, -lines, lines)
+}
+
+func (m *BackgroundTaskManager) LogLines(taskID string, offset, limit int) ([]string, error) {
 	m.mu.Lock()
 	task, ok := m.tasks[taskID]
 	m.mu.Unlock()
 	if !ok {
 		return nil, fmt.Errorf("task %s not found", taskID)
 	}
-	return task.ringBuf.LastN(lines), nil
+
+	f, err := os.Open(task.logPath)
+	if err != nil {
+		return nil, fmt.Errorf("open log file: %w", err)
+	}
+	defer f.Close()
+
+	task.mu.Lock()
+	totalLines := task.lineCount
+	task.mu.Unlock()
+
+	var skipCount int
+	if offset < 0 {
+		skipCount = totalLines + offset
+		if skipCount < 0 {
+			skipCount = 0
+		}
+	} else {
+		skipCount = offset
+	}
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	result := make([]string, 0, limit)
+	lineIdx := 0
+	count := 0
+
+	for scanner.Scan() {
+		if lineIdx < skipCount {
+			lineIdx++
+			continue
+		}
+		if count >= limit {
+			break
+		}
+		result = append(result, scanner.Text())
+		count++
+		lineIdx++
+	}
+
+	return result, nil
 }
 
-// List returns a snapshot of all background tasks.
 func (m *BackgroundTaskManager) List() []BgTaskInfo {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -230,7 +244,6 @@ func (m *BackgroundTaskManager) List() []BgTaskInfo {
 	return result
 }
 
-// Subscribe returns a channel that receives background task events.
 func (m *BackgroundTaskManager) Subscribe() <-chan BgTaskEvent {
 	ch := make(chan BgTaskEvent, bgSubscriberBufferSize)
 	m.mu.Lock()
@@ -239,7 +252,6 @@ func (m *BackgroundTaskManager) Subscribe() <-chan BgTaskEvent {
 	return ch
 }
 
-// Cleanup stops all running tasks and closes subscriber channels.
 func (m *BackgroundTaskManager) Cleanup() {
 	m.mu.Lock()
 	ids := make([]string, 0)
@@ -255,11 +267,39 @@ func (m *BackgroundTaskManager) Cleanup() {
 	}
 
 	m.mu.Lock()
+	for _, task := range m.tasks {
+		if task.logFile != nil {
+			task.logFile.Close()
+		}
+	}
 	for ch := range m.subscribers {
 		close(ch)
 		delete(m.subscribers, ch)
 	}
 	m.mu.Unlock()
+}
+
+func (m *BackgroundTaskManager) CleanOldLogs() {
+	entries, err := os.ReadDir(m.logDir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-bgLogRetention)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if filepath.Ext(entry.Name()) != ".log" {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().Before(cutoff) {
+			os.Remove(filepath.Join(m.logDir, entry.Name()))
+		}
+	}
 }
 
 func (m *BackgroundTaskManager) waitExit(taskID string, exitCh <-chan int) {
@@ -296,8 +336,3 @@ func (m *BackgroundTaskManager) emit(ev BgTaskEvent) {
 		}
 	}
 }
-
-// unused: kept for reference — the old readLogs pattern is no longer needed
-// since mvdan/sh streams lines via the onLine callback.
-var _ = bufio.Scanner{}
-var _ = io.ReadCloser(nil)

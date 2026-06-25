@@ -126,7 +126,7 @@ func NewApp(home, initialProject string, cfg config2.Config, providers map[strin
 		mcpRegistry:       mcpRegistry,
 		kbStore:           kbStore,
 		checker:           update.NewChecker(),
-		bgTaskMgr:         NewBackgroundTaskManager(),
+		bgTaskMgr:         NewBackgroundTaskManager(filepath.Join(home, ".monika", "logs")),
 		watchedGitDirs:    make(map[string]string),
 		headDebounce:      make(map[string]func()),
 		refsDebounce:      make(map[string]func()),
@@ -386,6 +386,7 @@ func (a *App) OpenProject(path string) (*ProjectInfo, error) {
 	// Reset any sessions left in StatusGenerating status from a previous crash
 	a.resetStaleSessions(path)
 	a.getFileService(path)
+	a.bgTaskMgr.SetLogDir(filepath.Join(a.home, ".monika", "projects", projectSlug(path), "logs"))
 	a.writeRecentProject(info.Path, info.Name)
 	a.saveLastProjectPath(path)
 

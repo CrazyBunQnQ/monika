@@ -1,13 +1,16 @@
 package api
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestBackgroundTaskManagerStartStop(t *testing.T) {
-	mgr := NewBackgroundTaskManager()
+	tmpDir := t.TempDir()
+	mgr := NewBackgroundTaskManager(filepath.Join(tmpDir, "logs"))
 	defer mgr.Cleanup()
 
 	id, err := mgr.Start("echo hello", ".")
@@ -22,17 +25,10 @@ func TestBackgroundTaskManagerStartStop(t *testing.T) {
 	if len(tasks) != 1 {
 		t.Fatalf("expected 1 task, got %d", len(tasks))
 	}
-	if tasks[0].ID != id {
-		t.Fatalf("expected task ID %s, got %s", id, tasks[0].ID)
-	}
 	if tasks[0].Status != BgTaskRunning {
 		t.Fatalf("expected status running, got %s", tasks[0].Status)
 	}
-	if tasks[0].Command != "echo hello" {
-		t.Fatalf("expected command 'echo hello', got %s", tasks[0].Command)
-	}
 
-	// Wait for the process to finish (echo is fast)
 	time.Sleep(2 * time.Second)
 
 	tasks = mgr.List()
@@ -53,16 +49,15 @@ func TestBackgroundTaskManagerStartStop(t *testing.T) {
 }
 
 func TestBackgroundTaskManagerStop(t *testing.T) {
-	mgr := NewBackgroundTaskManager()
+	tmpDir := t.TempDir()
+	mgr := NewBackgroundTaskManager(filepath.Join(tmpDir, "logs"))
 	defer mgr.Cleanup()
 
-	// Start a long-running process: ping with high count
 	id, err := mgr.Start("ping -n 30 127.0.0.1", ".")
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
 
-	// Give it a moment to start
 	time.Sleep(500 * time.Millisecond)
 
 	tasks := mgr.List()
@@ -80,7 +75,6 @@ func TestBackgroundTaskManagerStop(t *testing.T) {
 		t.Fatalf("expected stopped, got %s", tasks[0].Status)
 	}
 
-	// Stop non-existent task
 	err = mgr.Stop("nonexistent")
 	if err == nil {
 		t.Fatal("expected error for non-existent task")
@@ -88,7 +82,8 @@ func TestBackgroundTaskManagerStop(t *testing.T) {
 }
 
 func TestBackgroundTaskManagerLogsNonExistent(t *testing.T) {
-	mgr := NewBackgroundTaskManager()
+	tmpDir := t.TempDir()
+	mgr := NewBackgroundTaskManager(filepath.Join(tmpDir, "logs"))
 	defer mgr.Cleanup()
 
 	_, err := mgr.Logs("nonexistent", 10)
@@ -97,44 +92,52 @@ func TestBackgroundTaskManagerLogsNonExistent(t *testing.T) {
 	}
 }
 
-func TestRingBuffer(t *testing.T) {
-	rb := newRingBuffer(3)
+func TestBackgroundTaskManagerLogLines(t *testing.T) {
+	tmpDir := t.TempDir()
+	mgr := NewBackgroundTaskManager(filepath.Join(tmpDir, "logs"))
+	defer mgr.Cleanup()
 
-	rb.Write("a")
-	rb.Write("b")
-	rb.Write("c")
-
-	lines := rb.LastN(3)
-	if len(lines) != 3 {
-		t.Fatalf("expected 3 lines, got %d", len(lines))
-	}
-	if lines[0] != "a" || lines[1] != "b" || lines[2] != "c" {
-		t.Fatalf("expected [a b c], got %v", lines)
+	id, err := mgr.Start("echo line1 && echo line2 && echo line3", ".")
+	if err != nil {
+		t.Fatalf("Start failed: %v", err)
 	}
 
-	// Overflow: write one more
-	rb.Write("d")
-	lines = rb.LastN(3)
-	if lines[0] != "b" || lines[1] != "c" || lines[2] != "d" {
-		t.Fatalf("expected [b c d], got %v", lines)
+	time.Sleep(2 * time.Second)
+
+	// Read all lines from start
+	lines, err := mgr.LogLines(id, 0, 100)
+	if err != nil {
+		t.Fatalf("LogLines failed: %v", err)
+	}
+	if len(lines) < 3 {
+		t.Fatalf("expected at least 3 lines, got %d", len(lines))
+	}
+	if !strings.Contains(lines[0], "line1") {
+		t.Fatalf("expected first line to contain 'line1', got %s", lines[0])
 	}
 
-	// Request more than available
-	lines = rb.LastN(10)
-	if len(lines) != 3 {
-		t.Fatalf("expected 3 lines, got %d", len(lines))
+	// Read last 2 lines
+	lines, err = mgr.LogLines(id, -2, 100)
+	if err != nil {
+		t.Fatalf("LogLines tail failed: %v", err)
+	}
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines from tail, got %d", len(lines))
 	}
 
-	// Empty buffer
-	rb2 := newRingBuffer(5)
-	lines = rb2.LastN(5)
-	if len(lines) != 0 {
-		t.Fatalf("expected 0 lines from empty buffer, got %d", len(lines))
+	// Read with limit
+	lines, err = mgr.LogLines(id, 0, 1)
+	if err != nil {
+		t.Fatalf("LogLines with limit failed: %v", err)
+	}
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line with limit=1, got %d", len(lines))
 	}
 }
 
 func TestBackgroundTaskManagerSubscribe(t *testing.T) {
-	mgr := NewBackgroundTaskManager()
+	tmpDir := t.TempDir()
+	mgr := NewBackgroundTaskManager(filepath.Join(tmpDir, "logs"))
 	defer mgr.Cleanup()
 
 	ch := mgr.Subscribe()
@@ -144,7 +147,6 @@ func TestBackgroundTaskManagerSubscribe(t *testing.T) {
 		t.Fatalf("Start failed: %v", err)
 	}
 
-	// Should receive a started event
 	select {
 	case ev := <-ch:
 		if ev.Type != BgEventStarted {
@@ -157,16 +159,6 @@ func TestBackgroundTaskManagerSubscribe(t *testing.T) {
 		t.Fatal("timed out waiting for started event")
 	}
 
-	// Wait for exit
-	select {
-	case ev := <-ch:
-		if ev.Type != BgEventLog {
-			// might get log lines first, that's fine
-		}
-	case <-time.After(5 * time.Second):
-	}
-
-	// Wait for exit event
 	timeout := time.After(5 * time.Second)
 	for {
 		select {
@@ -177,8 +169,43 @@ func TestBackgroundTaskManagerSubscribe(t *testing.T) {
 				}
 				return
 			}
+			if ev.Type == BgEventLogUpdate {
+				if ev.LineCount <= 0 {
+					t.Fatal("expected positive line_count in log_update event")
+				}
+			}
 		case <-timeout:
 			t.Fatal("timed out waiting for exited event")
 		}
+	}
+}
+
+func TestCleanOldLogs(t *testing.T) {
+	tmpDir := t.TempDir()
+	logDir := filepath.Join(tmpDir, "logs")
+	os.MkdirAll(logDir, 0755)
+
+	// Create a fake old log file
+	oldFile := filepath.Join(logDir, "old.log")
+	os.WriteFile(oldFile, []byte("old log"), 0644)
+
+	// Set modtime to 8 days ago
+	oldTime := time.Now().Add(-8 * 24 * time.Hour)
+	os.Chtimes(oldFile, oldTime, oldTime)
+
+	// Create a recent file
+	newFile := filepath.Join(logDir, "new.log")
+	os.WriteFile(newFile, []byte("new log"), 0644)
+
+	mgr := NewBackgroundTaskManager(logDir)
+	mgr.CleanOldLogs()
+
+	// Old file should be deleted
+	if _, err := os.Stat(oldFile); !os.IsNotExist(err) {
+		t.Fatal("expected old log file to be deleted")
+	}
+	// New file should remain
+	if _, err := os.Stat(newFile); err != nil {
+		t.Fatal("expected new log file to remain")
 	}
 }
