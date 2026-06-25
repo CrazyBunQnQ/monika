@@ -904,6 +904,8 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 		// Pre-checks (dedup, lookup, permission) run sequentially;
 		// actual tool execution runs in goroutines so that long-running
 		// tools like spawn_agent can run concurrently.
+		// EventToolOutput is sent immediately when each tool finishes,
+		// so the frontend sees per-tool completion in real-time.
 		type dedupKey struct {
 			name string
 			args string
@@ -913,6 +915,29 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 			status string
 		}
 		executed := make(map[dedupKey]cachedResult)
+
+		sendToolOutput := func(tc engine.ToolCall, output, status string, diffLines []string, conflict bool, diskContent, aiContent string) {
+			content := output
+			if status == "error" {
+				content = "error: " + content
+			} else if status == "denied" {
+				content = "execution denied by user"
+			}
+			ch <- Event{
+				Type: EventToolOutput,
+				Tool: &ToolEvent{
+					ID:          tc.ID,
+					Name:        tc.Function.Name,
+					Input:       tc.Function.Arguments,
+					Output:      content,
+					Status:      status,
+					DiffLines:   diffLines,
+					Conflict:    conflict,
+					DiskContent: diskContent,
+					AiContent:   aiContent,
+				},
+			}
+		}
 
 		type toolResult struct {
 			tc          engine.ToolCall
@@ -951,6 +976,7 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 				results[i].output = cached.output
 				results[i].status = cached.status
 				results[i].preChecked = true
+				sendToolOutput(tc, cached.output, cached.status, nil, false, "", "")
 				continue
 			}
 
@@ -983,6 +1009,8 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 					results[i].output = fmt.Sprintf("tool %s not found", tc.Function.Name)
 					results[i].status = "error"
 					results[i].preChecked = true
+					executed[dk] = cachedResult{output: results[i].output, status: "error"}
+					sendToolOutput(tc, results[i].output, "error", nil, false, "", "")
 				}
 				continue
 			}
@@ -998,6 +1026,8 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 					results[i].output = "execution denied by user"
 					results[i].status = "denied"
 					results[i].preChecked = true
+					executed[dk] = cachedResult{output: "execution denied by user", status: "denied"}
+					sendToolOutput(tc, "execution denied by user", "denied", nil, false, "", "")
 					continue
 				}
 			}
@@ -1058,6 +1088,7 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 					} else {
 						results[rIdx].output = string(mcpResult)
 					}
+				sendToolOutput(pc.tc, results[rIdx].output, results[rIdx].status, nil, false, "", "")
 					return
 				}
 
@@ -1069,6 +1100,7 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 					if execErr != nil {
 						results[rIdx].output = execErr.Error()
 						results[rIdx].status = "error"
+						sendToolOutput(pc.tc, execErr.Error(), "error", nil, false, "", "")
 						return
 					}
 					var streamOutput strings.Builder
@@ -1120,6 +1152,7 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 						toolContent = "(subtask completed with no output)"
 					}
 					results[rIdx].output = toolContent
+					sendToolOutput(pc.tc, toolContent, "done", nil, false, "", "")
 					return
 				}
 
@@ -1127,6 +1160,7 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 				if err != nil {
 					results[rIdx].output = err.Error()
 					results[rIdx].status = "error"
+					sendToolOutput(pc.tc, err.Error(), "error", nil, false, "", "")
 					return
 				}
 				results[rIdx].output = execResult.Content
@@ -1140,39 +1174,19 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 				results[rIdx].conflict = execResult.Conflict
 				results[rIdx].diskContent = execResult.DiskContent
 				results[rIdx].aiContent = execResult.AiContent
+				sendToolOutput(pc.tc, results[rIdx].output, results[rIdx].status,
+					execResult.DiffLines, execResult.Conflict, execResult.DiskContent, execResult.AiContent)
 			}(ri, p)
 		}
 
 		wg.Wait()
 
+		// Append tool results to conversation in original tool call order
 		for _, res := range results {
 			tc := res.tc
-			dk := dedupKey{name: tc.Function.Name, args: tc.Function.Arguments}
-
 			if !res.preChecked {
+				dk := dedupKey{name: tc.Function.Name, args: tc.Function.Arguments}
 				executed[dk] = cachedResult{output: res.output, status: res.status}
-			}
-
-			content := res.output
-			if res.status == "error" {
-				content = "error: " + content
-			} else if res.status == "denied" {
-				content = "execution denied by user"
-			}
-
-			ch <- Event{
-				Type: EventToolOutput,
-				Tool: &ToolEvent{
-					ID:          tc.ID,
-					Name:        tc.Function.Name,
-					Input:       tc.Function.Arguments,
-					Output:      content,
-					Status:      res.status,
-					DiffLines:   res.diffLines,
-					Conflict:    res.conflict,
-					DiskContent: res.diskContent,
-					AiContent:   res.aiContent,
-				},
 			}
 
 			convContent := res.output
