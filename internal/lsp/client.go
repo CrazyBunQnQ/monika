@@ -27,13 +27,6 @@ func init() {
 			lspLogFile = f
 		}
 	}
-	// fallback: try current directory
-	if lspLogFile == nil {
-		f, err := os.OpenFile("lsp_debug.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-		if err == nil {
-			lspLogFile = f
-		}
-	}
 }
 
 func lspLog(format string, args ...any) {

@@ -747,6 +747,9 @@ func (s *KBStore) rootFor(scope string) string {
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.projectPath == "" {
+		return s.globalPath
+	}
 	return s.projectPath
 }
 
