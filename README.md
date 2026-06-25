@@ -81,6 +81,9 @@ The agent operates on your project directly through a rich set of built-in tools
 | **Search** | `glob`, `grep` | Discover files by pattern and search content by regex |
 | **Shell** | `bash`, `background_task` | Run commands synchronously or as trackable background tasks |
 | **Code intel** | `lsp`, `lsp_list` | Diagnostics, go-to-definition, references, rename, hover, completions ([docs](docs/lsp.md)) |
+| **Database** | `db_schema`, `db_query` | Browse tables, columns, foreign keys; run read-only SQL/Redis queries |
+| **Memory** | `memory_search`, `memory_read`, `memory_write`, `memory_update` | Persistent knowledge base — recall lessons and topics across sessions |
+| **Debugging** | `debug` | Launch/attach, breakpoints, step, inspect variables, evaluate expressions |
 | **Collaboration** | `ask_user`, `spawn_agent` | Ask clarifying questions, fan out parallel sub-agents |
 | **Task tracking** | `task_create`, `task_append`, `task_update`, `task_list` | Structured todo lists for multi-step work |
 | **Extensibility** | `skill`, `install_skill`, `mcp_search`, `install_mcp_server`, … | Discover and install Skills & MCP servers at runtime |
@@ -95,7 +98,7 @@ When the AI proposes a file edit, it lands in an editable preview panel. If the 
 
 ### Multi-Tab Sessions
 
-Up to 8 concurrent session tabs, each with independent context. Sessions persist as JSON and restore on the next launch.
+Concurrent session tabs, each with independent context. Sessions persist as JSON and restore on the next launch.
 
 ### Multi-Panel Workspace
 
@@ -109,14 +112,26 @@ A dedicated input mode for running shell commands inline, with ANSI rendering, t
 
 Change tracking, diffs, staging, commit and push, commit history, local/remote branch listing, branch create/switch, and worktree-aware branch management.
 
+### Database Integration
+
+Auto-discovers databases from `.env` files and `docker-compose.yml` at project open. Five native drivers (PostgreSQL, MySQL, SQLite, Redis, MongoDB) with a bridge pattern for drivers lacking pure-Go implementations. The agent can browse schema (tables, columns, foreign keys) and run read-only queries (SELECT, SHOW, EXPLAIN) — enforced at tool, driver, and permission layers.
+
+### Knowledge Base & Memory
+
+A persistent, self-evolving knowledge base that survives across sessions. Stores lessons (bugs and root causes), topics (architecture and patterns), and raw notes. Full-text search (FTS5) lets the agent recall past experience when tackling similar problems.
+
 ### Skills & MCP
 
 - **Skills** — Supports the [SKILL.md](https://github.com) standard. Auto-discovers and loads reusable agent workflows from GitHub repos.
 - **MCP** — [Model Context Protocol](https://modelcontextprotocol.io) support extends the agent with databases, browsers, web search, and more via stdio JSON-RPC.
 
+### Debug Adapter Protocol
+
+Launch and debug programs with DAP support — set breakpoints, inspect variables, step through code, and evaluate expressions, all from the built-in debugger UI.
+
 ### Concurrent Sub-Agents
 
-A built-in TaskRunner dispatches up to 4 concurrent child agents (semaphore-gated) — ideal for large-scale code search and multi-file refactors.
+A built-in TaskRunner dispatches child agents in parallel goroutines — ideal for large-scale code search and multi-file refactors.
 
 ### Permission Safety
 
@@ -167,7 +182,7 @@ go build -o monika .
 
 ### Configure Provider
 
-First launch guides you through setup, or create `~/.monika/config.yaml` manually:
+Launch Monika and open **Settings → Providers** to configure your model provider interactively. Alternatively, create `~/.monika/config.yaml` manually:
 
 ```yaml
 model_provider: deepseek
@@ -177,70 +192,22 @@ model_providers:
     name: deepseek
     base_url: https://api.deepseek.com
     api_key: sk-xxx
+    wire_api: openai
 ```
 
 ---
 
-## Features
-
-### Multi-Panel GUI
-
-Session list, chat area, file tree with CodeMirror 6 editor, console, and status bar — all in one window. Three layout modes (chat, split, files-only) with a draggable divider.
-
-### Multi-Tab Sessions
-
-Up to 8 concurrent session tabs with independent message caching. Sessions are automatically persisted as JSON and restored on next startup.
-
-### Streaming Agent Loop
-
-Real-time text deltas, tool execution cards, and token usage tracking. The agent handles context compaction automatically — when the conversation exceeds the model limit, it summarizes older messages with a separate LLM call.
-
-### Tool Calling
-
-The agent can manipulate your project directly:
-
-| Tool | Description |
-|------|-------------|
-| `file_read` | Read files with precision (offset/limit) |
-| `file_write` | Create or overwrite files |
-| `file_edit` | Exact string replacement |
-| `file_list` | List directory contents |
-| `glob` | Glob pattern file discovery |
-| `grep` | Regex search across files |
-| `bash` | Execute shell commands (cross-platform) |
-| `lsp` | Language Server Protocol — diagnostics, go-to-definition, references, rename, etc. ([docs](docs/lsp.md)) |
-| `db_schema` | Browse database schema (tables, columns, foreign keys) |
-| `db_query` | Execute read-only SQL/Redis queries (SELECT, SHOW, EXPLAIN) |
-
-### Git Integration
-
-File change tracking, diff viewing, staging, commit and push, commit history, local/remote branch listing, branch creation and switching, worktree-aware branch management.
-
-### Skills & MCP
-
-- **Skills** — Supports the [SKILL.md](https://github.com) standard, auto-discovers and loads skills from GitHub repos
-- **MCP** — Model Context Protocol, extends agent capabilities (databases, browser, web search, etc.) via stdio JSON-RPC transport
-
-### Concurrent Sub-Agents
-
-Built-in TaskRunner dispatches up to 4 concurrent child agents via semaphore, ideal for large-scale code search and multi-file modification tasks.
-
-### Permission Safety
-
-Every tool call goes through a complete permission pipeline — hard rules and security model double validation to prevent unauthorized operations.
-
 ## Supported Providers
 
-Any OpenAI-compatible endpoint works out of the box:
+Any OpenAI-compatible endpoint works out of the box — just set `wire_api: openai` and point `base_url` to the API:
 
-| Provider | Engine ID | Default Model |
-|----------|-----------|---------------|
-| DeepSeek | `deepseek` | `deepseek-chat` |
-| OpenAI | `openai` | `gpt-4o` |
-| Anthropic Claude | via OpenAI-compatible API | `claude-sonnet-4-5` |
-| Google Gemini | via OpenAI-compatible API | `gemini-2.0-flash` |
-| Local (Ollama, LM Studio, …) | any OpenAI-compatible endpoint | — |
-| Custom | any OpenAI-compatible endpoint | — |
+| Provider | `base_url` | Default Model |
+|----------|------------|---------------|
+| DeepSeek | `https://api.deepseek.com` | `deepseek-chat` |
+| OpenAI | `https://api.openai.com` | `gpt-4o` |
+| Anthropic Claude | via OpenAI-compatible endpoint | `claude-sonnet-4-5` |
+| Google Gemini | via OpenAI-compatible endpoint | `gemini-2.0-flash` |
+| Local (Ollama, LM Studio, …) | `http://localhost:xxxx` | — |
 
 ---
 
@@ -256,15 +223,21 @@ monika/
 │       └── components/    # UI components
 ├── internal/
 │   ├── agent/             # Agent loop, streaming, compaction, sub-agent dispatch
-│   ├── api/               # Wails services: App, SessionManager, FileService, EventBus
-│   ├── bootstrap/         # Provider initialization
+│   ├── api/               # Wails services: App, SessionManager, FileService, EventBus, DBManager
+│   ├── bootstrap/         # Provider initialization from config
 │   ├── config/            # YAML/JSON config loader (~/.monika/ + .monika/)
+│   ├── dap/               # Debug Adapter Protocol client
 │   ├── dbbridge/          # Bridge scripts for Node.js/Python database drivers
 │   ├── dbdiscovery/       # Database auto-discovery from .env, docker-compose
 │   ├── engines/           # Provider adapters + Skill + MCP engines
 │   ├── lsp/               # Language Server Protocol client + LSP tool
-│   ├── permission/        # Tool permission pipeline
-│   └── tool/              # Tool interface + registry + builtin tools
+│   ├── memory/            # Persistent knowledge base (lessons, topics, raw)
+│   ├── permission/        # Tool permission pipeline (hard rules + security model)
+│   ├── platform/          # Platform-specific helpers (notifications, tray, etc.)
+│   ├── prompt/            # System prompt construction
+│   ├── tool/              # Tool interface + registry + builtin tools
+│   ├── update/            # Self-update logic
+│   └── version/           # Version info (set via ldflags at build time)
 └── pkg/
     ├── dbdriver/          # Database driver interface + 5 native drivers (PostgreSQL, MySQL, SQLite, Redis, MongoDB)
     ├── engine/            # Public Engine interface + registry

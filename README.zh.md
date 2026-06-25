@@ -81,6 +81,9 @@ Agent 通过丰富的内置工具直接操作你的项目：
 | **搜索** | `glob`, `grep` | 按模式发现文件、按正则搜索内容 |
 | **Shell** | `bash`, `background_task` | 同步执行命令或作为可追踪的后台任务 |
 | **代码智能** | `lsp`, `lsp_list` | 诊断、跳转定义、引用、重命名、悬停、补全 ([文档](docs/lsp.zh.md)) |
+| **数据库** | `db_schema`, `db_query` | 浏览表、列、外键；执行只读 SQL/Redis 查询 |
+| **记忆** | `memory_search`, `memory_read`, `memory_write`, `memory_update` | 持久化知识库——跨会话回忆教训和主题 |
+| **调试** | `debug` | 启动/附加、断点、单步、检查变量、计算表达式 |
 | **协作** | `ask_user`, `spawn_agent` | 提问澄清、扇出并行子 Agent |
 | **任务跟踪** | `task_create`, `task_append`, `task_update`, `task_list` | 多步骤工作的结构化待办列表 |
 | **可扩展** | `skill`, `install_skill`, `mcp_search`, `install_mcp_server`, … | 运行时发现和安装 Skills 与 MCP 服务器 |
@@ -95,7 +98,7 @@ Agent 通过丰富的内置工具直接操作你的项目：
 
 ### 多标签会话
 
-最多 8 个并发会话标签页，每个拥有独立上下文。会话以 JSON 持久化，下次启动时恢复。
+并发会话标签页，每个拥有独立上下文。会话以 JSON 持久化，下次启动时恢复。
 
 ### 多面板工作区
 
@@ -109,14 +112,26 @@ Agent 通过丰富的内置工具直接操作你的项目：
 
 文件变更追踪、Diff 查看、暂存、提交与推送、提交历史、本地/远程分支列表、创建和切换分支、Worktree 感知的分支管理。
 
+### 数据库集成
+
+打开项目时自动从 `.env` 文件和 `docker-compose.yml` 发现数据库连接。支持 5 种原生驱动（PostgreSQL、MySQL、SQLite、Redis、MongoDB），对缺少纯 Go 实现的驱动通过桥接模式调用 Node.js/Python。Agent 可以浏览数据库架构（表、列、外键）并执行只读查询（SELECT、SHOW、EXPLAIN）——在工具层、驱动层和权限层三层强制只读。
+
+### 知识库与记忆
+
+持久化、自我演进的知识库，跨会话存活。存储教训（bug 和根因）、主题（架构和模式）以及原始笔记。全文搜索（FTS5）让 Agent 在遇到类似问题时回忆过往经验。
+
 ### Skills & MCP
 
 - **Skills** — 支持 [SKILL.md](https://github.com) 标准。从 GitHub 仓库自动发现和加载可复用的 Agent 工作流。
 - **MCP** — [Model Context Protocol](https://modelcontextprotocol.io) 支持，通过 stdio JSON-RPC 扩展 Agent 能力（数据库、浏览器、Web 搜索等）。
 
+### 调试器
+
+通过 DAP（Debug Adapter Protocol）支持启动和调试程序——设置断点、检查变量、单步执行、计算表达式，全部在内置调试器 UI 中完成。
+
 ### 子 Agent 并发
 
-内置 TaskRunner 通过信号量调度最多 4 个并发子 Agent——适合大规模代码搜索和多文件重构。
+内置 TaskRunner 以并行 goroutine 调度子 Agent——适合大规模代码搜索和多文件重构。
 
 ### 权限安全
 
@@ -167,7 +182,7 @@ go build -o monika .
 
 ### 配置模型提供商
 
-首次启动会引导配置，或手动创建 `~/.monika/config.yaml`：
+启动 Monika，打开 **设置 → 模型提供商** 交互式配置。也可以手动创建 `~/.monika/config.yaml`：
 
 ```yaml
 model_provider: deepseek
@@ -177,70 +192,22 @@ model_providers:
     name: deepseek
     base_url: https://api.deepseek.com
     api_key: sk-xxx
+    wire_api: openai
 ```
 
 ---
 
-## 功能一览
-
-### 多面板 GUI
-
-会话列表、聊天区域、带 CodeMirror 6 的文件树编辑器、控制台、状态栏——一个窗口搞定全部。支持聊天、分屏（聊天 + 文件）、纯文件三种布局模式，可拖拽分隔条自由调节。
-
-### 多标签会话
-
-最多 8 个并发会话标签页，每个标签独立消息缓存。会话自动持久化为 JSON 文件，下次打开即恢复。
-
-### 流式 Agent 循环
-
-实时文本流、工具调用卡片、Token 用量追踪。Agent 自动处理上下文压缩，当对话超出模型限制时用单独的 LLM 调用摘要历史消息。
-
-### 工具调用
-
-Agent 可以直接操作你的项目：
-
-| 工具 | 功能 |
-|------|------|
-| `file_read` | 读取文件（带 offset/limit 精确读取） |
-| `file_write` | 创建或覆盖文件 |
-| `file_edit` | 精确字符串替换 |
-| `file_list` | 列出目录内容 |
-| `glob` | Glob 模式文件查找 |
-| `grep` | 正则搜索文件内容 |
-| `bash` | 执行 Shell 命令（跨平台） |
-| `lsp` | Language Server Protocol — 诊断、跳转定义、查找引用、重命名等 ([文档](docs/lsp.zh.md)) |
-| `db_schema` | 浏览数据库架构（表、列、外键） |
-| `db_query` | 执行只读 SQL/Redis 查询（SELECT, SHOW, EXPLAIN） |
-
-### Git 集成
-
-文件变更追踪、Diff 查看、暂存、提交与推送、提交历史、本地/远程分支列表、创建和切换分支、Worktree 感知的分支管理。
-
-### Skills & MCP
-
-- **Skills** — 支持 [SKILL.md](https://github.com) 标准，从 GitHub 仓库自动发现和加载技能
-- **MCP** — Model Context Protocol，通过 stdio JSON-RPC 传输协议扩展 Agent 能力（数据库、浏览器、Web 搜索等）
-
-### 子 Agent 并发
-
-内置 TaskRunner 通过信号量调度最多 4 个并发子 Agent，适合大规模代码搜索、多文件修改等复杂任务。
-
-### 权限安全
-
-工具调用经过完整的权限管线检查——硬性规则 + 安全模型双重验证，确保 Agent 不会越权操作。
-
 ## 支持的模型提供商
 
-任何兼容 OpenAI API 的端点都能开箱即用：
+任何兼容 OpenAI API 的端点都能开箱即用——只需设置 `wire_api: openai` 并将 `base_url` 指向对应 API：
 
-| 提供商 | Engine ID | 默认模型 |
-|--------|-----------|----------|
-| DeepSeek | `deepseek` | `deepseek-chat` |
-| OpenAI | `openai` | `gpt-4o` |
-| Anthropic Claude | via OpenAI 兼容 API | `claude-sonnet-4-5` |
-| Google Gemini | via OpenAI 兼容 API | `gemini-2.0-flash` |
-| 本地 (Ollama, LM Studio, …) | 任意 OpenAI 兼容端点 | — |
-| 自定义 | 任意 OpenAI 兼容端点 | — |
+| 提供商 | `base_url` | 默认模型 |
+|--------|------------|----------|
+| DeepSeek | `https://api.deepseek.com` | `deepseek-chat` |
+| OpenAI | `https://api.openai.com` | `gpt-4o` |
+| Anthropic Claude | via OpenAI 兼容端点 | `claude-sonnet-4-5` |
+| Google Gemini | via OpenAI 兼容端点 | `gemini-2.0-flash` |
+| 本地 (Ollama, LM Studio, …) | `http://localhost:xxxx` | — |
 
 ---
 
@@ -256,15 +223,21 @@ monika/
 │       └── components/    # UI 组件
 ├── internal/
 │   ├── agent/             # Agent 循环、流式传输、上下文压缩、子 Agent 调度
-│   ├── api/               # Wails 服务: App, SessionManager, FileService, EventBus
-│   ├── bootstrap/         # Provider 初始化
+│   ├── api/               # Wails 服务: App, SessionManager, FileService, EventBus, DBManager
+│   ├── bootstrap/         # 从配置初始化 Provider
 │   ├── config/            # YAML/JSON 配置加载 (~/.monika/ + .monika/)
+│   ├── dap/               # Debug Adapter Protocol 客户端
 │   ├── dbbridge/          # Node.js/Python 数据库驱动桥接脚本
 │   ├── dbdiscovery/       # 从 .env、docker-compose 自动发现数据库
 │   ├── engines/           # Provider 适配器 + Skill + MCP 引擎
 │   ├── lsp/               # Language Server Protocol 客户端 + LSP 工具
-│   ├── permission/        # 工具权限管线
-│   └── tool/              # 工具接口 + 注册表 + 内置工具
+│   ├── memory/            # 持久化知识库 (lessons, topics, raw)
+│   ├── permission/        # 工具权限管线 (硬性规则 + 安全模型)
+│   ├── platform/          # 平台相关工具 (通知、托盘等)
+│   ├── prompt/            # System Prompt 构建
+│   ├── tool/              # 工具接口 + 注册表 + 内置工具
+│   ├── update/            # 自更新逻辑
+│   └── version/           # 版本信息 (构建时通过 ldflags 注入)
 └── pkg/
     ├── dbdriver/          # 数据库驱动接口 + 5 个原生驱动 (PostgreSQL, MySQL, SQLite, Redis, MongoDB)
     ├── engine/            # 公共 Engine 接口 + 注册表
