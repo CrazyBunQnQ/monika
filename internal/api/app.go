@@ -146,10 +146,6 @@ func (a *App) AppendLoopOption(opt agent2.LoopOption) {
 	a.loopOpts = append(a.loopOpts, opt)
 }
 
-func (a *App) SetDBManager(m *DBManager) {
-	a.dbMgr = m
-}
-
 // SaveChildSession stores a completed child agent session.
 func (a *App) SaveChildSession(sessionID string, child *agent2.ChildSession) {
 	a.mu.Lock()
