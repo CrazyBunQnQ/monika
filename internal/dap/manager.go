@@ -37,6 +37,13 @@ func NewDapManager(projectDir string) *DapManager {
 	}
 }
 
+// SetProjectDir updates the default project directory (used as cwd fallback).
+func (m *DapManager) SetProjectDir(dir string) {
+	m.mu.Lock()
+	m.projectDir = dir
+	m.mu.Unlock()
+}
+
 // ---------------------------------------------------------------------------
 // Callback setters
 // ---------------------------------------------------------------------------

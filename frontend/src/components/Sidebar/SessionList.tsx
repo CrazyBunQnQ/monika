@@ -250,7 +250,8 @@ function SessionList(props: IDockviewPanelProps) {
                 <div className="flex-1" />
                 <button
                     onClick={handleNewSession}
-                    className="w-5 h-5 flex items-center justify-center rounded text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors"
+                    disabled={!projectPath}
+                    className="w-5 h-5 flex items-center justify-center rounded text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-[var(--text-dim)]"
                     aria-label="New session"
                     id="new-session-btn"
                 >

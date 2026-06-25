@@ -56,7 +56,6 @@ type App struct {
 	providers         map[string]engine2.ProviderEngine
 	model             string
 	registry          *tool2.ToolRegistry
-	startupCwd        string
 	taskStoreAccessor TaskStoreAccessor
 
 	mu       sync.RWMutex
@@ -102,14 +101,13 @@ type App struct {
 	eventSeq atomic.Int64
 }
 
-func NewApp(home, cwd string, cfg config2.Config, providers map[string]engine2.ProviderEngine, model string, registry *tool2.ToolRegistry, loopOpts []agent2.LoopOption, taskStoreAccessor TaskStoreAccessor, agentRegistry *agent2.AgentRegistry, taskRunner *agent2.TaskRunner, mcpRegistry *engine2.MCPRegistry, kbStore *memory.KBStore, rawSystemPrompt string) *App {
-	return &App{
+func NewApp(home, initialProject string, cfg config2.Config, providers map[string]engine2.ProviderEngine, model string, registry *tool2.ToolRegistry, loopOpts []agent2.LoopOption, taskStoreAccessor TaskStoreAccessor, agentRegistry *agent2.AgentRegistry, taskRunner *agent2.TaskRunner, mcpRegistry *engine2.MCPRegistry, kbStore *memory.KBStore, rawSystemPrompt string) *App {
+	a := &App{
 		home:              home,
 		cfg:               cfg,
 		providers:         providers,
 		model:             model,
 		registry:          registry,
-		startupCwd:        cwd,
 		taskStoreAccessor: taskStoreAccessor,
 		sessions:          make(map[string]*SessionManager),
 		projects:          make(map[string]*ProjectInfo),
@@ -130,6 +128,10 @@ func NewApp(home, cwd string, cfg config2.Config, providers map[string]engine2.P
 		headDebounce:      make(map[string]func()),
 		refsDebounce:      make(map[string]func()),
 	}
+	if initialProject != "" {
+		a.OpenProject(initialProject)
+	}
+	return a
 }
 
 // AppendLoopOption appends a loop option to the internally stored slice.
@@ -287,15 +289,10 @@ func (a *App) GetCurrentProject() *ProjectInfo {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
-	// Prefer the last opened project over startup CWD.
 	if lastPath := a.loadLastProjectPath(); lastPath != "" {
 		if info, ok := a.projects[lastPath]; ok {
 			return info
 		}
-	}
-
-	if info, ok := a.projects[a.startupCwd]; ok {
-		return info
 	}
 	return nil
 }
@@ -410,8 +407,22 @@ func (a *App) OpenProject(path string) (*ProjectInfo, error) {
 	builtin.WireLSPHooks(a.registry)
 	a.saveLastProjectPath(path)
 	a.watchProjectHead(path)
+	a.onProjectSwitch(path)
 
 	return info, nil
+}
+
+// onProjectSwitch propagates the new project path to subsystems that were
+// previously bound to cwd at startup: permission pipeline, DAP manager.
+func (a *App) onProjectSwitch(path string) {
+	if a.pipeline != nil {
+		a.pipeline.SetProject(a.home, path)
+		rules, _ := permission.LoadRules(a.home, path)
+		a.pipeline.SetHardRules(permission.NewHardRuleEngine(rules, path))
+	}
+	if a.dapManager != nil {
+		a.dapManager.SetProjectDir(path)
+	}
 }
 
 func (a *App) ListSessions(projectPath string) ([]SessionInfo, error) {
@@ -420,6 +431,9 @@ func (a *App) ListSessions(projectPath string) ([]SessionInfo, error) {
 }
 
 func (a *App) NewSession(projectPath, providerID, model string) (*SessionInfo, error) {
+	if projectPath == "" {
+		return nil, fmt.Errorf("no project open; open a project first")
+	}
 	sm := a.getSessionManager(projectPath)
 	s, err := sm.New(model, providerID)
 	if err != nil {
@@ -3298,7 +3312,7 @@ func (a *App) projectPath() string {
 	if cp := a.GetCurrentProject(); cp != nil {
 		return cp.Path
 	}
-	return a.startupCwd
+	return ""
 }
 
 // GetProjectPath returns the current project directory (exported for use by tools).

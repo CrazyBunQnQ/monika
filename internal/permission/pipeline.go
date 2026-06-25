@@ -71,6 +71,11 @@ func (p *Pipeline) SetMode(mode Mode) {
 	p.mode = mode
 }
 
+// SetHardRules replaces the hard rule engine (used when switching projects).
+func (p *Pipeline) SetHardRules(engine *HardRuleEngine) {
+	p.rules = engine
+}
+
 // SetProject configures project-specific paths for audit logging and rule persistence.
 func (p *Pipeline) SetProject(homeDir, projectDir string) {
 	p.homeDir = homeDir

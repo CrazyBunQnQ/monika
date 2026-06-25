@@ -19,7 +19,6 @@ import (
 	"monika/internal/bootstrap"
 	config2 "monika/internal/config"
 	"monika/internal/dap"
-	"monika/internal/dbdiscovery"
 	"monika/internal/memory"
 	"monika/internal/permission"
 	"monika/internal/prompt"
@@ -60,13 +59,6 @@ func main() {
 		fmt.Fprintln(os.Stderr, "cannot determine home directory:", err)
 		os.Exit(1)
 	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "cannot determine working directory:", err)
-		os.Exit(1)
-	}
-	workspaceRoot := memory.ResolveWorkspaceRoot(cwd)
-	cwd = workspaceRoot
 
 	// Refresh models.dev catalog (background, non-blocking).
 	go func() {
@@ -76,7 +68,7 @@ func main() {
 	}()
 
 	ctx := context.Background()
-	pr, err := bootstrap.InitProvider(ctx, home, "")
+	pr, err := bootstrap.InitProvider(ctx, home, "", "")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -91,24 +83,15 @@ func main() {
 	// Create a standalone tsBridge for tree-sitter IPC (uses application.Get(), no app ref needed).
 	tsBridge := api.NewTSBridge()
 	tsQueryFn := tsBridge.QueryFunc()
-	builtin.RegisterDefaults(registry, cwd, home, builtin.TSQueryFunc(tsQueryFn))
-	builtin.RegisterLSP(registry, cwd, pr.Config.LSP.Servers, pr.Config.Formatters)
+	builtin.RegisterDefaults(registry, "", home, builtin.TSQueryFunc(tsQueryFn))
+	builtin.RegisterLSP(registry, "", pr.Config.LSP.Servers, pr.Config.Formatters)
 	builtin.WireLSPHooks(registry)
 
 	taskStore := builtin.NewTaskStore(nil)
 	builtin.RegisterTasks(registry, taskStore)
 
 	var dbMgr *api.DBManager
-	cache, err := dbdiscovery.LoadCache(workspaceRoot)
-	if err != nil {
-		cache, _ = dbdiscovery.Scan(workspaceRoot)
-	}
-	if cache != nil && len(cache.Connections) > 0 {
-		dbMgr = api.NewDBManager(workspaceRoot)
-		dbMgr.Init(cache)
-		dbMgr.StartSchemaBackground()
-		builtin.RegisterDatabase(registry, dbMgr)
-	}
+	// Database discovery happens on project open, not at startup.
 
 	// Create MCP registry and connect servers asynchronously
 	mcpRegistry := engine2.NewMCPRegistry()
@@ -159,7 +142,7 @@ func main() {
 		if appGetProjectPath != nil {
 			return appGetProjectPath()
 		}
-		return cwd
+		return ""
 	}
 	if skEngine != nil {
 		builtin.RegisterSkillTool(registry, skEngine, home, getCwd, &pr.Config)
@@ -205,7 +188,7 @@ func main() {
 	}
 	shellName += " (mvdan/sh)"
 	systemParts := []string{
-		fmt.Sprintf("OS Version: %s\nWorking directory: {{WorkingDirectory}}\nShell: %s", runtime.GOOS, shellName),
+		fmt.Sprintf("OS Version: %s\nShell: %s", runtime.GOOS, shellName),
 		ps.Identity,
 		`## Knowledge Base (Memory)
 
@@ -225,7 +208,7 @@ knowledge (preferences/constraints/persistent facts).`,
 		ps.SafetyBoundaries,
 		ps.Remember,
 	}
-	if p := loadSystemPrompt(cwd); p != "" {
+	if p := loadSystemPrompt(""); p != "" {
 		wrapped := `<project_rules>
 The content below is your PROJECT RULES from AGENTS.md. These rules are NON-NEGOTIABLE — they represent the project's architectural decisions, coding conventions, and hard constraints. You MUST follow them as strictly as the rules above. Violating project rules is as serious as violating core safety boundaries.
 
@@ -262,7 +245,7 @@ changes as you install or configure them. Always search before assuming:
 		}
 	}
 	loopOpts := []agent.LoopOption{
-		agent.WithProjectDir(cwd),
+		agent.WithProjectDir(""),
 		agent.WithModel(pr.Model),
 		agent.WithHomeDir(home),
 	}
@@ -294,10 +277,10 @@ changes as you install or configure them. Always search before assuming:
 	}
 
 	// Wire permission pipeline
-	rules, _ := permission.LoadRules(home, cwd)
-	hardRuleEngine := permission.NewHardRuleEngine(rules, cwd)
+	rules, _ := permission.LoadRules(home, "")
+	hardRuleEngine := permission.NewHardRuleEngine(rules, "")
 	pipeline := permission.NewPipeline(permission.Auto, hardRuleEngine, nil)
-	pipeline.SetProject(home, cwd)
+	pipeline.SetProject(home, "")
 	loopOpts = append(loopOpts, agent.WithPermissionPipeline(pipeline))
 
 	// MCP registry
@@ -385,7 +368,7 @@ changes as you install or configure them. Always search before assuming:
 		taskStoreAccessor = accessor
 	}
 
-	appService = api.NewApp(home, cwd, pr.Config, pr.Providers, pr.Model, registry, loopOpts, taskStoreAccessor, agentRegistry, taskRunner, mcpRegistry, kbStore, systemPrompt)
+	appService = api.NewApp(home, "", pr.Config, pr.Providers, pr.Model, registry, loopOpts, taskStoreAccessor, agentRegistry, taskRunner, mcpRegistry, kbStore, systemPrompt)
 
 	appService.InitTSBridge(tsBridge)
 	// Background memory maintenance: decay (archive/delete stale) + review (conflict/upgrade detection).
@@ -455,7 +438,7 @@ changes as you install or configure them. Always search before assuming:
 	}
 
 	// Wire DAP debugger
-	dapManager := dap.NewDapManager(cwd)
+	dapManager := dap.NewDapManager("")
 	appService.SetDapManager(dapManager)
 	builtin.RegisterDebug(registry, dapManager)
 

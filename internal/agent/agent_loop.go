@@ -413,6 +413,13 @@ func NewLoop(provider engine.ProviderEngine, tools *tool.ToolRegistry, opts ...L
 func (a *AgentLoop) buildEntryPrefix(userMessage string) string {
 	var b strings.Builder
 
+	// workspace env — current project directory, injected per message so it
+	// stays in sync with project switches without re-baking the system prompt.
+	if a.projectDir != "" {
+		normalized := strings.ReplaceAll(a.projectDir, "\\", "/")
+		b.WriteString("<env>\nWorking directory: " + normalized + "\n</env>\n\n")
+	}
+
 	// database-schema-available — one-shot hint when this project has databases.
 	if a.dbSchemaNote != "" {
 		b.WriteString("<database-schema-available>\n")
@@ -1182,7 +1189,6 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 			})
 		}
 
-
 		ch <- Event{Type: EventTurnStart}
 	}
 }
@@ -1273,7 +1279,7 @@ func (a *AgentLoop) buildMessages(conv *Conversation) []engine.ChatMessage {
 }
 
 func (a *AgentLoop) buildMaxStepsPrompt(conv *Conversation) []engine.ChatMessage {
-	sysPrompt := a.systemPrompt // already had {{WorkingDirectory}} replaced at startup
+	sysPrompt := a.systemPrompt
 
 	maxStepsPrompt := `CRITICAL - MAXIMUM STEPS REACHED
 
