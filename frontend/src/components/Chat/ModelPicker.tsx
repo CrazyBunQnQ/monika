@@ -268,7 +268,7 @@ function ModelPicker() {
                                     key={`${item.inFavoriteGroup ? 'fav' : 'm'}-${item.provider.id}-${m.ID}`}
                                     onClick={() => handleSelect(item.provider.id, m.ID)}
                                     onMouseEnter={() => setFocusIdx(idx)}
-                                    className="text-[11px] w-full text-left px-2 py-1 rounded cursor-pointer flex items-center justify-between fav-row"
+                                    className="text-[11px] w-full text-left px-2 py-1 rounded cursor-pointer flex items-center fav-row"
                                     style={{
                                         background:
                                             idx === focusIdx
@@ -281,37 +281,40 @@ function ModelPicker() {
                                         fontFamily: 'inherit',
                                     }}
                                 >
-                                    <span>
+                                    <span
+                                        onClick={(e) => {
+                                            e.preventDefault()
+                                            e.stopPropagation()
+                                            toggleFavoriteModel(item.provider.id, m.ID)
+                                        }}
+                                        className="fav-star"
+                                        style={{
+                                            padding: '2px',
+                                            cursor: 'pointer',
+                                            color: item.isFavorite ? 'var(--accent)' : 'var(--text-dim)',
+                                            opacity: item.isFavorite ? 1 : 0,
+                                            transition: 'opacity 0.15s',
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            flexShrink: 0,
+                                        }}
+                                        title={item.isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+                                    >
+                                        <IconStar filled={item.isFavorite} size={14} />
+                                    </span>
+                                    <span style={{ marginLeft: 2 }}>
                                         {m.DisplayName}
                                         {item.inFavoriteGroup && (
-                                            <span className="text-[9px]" style={{ color: 'var(--text-dim)', marginLeft: 4 }}>
-                                                ({item.provider.display_name})
+                                            <span className="text-[9px] font-semibold" style={{ color: 'var(--text-dim)', marginLeft: 4 }}>
+                                                {item.provider.id.slice(0, 2).toUpperCase()}
                                             </span>
                                         )}
                                     </span>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                                        <span
-                                            onClick={(e) => {
-                                                e.preventDefault()
-                                                e.stopPropagation()
-                                                toggleFavoriteModel(item.provider.id, m.ID)
-                                            }}
-                                            className="fav-star"
-                                            style={{
-                                                padding: '4px',
-                                                cursor: 'pointer',
-                                                color: item.isFavorite ? 'var(--accent)' : 'var(--text-dim)',
-                                                opacity: item.isFavorite ? 1 : 0,
-                                                transition: 'opacity 0.15s',
-                                            }}
-                                            title={item.isFavorite ? 'Remove from favorites' : 'Add to favorites'}
-                                        >
-                                            <IconStar filled={item.isFavorite} size={14} />
-                                        </span>
-                                        {isSelected && (
+                                    {isSelected && (
+                                        <span style={{ marginLeft: 'auto', flexShrink: 0, display: 'inline-flex', alignItems: 'center' }}>
                                             <IconCheck size={12} />
-                                        )}
-                                    </div>
+                                        </span>
+                                    )}
                                 </button>
                             )
                         })
