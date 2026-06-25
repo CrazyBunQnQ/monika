@@ -260,6 +260,7 @@ type AgentLoop struct {
 
 	sessionID         string
 	systemPrompt      string
+	projectRules      string // AGENTS.md rules, appended to systemPrompt at call time
 	pipeline          *permission.Pipeline
 	projectDir        string
 	homeDir           string
@@ -297,12 +298,17 @@ func WithPermissionPipeline(p *permission.Pipeline) LoopOption {
 	}
 }
 
+func WithProjectRules(rules string) LoopOption {
+	return func(a *AgentLoop) {
+		a.projectRules = rules
+	}
+}
+
 func WithProjectDir(dir string) LoopOption {
 	return func(a *AgentLoop) {
 		a.projectDir = dir
 	}
 }
-
 func WithHomeDir(dir string) LoopOption {
 	return func(a *AgentLoop) { a.homeDir = dir }
 }
@@ -404,6 +410,17 @@ func NewLoop(provider engine.ProviderEngine, tools *tool.ToolRegistry, opts ...L
 		opt(a)
 	}
 	return a
+}
+
+// effectiveSystemPrompt returns the system prompt with project rules appended.
+func (a *AgentLoop) effectiveSystemPrompt() string {
+	if a.projectRules == "" {
+		return a.systemPrompt
+	}
+	if a.systemPrompt == "" {
+		return a.projectRules
+	}
+	return a.systemPrompt + "\n\n" + a.projectRules
 }
 
 // buildEntryPrefix assembles dynamic content prepended to a user message once,
@@ -1088,7 +1105,7 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 					} else {
 						results[rIdx].output = string(mcpResult)
 					}
-				sendToolOutput(pc.tc, results[rIdx].output, results[rIdx].status, nil, false, "", "")
+					sendToolOutput(pc.tc, results[rIdx].output, results[rIdx].status, nil, false, "", "")
 					return
 				}
 
@@ -1256,14 +1273,15 @@ func (a *AgentLoop) buildMessages(conv *Conversation) []engine.ChatMessage {
 
 	if a.systemPrompt != "" || summaryContent != "" {
 		var parts []string
-		if a.systemPrompt != "" {
-			parts = append(parts, a.systemPrompt)
+		if sp := a.effectiveSystemPrompt(); sp != "" {
+			parts = append(parts, sp)
 		}
 		if summaryContent != "" {
 			parts = append(parts, "\n\n<context-summary>\n"+summaryContent+"\n</context-summary>")
 		}
 
 		messages = append(messages, engine.ChatMessage{
+
 			Role:    "system",
 			Content: strings.Join(parts, ""),
 		})
@@ -1293,7 +1311,7 @@ func (a *AgentLoop) buildMessages(conv *Conversation) []engine.ChatMessage {
 }
 
 func (a *AgentLoop) buildMaxStepsPrompt(conv *Conversation) []engine.ChatMessage {
-	sysPrompt := a.systemPrompt
+	sysPrompt := a.effectiveSystemPrompt()
 
 	maxStepsPrompt := `CRITICAL - MAXIMUM STEPS REACHED
 

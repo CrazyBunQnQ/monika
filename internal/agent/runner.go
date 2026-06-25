@@ -9,7 +9,6 @@ import (
 	"monika/pkg/engine"
 )
 
-
 // ChildSession holds the result of a completed child agent run.
 type ChildSession struct {
 	Messages   []engine.ChatMessage
@@ -50,7 +49,6 @@ func (r *TaskRunner) Dispatch(ctx context.Context, task SubTask, parent *AgentLo
 			close(resultCh)
 		}()
 
-
 		ag, ok := r.registry.Get(task.Agent)
 		if !ok {
 			resultCh <- Event{Type: EventError, Content: fmt.Sprintf("agent %q not found", task.Agent)}
@@ -72,6 +70,10 @@ func (r *TaskRunner) Dispatch(ctx context.Context, task SubTask, parent *AgentLo
 			opts = append(opts, WithProjectDir(task.ProjectDir))
 		} else if parent != nil && parent.projectDir != "" {
 			opts = append(opts, WithProjectDir(parent.projectDir))
+		}
+		// Inherit project rules from parent so subagents see the same AGENTS.md.
+		if parent != nil && parent.projectRules != "" {
+			opts = append(opts, WithProjectRules(parent.projectRules))
 		}
 		// Replace {{WorkingDirectory}} in the agent system prompt with the actual project directory.
 		if ag.SystemPrompt != "" {

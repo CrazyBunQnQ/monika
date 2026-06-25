@@ -86,6 +86,7 @@ type App struct {
 	checker  *update.Checker
 
 	projectRules string // AGENTS.md content for current project, injected into system prompt
+	dbSchemaNote string // one-shot DB availability hint, set on project switch
 
 	trayMgr   *TrayManager
 	tsBridge  *tsBridge
@@ -456,6 +457,7 @@ func (a *App) discoverProjectDatabases(projectPath string) {
 	} else {
 		a.dbMgr.Reset(cache)
 	}
+	a.dbSchemaNote = "This project has connected databases. Use db_schema to inspect their structure."
 }
 
 func loadProjectRules(projectDir string) string {
@@ -864,10 +866,13 @@ func (a *App) startAgentLoop(ctx context.Context, cancel context.CancelFunc, sm 
 		opts = append(opts, agent2.WithContextLimit(ctxLimit), agent2.WithOutputLimit(outLimit))
 	}
 	generalAgent, _ := a.agentRegistry.Get("general")
-	if a.projectRules != "" && generalAgent.SystemPrompt != "" {
-		generalAgent.SystemPrompt += "\n\n" + a.projectRules
+	opts = append(opts,
+		agent2.WithAgent(generalAgent),
+		agent2.WithProjectRules(a.projectRules),
+	)
+	if a.dbSchemaNote != "" {
+		opts = append(opts, agent2.WithDBSchemaNote(a.dbSchemaNote))
 	}
-	opts = append(opts, agent2.WithAgent(generalAgent))
 	// Replace {{WorkingDirectory}} in the system prompt with the actual project directory.
 	projectDir := a.resolveWorkingDir(sessionID)
 	normalizedDir := strings.ReplaceAll(projectDir, "\\", "/")
@@ -877,7 +882,6 @@ func (a *App) startAgentLoop(ctx context.Context, cancel context.CancelFunc, sm 
 	loop.SetDispatchFn(func(ctx context.Context, task agent2.SubTask) <-chan agent2.Event {
 		return a.taskRunner.Dispatch(ctx, task, loop)
 	})
-
 	go func() {
 		defer cancel()
 
@@ -1459,10 +1463,11 @@ func (a *App) TriggerCompact(projectPath, sessionID, providerID, model string) e
 		opts = append(opts, agent2.WithContextLimit(ctxLimit), agent2.WithOutputLimit(outLimit))
 	}
 	generalAgent, _ := a.agentRegistry.Get("general")
-	if a.projectRules != "" && generalAgent.SystemPrompt != "" {
-		generalAgent.SystemPrompt += "\n\n" + a.projectRules
-	}
-	opts = append(opts, agent2.WithAgent(generalAgent))
+	opts = append(opts,
+		agent2.WithAgent(generalAgent),
+		agent2.WithProjectRules(a.projectRules),
+	)
+	// Replace {{WorkingDirectory}} in the system prompt with the actual project directory.
 	normalizedDir := strings.ReplaceAll(projectPath, "\\", "/")
 	opts = append(opts, agent2.WithSystemPrompt(strings.ReplaceAll(a.rawSystemPrompt, "{{WorkingDirectory}}", normalizedDir)))
 
