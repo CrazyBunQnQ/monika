@@ -133,10 +133,6 @@ func NewApp(home, initialProject string, cfg config2.Config, providers map[strin
 	}
 	if initialProject != "" {
 		a.OpenProject(initialProject)
-	} else if lastPath := a.loadLastProjectPath(); lastPath != "" {
-		if _, err := os.Stat(lastPath); err == nil {
-			a.OpenProject(lastPath)
-		}
 	}
 	return a
 }
@@ -266,7 +262,7 @@ func (a *App) ServiceStartup(ctx context.Context, options application.ServiceOpt
 
 	// Auto-check for updates on startup (respects 4-hour cooldown).
 	go a.checker.AutoCheck(ctx, func(info *update.UpdateInfo) {
-		application.Get().Event.Emit("update-available", *info)
+		a.safeEmit("update-available", *info)
 	})
 
 	go func() {
@@ -277,7 +273,7 @@ func (a *App) ServiceStartup(ctx context.Context, options application.ServiceOpt
 			}
 			data, _ := json.Marshal(ev)
 			se.Content = string(data)
-			application.Get().Event.Emit("stream", se)
+			a.safeEmit("stream", se)
 		}
 	}()
 
@@ -1338,6 +1334,14 @@ func (a *App) SkipQueueItem(projectPath, sessionID, itemID string) error {
 	return nil
 }
 
+func (a *App) safeEmit(eventName string, data any) {
+	app := application.Get()
+	if app == nil {
+		return
+	}
+	app.Event.Emit(eventName, data)
+}
+
 func (a *App) emitQueueUpdated(sessionID string, queue []QueuedMessage) {
 	se := StreamEvent{
 		SessionID: sessionID,
@@ -1346,7 +1350,7 @@ func (a *App) emitQueueUpdated(sessionID string, queue []QueuedMessage) {
 		Seq:       a.eventSeq.Add(1),
 	}
 	a.eventBus.Emit(se)
-	application.Get().Event.Emit("stream", se)
+	a.safeEmit("stream", se)
 }
 
 func (a *App) emitQueueItemStarted(sessionID string, item QueuedMessage) {
@@ -1357,7 +1361,7 @@ func (a *App) emitQueueItemStarted(sessionID string, item QueuedMessage) {
 		Seq:       a.eventSeq.Add(1),
 	}
 	a.eventBus.Emit(se)
-	application.Get().Event.Emit("stream", se)
+	a.safeEmit("stream", se)
 }
 
 func (a *App) emitQueueError(sessionID, itemID, errorMsg string) {
@@ -1368,7 +1372,7 @@ func (a *App) emitQueueError(sessionID, itemID, errorMsg string) {
 		Seq:       a.eventSeq.Add(1),
 	}
 	a.eventBus.Emit(se)
-	application.Get().Event.Emit("stream", se)
+	a.safeEmit("stream", se)
 }
 
 func queueToJSON(queue []QueuedMessage) string {
@@ -1682,7 +1686,7 @@ func (a *App) emitShellOutput(sessionID, line string) {
 		Seq:       a.eventSeq.Add(1),
 	}
 	a.eventBus.Emit(se)
-	application.Get().Event.Emit("stream", se)
+	a.safeEmit("stream", se)
 }
 
 func (a *App) emitShellDone(sessionID string, exitCode int, command string) {
@@ -1694,7 +1698,7 @@ func (a *App) emitShellDone(sessionID string, exitCode int, command string) {
 		Seq:       a.eventSeq.Add(1),
 	}
 	a.eventBus.Emit(se)
-	application.Get().Event.Emit("stream", se)
+	a.safeEmit("stream", se)
 }
 
 func (a *App) emitShellError(sessionID, errMsg string) {
@@ -1705,7 +1709,7 @@ func (a *App) emitShellError(sessionID, errMsg string) {
 		Seq:       a.eventSeq.Add(1),
 	}
 	a.eventBus.Emit(se)
-	application.Get().Event.Emit("stream", se)
+	a.safeEmit("stream", se)
 }
 
 // CancelShellCommand cancels a running shell command for the given session.
@@ -1991,7 +1995,7 @@ func (a *App) handleAgentEvent(sessionID, model string, ev agent2.Event) {
 	}
 
 	a.eventBus.Emit(se)
-	application.Get().Event.Emit("stream", se)
+	a.safeEmit("stream", se)
 }
 
 func (a *App) EmitTaskEvent(sessionID string, tasks []agent2.TaskItem) {
@@ -2002,7 +2006,7 @@ func (a *App) EmitTaskEvent(sessionID string, tasks []agent2.TaskItem) {
 		Seq:       a.eventSeq.Add(1),
 	}
 	a.eventBus.Emit(se)
-	application.Get().Event.Emit("stream", se)
+	a.safeEmit("stream", se)
 }
 
 // emitBranchChangeIfChanged reads the current git branch from disk and compares
@@ -2039,7 +2043,7 @@ func (a *App) emitBranchChangeIfChanged() {
 
 	a.setProjectBranch(projectPath, currentBranch)
 
-	application.Get().Event.Emit("branch-changed", currentBranch)
+	a.safeEmit("branch-changed", currentBranch)
 }
 
 // setProjectLastCommitHash updates the in-memory last commit hash for a project.
@@ -2085,7 +2089,7 @@ func (a *App) emitCommitHistoryChangedIfChanged() {
 
 	a.setProjectLastCommitHash(projectPath, currentHash)
 
-	application.Get().Event.Emit("commit-history-changed", currentHash)
+	a.safeEmit("commit-history-changed", currentHash)
 }
 
 // syncTasksToSession reads the current tasks for a session from the TaskStore
@@ -3053,7 +3057,7 @@ func (a *App) onHeadChange(gitDir string) {
 	}
 
 	a.setProjectBranch(projectPath, branch)
-	application.Get().Event.Emit("branch-changed", branch)
+	a.safeEmit("branch-changed", branch)
 }
 
 // onRefsChange is called when .git/refs/ or .git/packed-refs changes.
@@ -3098,7 +3102,7 @@ func (a *App) onRefsChange(gitDir string) {
 	}
 
 	a.setProjectLastCommitHash(projectPath, currentHash)
-	application.Get().Event.Emit("commit-history-changed", currentHash)
+	a.safeEmit("commit-history-changed", currentHash)
 }
 
 // readBranchFromHead parses the branch name directly from the .git/HEAD
@@ -3180,7 +3184,7 @@ func (a *App) RequestConfirm(ctx context.Context, ev permission.PermissionRequir
 		Permission: &ev,
 		Seq:        a.eventSeq.Add(1),
 	}
-	application.Get().Event.Emit("stream", se)
+	a.safeEmit("stream", se)
 
 	// Block until response or context cancellation
 	select {
@@ -3236,7 +3240,7 @@ func (a *App) AskUser(ctx context.Context, sessionID, question string, title str
 		AskUser:   &ev,
 		Seq:       a.eventSeq.Add(1),
 	}
-	application.Get().Event.Emit("stream", se)
+	a.safeEmit("stream", se)
 
 	select {
 	case resp := <-ch:
@@ -5008,7 +5012,7 @@ func (a *App) SetDapManager(mgr *dap.DapManager) {
 	a.debugAPI = NewDebugAPI(mgr)
 	mgr.OnSessionCreated(func(s dap.DapSessionSummary) {
 		data, _ := json.Marshal(s)
-		application.Get().Event.Emit("stream", StreamEvent{
+		a.safeEmit("stream", StreamEvent{
 			Type:    DebugSessionCreated,
 			Content: string(data),
 			Seq:     a.eventSeq.Add(1),
@@ -5016,7 +5020,7 @@ func (a *App) SetDapManager(mgr *dap.DapManager) {
 	})
 	mgr.OnSessionTerminated(func(s dap.DapSessionSummary) {
 		data, _ := json.Marshal(s)
-		application.Get().Event.Emit("stream", StreamEvent{
+		a.safeEmit("stream", StreamEvent{
 			Type:    DebugSessionTerminated,
 			Content: string(data),
 			Seq:     a.eventSeq.Add(1),
@@ -5024,7 +5028,7 @@ func (a *App) SetDapManager(mgr *dap.DapManager) {
 	})
 	mgr.OnStopped(func(s dap.DapSessionSummary) {
 		data, _ := json.Marshal(s)
-		application.Get().Event.Emit("stream", StreamEvent{
+		a.safeEmit("stream", StreamEvent{
 			Type:    DebugStopped,
 			Content: string(data),
 			Seq:     a.eventSeq.Add(1),
@@ -5032,7 +5036,7 @@ func (a *App) SetDapManager(mgr *dap.DapManager) {
 	})
 	mgr.OnContinued(func(s dap.DapSessionSummary) {
 		data, _ := json.Marshal(s)
-		application.Get().Event.Emit("stream", StreamEvent{
+		a.safeEmit("stream", StreamEvent{
 			Type:    DebugContinued,
 			Content: string(data),
 			Seq:     a.eventSeq.Add(1),
@@ -5040,14 +5044,14 @@ func (a *App) SetDapManager(mgr *dap.DapManager) {
 	})
 	mgr.OnStateChanged(func(s dap.DapSessionSummary) {
 		data, _ := json.Marshal(s)
-		application.Get().Event.Emit("stream", StreamEvent{
+		a.safeEmit("stream", StreamEvent{
 			Type:    DebugStateChanged,
 			Content: string(data),
 			Seq:     a.eventSeq.Add(1),
 		})
 	})
 	mgr.OnOutput(func(sessionID string, output string) {
-		application.Get().Event.Emit("stream", StreamEvent{
+		a.safeEmit("stream", StreamEvent{
 			Type:      DebugOutput,
 			Content:   output,
 			SessionID: sessionID,
