@@ -4,6 +4,9 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"monika/internal/tool"
+	"monika/pkg/engine"
 )
 
 func TestTaskRunner_Dispatch_AgentNotFound(t *testing.T) {
@@ -38,15 +41,16 @@ func TestTaskRunner_Dispatch_Cancellation(t *testing.T) {
 	registry := NewAgentRegistry([]Agent{
 		{Name: "general", SystemPrompt: "test"},
 	})
-	runner := NewTaskRunner(registry, nil, nil, nil, nil, nil)
-
-	// Fill all slots so Dispatch blocks on semaphore, giving cancel time to win
-	for i := 0; i < MaxConcurrentSubtasks; i++ {
-		runner.sem <- struct{}{}
+	// Provider that blocks so we can observe cancellation during execution
+	waitCh := make(chan struct{})
+	prov := staticProvider(nil, nil)
+	prov.streamFn = func(ctx context.Context, req engine.ChatRequest) (<-chan engine.ChatEvent, error) {
+		<-waitCh
+		return nil, ctx.Err()
 	}
+	runner := NewTaskRunner(registry, prov, nil, tool.NewRegistry(), nil, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
 
 	task := SubTask{
 		ID:     "test-2",
@@ -56,18 +60,16 @@ func TestTaskRunner_Dispatch_Cancellation(t *testing.T) {
 	}
 	ch := runner.Dispatch(ctx, task, nil)
 
+	cancel()
+	close(waitCh)
+
 	var gotCancelled bool
 	for ev := range ch {
-		if ev.Type == EventError && ev.Content == "cancelled before dispatch" {
+		if ev.Type == EventError && ev.Content == "cancelled" {
 			gotCancelled = true
 		}
 	}
 	if !gotCancelled {
 		t.Error("expected cancellation error")
-	}
-
-	// Drain slots
-	for i := 0; i < MaxConcurrentSubtasks; i++ {
-		<-runner.sem
 	}
 }

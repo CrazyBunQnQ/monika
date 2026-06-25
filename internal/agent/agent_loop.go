@@ -7,6 +7,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -892,8 +893,10 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 			TokenUsage:       &usage,
 		})
 
-		// Deduplicate tool calls within a turn: same name + same args
-		// executes once and reuses the result for every duplicate ID.
+		// Deduplicate and execute tool calls in parallel.
+		// Pre-checks (dedup, lookup, permission) run sequentially;
+		// actual tool execution runs in goroutines so that long-running
+		// tools like spawn_agent can run concurrently.
 		type dedupKey struct {
 			name string
 			args string
@@ -904,27 +907,43 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 		}
 		executed := make(map[dedupKey]cachedResult)
 
-		for _, tc := range result.ToolCalls {
+		type toolResult struct {
+			tc          engine.ToolCall
+			output      string
+			status      string
+			diffLines   []string
+			conflict    bool
+			diskContent string
+			aiContent   string
+			preChecked  bool
+		}
+		results := make([]toolResult, len(result.ToolCalls))
+
+		type pendingCall struct {
+			tc        engine.ToolCall
+			dk        dedupKey
+			t         tool.Tool
+			toolCtx   context.Context
+			isMCP     bool
+			mcpServer string
+			mcpName   string
+		}
+		pending := make([]pendingCall, 0, len(result.ToolCalls))
+
+		for i, tc := range result.ToolCalls {
 			select {
 			case <-ctx.Done():
 				return
 			default:
 			}
 
+			results[i].tc = tc
 			dk := dedupKey{name: tc.Function.Name, args: tc.Function.Arguments}
+
 			if cached, ok := executed[dk]; ok {
-				ch <- Event{Type: EventToolOutput, Tool: &ToolEvent{
-					ID: tc.ID, Name: tc.Function.Name,
-					Input: tc.Function.Arguments, Output: cached.output, Status: cached.status,
-				}}
-				content := cached.output
-				if cached.status == "error" {
-					content = "error: " + content
-				}
-				conv.Messages = append(conv.Messages, engine.ChatMessage{
-					Role: "tool", Content: content,
-					ToolCallID: tc.ID, Name: tc.Function.Name,
-				})
+				results[i].output = cached.output
+				results[i].status = cached.status
+				results[i].preChecked = true
 				continue
 			}
 
@@ -938,61 +957,25 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 
 			t, ok := a.tools.Get(tc.Function.Name)
 			if !ok {
-				// Try MCP tools via O(1) resolve
 				found := false
 				if a.mcpRegistry != nil {
-					serverID, origName, ok := a.mcpRegistry.Resolve(tc.Function.Name)
-					if ok {
-						conn, hasConn := a.mcpRegistry.GetConnection(serverID)
+					serverID, origName, mcpOK := a.mcpRegistry.Resolve(tc.Function.Name)
+					if mcpOK {
+						_, hasConn := a.mcpRegistry.GetConnection(serverID)
 						if hasConn {
-							result, cerr := conn.CallTool(ctx, origName, json.RawMessage(tc.Function.Arguments))
-							if cerr != nil {
-								errMsg := fmt.Sprintf("MCP tool %s error: %s", tc.Function.Name, cerr)
-								ch <- Event{
-									Type: EventToolOutput,
-									Tool: &ToolEvent{
-										ID: tc.ID, Name: tc.Function.Name,
-										Input: tc.Function.Arguments, Output: errMsg, Status: "error",
-									},
-								}
-								executed[dk] = cachedResult{output: errMsg, status: "error"}
-								conv.Messages = append(conv.Messages, engine.ChatMessage{
-									Role: "tool", Content: errMsg,
-									ToolCallID: tc.ID, Name: tc.Function.Name,
-								})
-							} else {
-								content := string(result)
-								ch <- Event{
-									Type: EventToolOutput,
-									Tool: &ToolEvent{
-										ID: tc.ID, Name: tc.Function.Name,
-										Input: tc.Function.Arguments, Output: content, Status: "done",
-									},
-								}
-								executed[dk] = cachedResult{output: content, status: "done"}
-								conv.Messages = append(conv.Messages, engine.ChatMessage{
-									Role: "tool", Content: content,
-									ToolCallID: tc.ID, Name: tc.Function.Name,
-								})
-							}
+							results[i].status = "done"
+							pending = append(pending, pendingCall{
+								tc: tc, dk: dk, isMCP: true,
+								mcpServer: serverID, mcpName: origName,
+							})
 							found = true
 						}
 					}
 				}
 				if !found {
-					errMsg := fmt.Sprintf("tool %s not found", tc.Function.Name)
-					ch <- Event{
-						Type: EventToolOutput,
-						Tool: &ToolEvent{
-							ID: tc.ID, Name: tc.Function.Name,
-							Input: tc.Function.Arguments, Output: errMsg, Status: "error",
-						},
-					}
-					executed[dk] = cachedResult{output: errMsg, status: "error"}
-					conv.Messages = append(conv.Messages, engine.ChatMessage{
-						Role: "tool", Content: errMsg,
-						ToolCallID: tc.ID,
-					})
+					results[i].output = fmt.Sprintf("tool %s not found", tc.Function.Name)
+					results[i].status = "error"
+					results[i].preChecked = true
 				}
 				continue
 			}
@@ -1005,22 +988,9 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 					ProjectDir: a.projectDir,
 				}
 				if a.pipeline.Check(ctx, pctx) == permission.Deny {
-					ch <- Event{
-						Type: EventToolOutput,
-						Tool: &ToolEvent{
-							ID:     tc.ID,
-							Name:   tc.Function.Name,
-							Input:  tc.Function.Arguments,
-							Output: "execution denied by user",
-							Status: "denied",
-						},
-					}
-					executed[dk] = cachedResult{output: "execution denied by user", status: "denied"}
-					conv.Messages = append(conv.Messages, engine.ChatMessage{
-						Role:       "tool",
-						Content:    fmt.Sprintf("execution of %s was denied by user", tc.Function.Name),
-						ToolCallID: tc.ID,
-					})
+					results[i].output = "execution denied by user"
+					results[i].status = "denied"
+					results[i].preChecked = true
 					continue
 				}
 			}
@@ -1051,138 +1021,167 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 			if a.memQueue != nil {
 				toolCtx = WithMemoryQueueInContext(toolCtx, a.memQueue)
 			}
-			// Check for streaming execution (e.g. SpawnAgent forwards child events)
-			type streamingTool interface {
-				ExecuteStreaming(ctx context.Context, args json.RawMessage) (<-chan Event, error)
-			}
-			if st, ok := t.(streamingTool); ok {
-				eventCh, execErr := st.ExecuteStreaming(toolCtx, json.RawMessage(tc.Function.Arguments))
-				if execErr != nil {
-					ch <- Event{Type: EventToolOutput, Tool: &ToolEvent{
-						ID: tc.ID, Name: tc.Function.Name,
-						Input: tc.Function.Arguments, Output: execErr.Error(), Status: "error",
-					}}
-					executed[dk] = cachedResult{output: execErr.Error(), status: "error"}
-					conv.Messages = append(conv.Messages, engine.ChatMessage{
-						Role: "tool", Content: fmt.Sprintf("error: %s", execErr),
-						ToolCallID: tc.ID, Name: tc.Function.Name,
-					})
-					continue
+
+			results[i].status = "done"
+			pending = append(pending, pendingCall{tc: tc, dk: dk, t: t, toolCtx: toolCtx})
+		}
+
+		var wg sync.WaitGroup
+
+		for pi := range pending {
+			p := &pending[pi]
+			var ri int
+			for i := range results {
+				if results[i].tc.ID == p.tc.ID {
+					ri = i
+					break
 				}
-				var streamOutput strings.Builder
-				childSID := tc.ID // tool call ID = child session ID
-			streamLoop:
-				for ev := range eventCh {
-					ev.SessionID = childSID // tag so frontend routes to child tab
-					switch ev.Type {
-					case EventToolStart:
-						streamOutput.Reset()
-						select {
-						case ch <- ev:
-						case <-ctx.Done():
-							break streamLoop
-						}
-					case EventTextDelta:
-						select {
-						case ch <- ev:
-						default:
-						}
-						streamOutput.WriteString(ev.Content)
-					case EventThinking:
-						select {
-						case ch <- ev:
-						case <-ctx.Done():
-							break streamLoop
-						}
-					case EventToolDone, EventToolOutput:
-						select {
-						case ch <- ev:
-						case <-ctx.Done():
-							break streamLoop
-						}
-					case EventError:
-						select {
-						case ch <- ev:
-						case <-ctx.Done():
-							break streamLoop
-						}
-					default:
-						select {
-						case ch <- ev:
-						case <-ctx.Done():
-							break streamLoop
-						}
-					}
-				}
-				toolContent := streamOutput.String()
-				if toolContent == "" {
-					toolContent = "(subtask completed with no output)"
-				}
-				executed[dk] = cachedResult{output: toolContent, status: "done"}
-				ch <- Event{Type: EventToolOutput, Tool: &ToolEvent{
-					ID: tc.ID, Name: tc.Function.Name,
-					Input: tc.Function.Arguments, Output: toolContent, Status: "done",
-				}}
-				conv.Messages = append(conv.Messages, engine.ChatMessage{
-					Role: "tool", Content: toolContent,
-					ToolCallID: tc.ID, Name: tc.Function.Name,
-				})
-				continue
-			}
-			execResult, err := t.Execute(toolCtx, json.RawMessage(tc.Function.Arguments))
-			if err != nil {
-				ch <- Event{
-					Type: EventToolOutput,
-					Tool: &ToolEvent{
-						ID:     tc.ID,
-						Input:  tc.Function.Arguments,
-						Output: err.Error(),
-						Status: "error",
-					},
-				}
-				executed[dk] = cachedResult{output: err.Error(), status: "error"}
-				conv.Messages = append(conv.Messages, engine.ChatMessage{
-					Role:       "tool",
-					Content:    fmt.Sprintf("error executing %s: %s", tc.Function.Name, err),
-					ToolCallID: tc.ID,
-					Name:       tc.Function.Name,
-				})
-				continue
 			}
 
-			toolContent := execResult.Content
-			if execResult.IsError {
-				toolContent = "error: " + toolContent
+			wg.Add(1)
+			go func(rIdx int, pc *pendingCall) {
+				defer wg.Done()
+
+				if pc.isMCP {
+					conn, _ := a.mcpRegistry.GetConnection(pc.mcpServer)
+					mcpResult, cerr := conn.CallTool(ctx, pc.mcpName, json.RawMessage(pc.tc.Function.Arguments))
+					if cerr != nil {
+						results[rIdx].output = fmt.Sprintf("MCP tool %s error: %s", pc.tc.Function.Name, cerr)
+						results[rIdx].status = "error"
+					} else {
+						results[rIdx].output = string(mcpResult)
+					}
+					return
+				}
+
+				type streamingTool interface {
+					ExecuteStreaming(ctx context.Context, args json.RawMessage) (<-chan Event, error)
+				}
+				if st, ok := pc.t.(streamingTool); ok {
+					eventCh, execErr := st.ExecuteStreaming(pc.toolCtx, json.RawMessage(pc.tc.Function.Arguments))
+					if execErr != nil {
+						results[rIdx].output = execErr.Error()
+						results[rIdx].status = "error"
+						return
+					}
+					var streamOutput strings.Builder
+					childSID := pc.tc.ID
+					for ev := range eventCh {
+						ev.SessionID = childSID
+						switch ev.Type {
+						case EventToolStart:
+							streamOutput.Reset()
+							select {
+							case ch <- ev:
+							case <-ctx.Done():
+								return
+							}
+						case EventTextDelta:
+							select {
+							case ch <- ev:
+							default:
+							}
+							streamOutput.WriteString(ev.Content)
+						case EventThinking:
+							select {
+							case ch <- ev:
+							case <-ctx.Done():
+								return
+							}
+						case EventToolDone, EventToolOutput:
+							select {
+							case ch <- ev:
+							case <-ctx.Done():
+								return
+							}
+						case EventError:
+							select {
+							case ch <- ev:
+							case <-ctx.Done():
+								return
+							}
+						default:
+							select {
+							case ch <- ev:
+							case <-ctx.Done():
+								return
+							}
+						}
+					}
+					toolContent := streamOutput.String()
+					if toolContent == "" {
+						toolContent = "(subtask completed with no output)"
+					}
+					results[rIdx].output = toolContent
+					return
+				}
+
+				execResult, err := pc.t.Execute(pc.toolCtx, json.RawMessage(pc.tc.Function.Arguments))
+				if err != nil {
+					results[rIdx].output = err.Error()
+					results[rIdx].status = "error"
+					return
+				}
+				results[rIdx].output = execResult.Content
+				if execResult.IsError {
+					results[rIdx].status = "error"
+					results[rIdx].output = "error: " + execResult.Content
+				} else {
+					results[rIdx].status = "done"
+				}
+				results[rIdx].diffLines = execResult.DiffLines
+				results[rIdx].conflict = execResult.Conflict
+				results[rIdx].diskContent = execResult.DiskContent
+				results[rIdx].aiContent = execResult.AiContent
+			}(ri, p)
+		}
+
+		wg.Wait()
+
+		for _, res := range results {
+			tc := res.tc
+			dk := dedupKey{name: tc.Function.Name, args: tc.Function.Arguments}
+
+			if !res.preChecked {
+				executed[dk] = cachedResult{output: res.output, status: res.status}
 			}
-			status := "done"
-			if execResult.IsError {
-				status = "error"
-				executed[dk] = cachedResult{output: execResult.Content, status: "error"}
-			} else {
-				executed[dk] = cachedResult{output: execResult.Content, status: "done"}
+
+			content := res.output
+			if res.status == "error" {
+				content = "error: " + content
+			} else if res.status == "denied" {
+				content = "execution denied by user"
 			}
+
 			ch <- Event{
 				Type: EventToolOutput,
 				Tool: &ToolEvent{
 					ID:          tc.ID,
 					Name:        tc.Function.Name,
 					Input:       tc.Function.Arguments,
-					Output:      toolContent,
-					Status:      status,
-					DiffLines:   execResult.DiffLines,
-					Conflict:    execResult.Conflict,
-					DiskContent: execResult.DiskContent,
-					AiContent:   execResult.AiContent,
+					Output:      content,
+					Status:      res.status,
+					DiffLines:   res.diffLines,
+					Conflict:    res.conflict,
+					DiskContent: res.diskContent,
+					AiContent:   res.aiContent,
 				},
 			}
 
+			convContent := res.output
+			if res.status == "error" {
+				convContent = "error: " + convContent
+			} else if res.status == "denied" {
+				convContent = fmt.Sprintf("execution of %s was denied by user", tc.Function.Name)
+			}
 			conv.Messages = append(conv.Messages, engine.ChatMessage{
 				Role:       "tool",
-				Content:    toolContent,
+				Content:    convContent,
 				ToolCallID: tc.ID,
 				Name:       tc.Function.Name,
 			})
 		}
+
 
 		ch <- Event{Type: EventTurnStart}
 	}

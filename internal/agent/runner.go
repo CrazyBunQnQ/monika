@@ -9,7 +9,6 @@ import (
 	"monika/pkg/engine"
 )
 
-const MaxConcurrentSubtasks = 4
 
 // ChildSession holds the result of a completed child agent run.
 type ChildSession struct {
@@ -25,7 +24,6 @@ type TaskRunner struct {
 	provider   engine.ProviderEngine            // default / fallback provider
 	providers  map[string]engine.ProviderEngine // all available providers, keyed by ID
 	tools      *tool.ToolRegistry
-	sem        chan struct{}
 	onStart    func(task SubTask, agentName string) // called before child runs
 	onComplete func(task SubTask, child *ChildSession)
 }
@@ -36,7 +34,6 @@ func NewTaskRunner(registry *AgentRegistry, provider engine.ProviderEngine, prov
 		provider:   provider,
 		providers:  providers,
 		tools:      tools,
-		sem:        make(chan struct{}, MaxConcurrentSubtasks),
 		onStart:    onStart,
 		onComplete: onComplete,
 	}
@@ -53,13 +50,6 @@ func (r *TaskRunner) Dispatch(ctx context.Context, task SubTask, parent *AgentLo
 			close(resultCh)
 		}()
 
-		select {
-		case r.sem <- struct{}{}:
-		case <-ctx.Done():
-			resultCh <- Event{Type: EventError, Content: "cancelled before dispatch"}
-			return
-		}
-		defer func() { <-r.sem }()
 
 		ag, ok := r.registry.Get(task.Agent)
 		if !ok {
