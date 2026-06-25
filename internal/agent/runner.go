@@ -75,6 +75,10 @@ func (r *TaskRunner) Dispatch(ctx context.Context, task SubTask, parent *AgentLo
 		if parent != nil && parent.projectRules != "" {
 			opts = append(opts, WithProjectRules(parent.projectRules))
 		}
+		// Inherit DB schema hint so subagents know about connected databases.
+		if parent != nil && parent.dbSchemaNote != "" {
+			opts = append(opts, WithDBSchemaNote(parent.dbSchemaNote))
+		}
 		// Replace {{WorkingDirectory}} in the agent system prompt with the actual project directory.
 		if ag.SystemPrompt != "" {
 			resolvedDir := task.ProjectDir

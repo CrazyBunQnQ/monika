@@ -438,6 +438,7 @@ func (a *App) onProjectSwitch(path string) {
 // discoverProjectDatabases scans the project for database connections and
 // registers db tools if found. Called on project switch.
 func (a *App) discoverProjectDatabases(projectPath string) {
+	a.dbSchemaNote = ""
 	if projectPath == "" {
 		return
 	}
