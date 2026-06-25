@@ -284,6 +284,9 @@ func (s *KBStore) searchAuto(query string, limit int) ([]KBFile, error) {
 }
 
 func (s *KBStore) searchSingle(query, scope string, limit int) ([]KBFile, error) {
+	if s.dbFor(scope) == nil {
+		return nil, nil
+	}
 	// FTS5 始终执行：即使查询含 CJK，也能命中被 FTS5 索引的英文/拉丁词。
 	ftsResults, err := s.searchFTS(query, scope, limit)
 	if err != nil {
