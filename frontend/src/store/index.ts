@@ -2160,6 +2160,15 @@ export function setupWailsEvents() {
                     store.removeGeneratingSession(sid)
                     store.setSessionStatus(sid, 'pending')
                     store.setSessionError(sid, '')
+                    // Also clean up child/subagent sessions — their "cancelled"
+                    // events are lost because the parent stopped forwarding.
+                    const childIds = Object.entries(store.sessionParents)
+                        .filter(([, pid]) => pid === sid)
+                        .map(([cid]) => cid)
+                    for (const cid of childIds) {
+                        store.removeGeneratingSession(cid)
+                        store.setSessionStatus(cid, 'pending')
+                    }
                     store.bumpSessionListVersion()
                     break
                 }

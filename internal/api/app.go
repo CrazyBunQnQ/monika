@@ -880,9 +880,6 @@ func (a *App) startAgentLoop(ctx context.Context, cancel context.CancelFunc, sm 
 	opts = append(opts, agent2.WithSystemPrompt(strings.ReplaceAll(a.rawSystemPrompt, "{{WorkingDirectory}}", normalizedDir)))
 
 	loop := agent2.NewLoop(providerEng, a.registry, opts...)
-	loop.SetDispatchFn(func(ctx context.Context, task agent2.SubTask) <-chan agent2.Event {
-		return a.taskRunner.Dispatch(ctx, task, loop)
-	})
 	go func() {
 		defer cancel()
 

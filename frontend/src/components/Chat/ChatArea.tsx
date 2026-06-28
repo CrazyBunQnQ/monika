@@ -144,15 +144,26 @@ function ChatArea(props: IDockviewPanelProps) {
     const handleStop = () => {
         const targetId = overlaySessionId || sessionId
         if (generatingSessionIds.includes(targetId)) {
-            App.CancelGeneration(targetId)
+            // CancelGeneration only has cancel funcs for parent sessions.
+            // If target is a child/subagent session, cancel its parent —
+            // parent context cancellation propagates to all children.
+            const state = useStore.getState()
+            const cancelTarget = state.sessionParents[targetId] || targetId
+            App.CancelGeneration(cancelTarget)
             // Safety net: if backend doesn't emit cancelled event within 3s,
             // force-remove from generating state to prevent UI getting stuck.
-            const sid = targetId
+            // Include cancel target itself plus all its child sessions.
+            const sids = new Set([targetId, cancelTarget])
+            for (const [cid, pid] of Object.entries(state.sessionParents)) {
+                if (pid === cancelTarget) sids.add(cid)
+            }
             setTimeout(() => {
                 const store = useStore.getState()
-                if (store.generatingSessionIds.includes(sid)) {
-                    store.removeGeneratingSession(sid)
-                    store.setSessionStatus(sid, 'pending')
+                for (const sid of sids) {
+                    if (store.generatingSessionIds.includes(sid)) {
+                        store.removeGeneratingSession(sid)
+                        store.setSessionStatus(sid, 'pending')
+                    }
                 }
             }, 3000)
         }

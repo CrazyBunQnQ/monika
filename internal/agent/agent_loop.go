@@ -268,7 +268,6 @@ type AgentLoop struct {
 	modelContextLimit int64
 	modelOutputLimit  int64
 	providerID        string
-	dispatchFn        func(ctx context.Context, task SubTask) <-chan Event
 	mcpRegistry       *engine.MCPRegistry
 	askUserFn         tool.AskUserFunc
 	taskStore         tool.TaskStore
@@ -276,12 +275,6 @@ type AgentLoop struct {
 	memQueue          MemoryQueue               // memory update queue (p2-3)
 	dbSchemaNote      string                    // one-shot DB availability hint
 	maxSteps          int
-}
-
-// SetDispatchFn sets the child dispatch function for this loop.
-// Used for compaction and other system-initiated subtasks.
-func (a *AgentLoop) SetDispatchFn(fn func(ctx context.Context, task SubTask) <-chan Event) {
-	a.dispatchFn = fn
 }
 
 type LoopOption func(*AgentLoop)
