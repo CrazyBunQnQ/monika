@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { IDockviewPanelProps } from 'dockview'
 import { App, FileNode } from '../../../bindings/monika'
@@ -68,7 +68,7 @@ function FileTree({ hideTasks, ..._props }: IDockviewPanelProps & { hideTasks?: 
 
         if (!projectPath) return
         let cancelled = false
-        App.ListFileTree(projectPath, showHidden)
+        App.ListFileTree(projectPath, true)
             .then((result) => {
                 if (!cancelled) setTree(Array.isArray(result) ? result : [])
             })
@@ -76,7 +76,7 @@ function FileTree({ hideTasks, ..._props }: IDockviewPanelProps & { hideTasks?: 
                 if (!cancelled) setTree([])
             })
         return () => { cancelled = true }
-    }, [projectPath, fileTreeVersion, showHidden])
+    }, [projectPath, fileTreeVersion])
 
     // Refresh on window focus (catches external git / file changes)
     useEffect(() => {
@@ -366,7 +366,24 @@ function FileTree({ hideTasks, ..._props }: IDockviewPanelProps & { hideTasks?: 
         return result
     }
 
-    const displayTree = searchQuery ? filterTree(tree, searchQuery) : tree
+    const visibleTree = useMemo(() => {
+        if (showHidden) return tree
+        const filter = (nodes: FileNode[]): FileNode[] => {
+            const result: FileNode[] = []
+            for (const node of nodes) {
+                if (node.name.startsWith('.')) continue
+                if (node.children) {
+                    result.push({ ...node, children: filter(node.children) })
+                } else {
+                    result.push(node)
+                }
+            }
+            return result
+        }
+        return filter(tree)
+    }, [tree, showHidden])
+
+    const displayTree = searchQuery ? filterTree(visibleTree, searchQuery) : visibleTree
 
     const renderNode = (node: FileNode, depth = 0) => {
         const isExpanded = expanded.has(node.path)

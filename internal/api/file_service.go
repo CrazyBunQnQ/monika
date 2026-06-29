@@ -193,7 +193,7 @@ func (f *FileService) ListDir(relPath string, showHidden bool) ([]FileNode, erro
 		nodes := make([]FileNode, 0)
 		for _, entry := range entries {
 			name := entry.Name()
-			if !showHidden && (strings.HasPrefix(name, ".") || name == "node_modules") {
+			if name == "node_modules" || (!showHidden && strings.HasPrefix(name, ".")) {
 				continue
 			}
 
