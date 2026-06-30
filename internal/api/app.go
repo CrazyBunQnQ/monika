@@ -1000,6 +1000,9 @@ func (a *App) startAgentLoop(ctx context.Context, cancel context.CancelFunc, sm 
 		}
 		sm.Unlock()
 
+		// Fire-and-forget memory extraction from the latest compaction summary.
+		go a.extractAndSaveMemories(sessionID, providerID, model, s)
+
 		// Sync frontend with updated queue (completed item removed)
 		if queueItemID != "" {
 			a.emitQueueUpdated(sessionID, s.Queue)
@@ -1521,6 +1524,9 @@ func (a *App) TriggerCompact(projectPath, sessionID, providerID, model string) e
 			fmt.Fprintf(os.Stderr, "[monika] TriggerCompact save error: %v\n", err)
 		}
 		sm.Unlock()
+
+		// Fire-and-forget memory extraction from the compaction summary.
+		go a.extractAndSaveMemories(sessionID, providerID, model, s)
 	}()
 
 	return nil
@@ -2118,6 +2124,51 @@ func (a *App) restoreTasksFromSession(s *Session) {
 		}
 	}
 	a.EmitTaskEvent(s.ID, taskItems)
+}
+
+// extractAndSaveMemories runs memory extraction on the latest compaction summary
+// and writes candidates to the knowledge base. Best-effort — errors are logged
+// but never surfaced to the user.
+func (a *App) extractAndSaveMemories(sessionID, providerID, model string, s *Session) {
+	if a.kbStore == nil {
+		return
+	}
+	var summary string
+	for i := len(s.Messages) - 1; i >= 0; i-- {
+		if s.Messages[i].Name == "compaction_summary" {
+			summary = s.Messages[i].Content
+			break
+		}
+	}
+	if summary == "" {
+		return
+	}
+	providerEng, ok := a.providers[providerID]
+	if !ok {
+		return
+	}
+	llm := &memory.ProviderExtractionLLM{
+		Provider: providerEng,
+		Model:    model,
+	}
+	result, err := memory.ExtractMemories(context.Background(), llm, memory.ScopeProject, sessionID, summary)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[monika] memory extraction failed: %v\n", err)
+		return
+	}
+	for _, c := range result.Candidates {
+		if c.Category == "knowledge_update" {
+			c.Category = memory.CategoryKnowledge
+		}
+		if c.Scope == "" {
+			c.Scope = memory.ScopeProject
+		}
+		if err := a.kbStore.WriteFile(c.Scope, c.Category, c.Title, c.Content, c.Tags, c.Confidence); err != nil {
+			fmt.Fprintf(os.Stderr, "[monika] memory write failed '%s': %v\n", c.Title, err)
+		} else {
+			fmt.Fprintf(os.Stderr, "[monika] memory extracted: '%s' [%s] scope=%s\n", c.Title, c.Category, c.Scope)
+		}
+	}
 }
 
 func (a *App) getSessionManager(projectPath string) *SessionManager {

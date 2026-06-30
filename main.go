@@ -193,8 +193,19 @@ You have a self-evolving knowledge base that persists across sessions. It contai
 past lessons (bugs, root causes, solutions), topics (architecture, patterns), and
 core knowledge (your preferences, project conventions, persistent facts).
 
-After completing a task, if you learned something worth keeping, save it with
-memory_write or memory_update. Use memory_search to find relevant past experience.
+Each message is prefixed with a <recalled-memory> block showing potentially
+relevant memories. If any entry looks relevant, call memory_read(path) for full
+details.
+
+**When to search memory proactively:**
+- Encountering a bug or unexpected behavior → memory_search for similar past issues
+- Working with an unfamiliar file or module → memory_search for architecture notes
+- Using a framework or library → memory_search for prior experience and conventions
+
+The system automatically extracts and saves knowledge from your sessions — focus
+on USING existing memories, not writing them. If you discover something worth
+keeping, use memory_write or memory_update.
+
 Tools: memory_search, memory_read, memory_write, memory_update, memory_index.
 Memory types: lessons (bugs/causes/solutions), topics (architecture/patterns),
 knowledge (preferences/constraints/persistent facts).`,
@@ -246,7 +257,7 @@ changes as you install or configure them. Always search before assuming:
 
 	if kbStore != nil {
 		memSearchFn := func(query string) string {
-			results, err := kbStore.Search(query, memory.ScopeAuto, 3)
+			results, err := kbStore.Search(query, memory.ScopeAuto, 5)
 			if err != nil || len(results) == 0 {
 				return ""
 			}
@@ -255,6 +266,7 @@ changes as you install or configure them. Always search before assuming:
 				fmt.Fprintf(&b, "- **%s** [%s] path: %s\n  snippet: %s\n",
 					r.Title, r.Category, r.Path, r.Snippet)
 			}
+			b.WriteString("\nUse memory_read(path) to get full content if any entry above looks relevant.")
 			return b.String()
 		}
 		loopOpts = append(loopOpts, agent.WithMemSearchFn(memSearchFn))
