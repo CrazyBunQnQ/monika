@@ -3,6 +3,7 @@
 // leaving only the user's actual input text.
 
 const TRANSIENT_BLOCK_PATTERNS = [
+    /<env>[\s\S]*?<\/env>\s*/g,
     /<recalled-memory>[\s\S]*?<\/recalled-memory>\s*/g,
     /<memory-update>[\s\S]*?<\/memory-update>\s*/g,
     /<task-list>[\s\S]*?<\/task-list>\s*/g,
