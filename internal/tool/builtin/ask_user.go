@@ -17,7 +17,7 @@ func NewAskUser() tool.Tool {
 func (a *askUserTool) Name() string { return "ask_user" }
 
 func (a *askUserTool) Description() string {
-	return "Ask the user a question and wait for their response. Use this when you need clarification, a decision, or information that cannot be inferred from the codebase. Do not use for simple confirmations — proceed with the most reasonable option instead. Use the options field to provide predefined choices when appropriate."
+	return "Ask the user a question and wait for their response. Use this when you need clarification, a decision, or information that cannot be inferred from the codebase. Do not use for simple confirmations — proceed with the most reasonable option instead. Use the options field to provide predefined choices. Do NOT duplicate options inside the question text — put them in the options array only."
 }
 
 func (a *askUserTool) Parameters() map[string]any {
@@ -26,7 +26,7 @@ func (a *askUserTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"question": map[string]any{
 				"type":        "string",
-				"description": "The question to ask the user. Be specific and concise.",
+				"description": "The question to ask the user. Be specific and concise. Supports markdown formatting. Do NOT list choices here — use the options field for that.",
 			},
 			"title": map[string]any{
 				"type":        "string",
