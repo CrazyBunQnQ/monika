@@ -878,7 +878,7 @@ func categoryPath(category, title string) string {
 	case CategoryRawCode:
 		return path.Join("raw/code", slug+".md")
 	default:
-		return path.Join(category, slug+".md")
+		return path.Join("wiki/topics", slug+".md")
 	}
 }
 

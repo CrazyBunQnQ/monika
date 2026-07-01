@@ -92,9 +92,10 @@ type App struct {
 	tsBridge  *tsBridge
 	bgTaskMgr *BackgroundTaskManager
 
-	extractTimers  map[string]*time.Timer
-	extractTimerMu sync.Mutex
-	dbMgr          *DBManager
+	extractQueues   map[string]*memory.ExtractionQueue
+	extractWorkers  map[string]struct{}
+	extractWorkerMu sync.Mutex
+	dbMgr           *DBManager
 
 	dapManager *dap.DapManager
 	debugAPI   *DebugAPI
@@ -418,6 +419,14 @@ func (a *App) OpenProject(path string) (*ProjectInfo, error) {
 	a.watchProjectHead(path)
 	a.onProjectSwitch(path)
 
+	a.extractWorkerMu.Lock()
+	q := a.getOrCreateExtractQueueLocked(path)
+	if q != nil && q.Len() > 0 {
+		fmt.Fprintf(os.Stderr, "[monika] resuming extraction queue: %d pending items\n", q.Len())
+		a.startExtractionWorkerLocked(path, q)
+	}
+	a.extractWorkerMu.Unlock()
+
 	return info, nil
 }
 
@@ -621,12 +630,6 @@ func (a *App) PersistSelection(providerID, modelID string) {
 }
 
 func (a *App) DeleteSession(projectPath, sessionID string) error {
-	a.extractTimerMu.Lock()
-	if t, ok := a.extractTimers[sessionID]; ok {
-		t.Stop()
-		delete(a.extractTimers, sessionID)
-	}
-	a.extractTimerMu.Unlock()
 	sm := a.getSessionManager(projectPath)
 	return sm.Delete(sessionID)
 }
@@ -1009,12 +1012,12 @@ func (a *App) startAgentLoop(ctx context.Context, cancel context.CancelFunc, sm 
 		}
 		sm.Unlock()
 
-		// Debounced memory extraction: wait 30s after the last agent-loop
-		// completion before extracting. Consecutive queued messages coalesce
-		// into one extraction run instead of N redundant LLM calls.
+		// Memory extraction: enqueue transcript for background processing.
+		// The worker processes items one-by-one; later items supersede earlier
+		// ones for the same session to avoid redundant LLM calls.
 		msgSnapshot := make([]engine2.ChatMessage, len(s.Messages))
 		copy(msgSnapshot, s.Messages)
-		a.scheduleMemoryExtraction(sessionID, providerID, model, msgSnapshot)
+		a.enqueueMemoryExtraction(sessionID, providerID, model, msgSnapshot)
 
 		// Sync frontend with updated queue (completed item removed)
 		if queueItemID != "" {
@@ -2207,19 +2210,89 @@ func buildTranscript(s *Session, maxChars int) string {
 	return out
 }
 
-// extractAndSaveMemories runs memory extraction on the session transcript and
-// writes candidates to the knowledge base. Best-effort — errors are logged but
-// never surfaced to the user.
-func (a *App) extractAndSaveMemories(sessionID, providerID, model string, s *Session) {
+func (a *App) enqueueMemoryExtraction(sessionID, _, _ string, msgs []engine2.ChatMessage) {
 	if a.kbStore == nil {
 		return
 	}
-	transcript := buildTranscript(s, 8000)
+	pp := a.resolveWorkingDir(sessionID)
+	if pp == "" {
+		return
+	}
+	transcript := buildTranscript(&Session{Messages: msgs}, 8000)
 	if transcript == "" {
 		return
 	}
+	a.extractWorkerMu.Lock()
+	q := a.getOrCreateExtractQueueLocked(pp)
+	if q == nil {
+		a.extractWorkerMu.Unlock()
+		return
+	}
+	item := memory.ExtractionItem{
+		ID:         generateID(),
+		SessionID:  sessionID,
+		Transcript: transcript,
+	}
+	if err := q.EnqueueOrReplace(item); err != nil {
+		fmt.Fprintf(os.Stderr, "[monika] extraction enqueue failed: %v\n", err)
+		a.extractWorkerMu.Unlock()
+		return
+	}
+	fmt.Fprintf(os.Stderr, "[monika] memory extraction enqueued (session=%s, queue=%d)\n", sessionID, q.Len())
+	a.startExtractionWorkerLocked(pp, q)
+	a.extractWorkerMu.Unlock()
+}
+
+func (a *App) getOrCreateExtractQueueLocked(projectPath string) *memory.ExtractionQueue {
+	if a.extractQueues == nil {
+		a.extractQueues = make(map[string]*memory.ExtractionQueue)
+	}
+	if q, ok := a.extractQueues[projectPath]; ok {
+		return q
+	}
+	q, err := memory.NewExtractionQueue(projectPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[monika] extraction queue init failed: %v\n", err)
+		return nil
+	}
+	a.extractQueues[projectPath] = q
+	return q
+}
+
+func (a *App) startExtractionWorkerLocked(projectPath string, q *memory.ExtractionQueue) {
+	if a.extractWorkers == nil {
+		a.extractWorkers = make(map[string]struct{})
+	}
+	if _, running := a.extractWorkers[projectPath]; running {
+		return
+	}
+	if q.Len() == 0 {
+		return
+	}
+	a.extractWorkers[projectPath] = struct{}{}
+	go func() {
+		for {
+			a.extractWorkerMu.Lock()
+			item, ok := q.Dequeue()
+			if !ok {
+				delete(a.extractWorkers, projectPath)
+				a.extractWorkerMu.Unlock()
+				return
+			}
+			a.extractWorkerMu.Unlock()
+			a.runExtraction(item)
+		}
+	}()
+}
+func (a *App) runExtraction(item memory.ExtractionItem) {
+	if a.kbStore == nil {
+		return
+	}
+	providerID := a.cfg.ModelProvider
+	model := a.cfg.Model
 	providerEng, ok := a.providers[providerID]
 	if !ok {
+		fmt.Fprintf(os.Stderr, "[monika] extraction skipped: provider %q not available\n", providerID)
 		return
 	}
 	llm := &memory.ProviderExtractionLLM{
@@ -2228,17 +2301,28 @@ func (a *App) extractAndSaveMemories(sessionID, providerID, model string, s *Ses
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	result, err := memory.ExtractMemories(ctx, llm, memory.ScopeProject, sessionID, transcript)
+	result, err := memory.ExtractMemories(ctx, llm, memory.ScopeProject, item.SessionID, item.Transcript)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[monika] memory extraction failed: %v\n", err)
 		return
 	}
 	for _, c := range result.Candidates {
-		if c.Category == "knowledge_update" {
+		switch c.Category {
+		case "knowledge_update", "knowledge", "user_preference", "project_context":
 			c.Category = memory.CategoryKnowledge
+		case "lesson", memory.CategoryLesson:
+			c.Category = memory.CategoryLesson
+		case "topic", memory.CategoryTopic:
+			c.Category = memory.CategoryTopic
+		default:
+			c.Category = memory.CategoryTopic
 		}
 		if c.Scope == "" {
 			c.Scope = memory.ScopeProject
+		}
+		if strings.TrimSpace(c.Title) == "" {
+			fmt.Fprintf(os.Stderr, "[monika] memory extraction skipped: empty title (category=%s)\n", c.Category)
+			continue
 		}
 		if err := a.kbStore.WriteFile(c.Scope, c.Category, c.Title, c.Content, c.Tags, c.Confidence); err != nil {
 			fmt.Fprintf(os.Stderr, "[monika] memory write failed '%s': %v\n", c.Title, err)
@@ -2251,33 +2335,6 @@ func (a *App) extractAndSaveMemories(sessionID, providerID, model string, s *Ses
 			}
 		}
 	}
-}
-
-// scheduleMemoryExtraction debounces extraction: resets a 30s timer on each
-// call, so rapid-fire queued messages only trigger one extraction run after
-// the conversation settles. Passes a snapshot of messages to avoid racing
-// with concurrent agent-loop appends.
-func (a *App) scheduleMemoryExtraction(sessionID, providerID, model string, msgs []engine2.ChatMessage) {
-	if a.kbStore == nil {
-		return
-	}
-	a.extractTimerMu.Lock()
-	defer a.extractTimerMu.Unlock()
-	if a.extractTimers == nil {
-		a.extractTimers = make(map[string]*time.Timer)
-	}
-	if t, ok := a.extractTimers[sessionID]; ok {
-		t.Stop()
-	}
-	snapshot := make([]engine2.ChatMessage, len(msgs))
-	copy(snapshot, msgs)
-	a.extractTimers[sessionID] = time.AfterFunc(30*time.Second, func() {
-		a.extractTimerMu.Lock()
-		delete(a.extractTimers, sessionID)
-		a.extractTimerMu.Unlock()
-		snap := &Session{Messages: snapshot}
-		go a.extractAndSaveMemories(sessionID, providerID, model, snap)
-	})
 }
 
 func (a *App) getSessionManager(projectPath string) *SessionManager {
