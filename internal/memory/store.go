@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	_ "modernc.org/sqlite"
 )
@@ -376,10 +377,15 @@ func splitSearchTerms(query string) []string {
 	for _, f := range strings.Fields(query) {
 		if containsCJK(f) {
 			runes := []rune(f)
+			added := false
 			for i := 0; i+1 < len(runes); i++ {
 				if isCJKRune(runes[i]) && isCJKRune(runes[i+1]) {
 					add(string(runes[i : i+2]))
+					added = true
 				}
+			}
+			if !added && len(runes) > 0 && isCJKRune(runes[0]) {
+				add(f)
 			}
 		} else if len(f) > 1 {
 			add(f)
@@ -428,7 +434,7 @@ func (s *KBStore) searchLike(query, scope string, limit int) ([]KBFile, error) {
 		if f.Snippet == "" {
 			continue
 		}
-		if pos := findMatchPosition(f.Snippet, query); pos > 0 {
+		if pos := findMatchPosition(f.Snippet, query); pos >= 0 {
 			results[i].Snippet = buildContextualSnippet(f.Snippet, pos, 120)
 		}
 	}
@@ -454,7 +460,8 @@ func findMatchPosition(s, query string) int {
 
 // buildContextualSnippet returns a window of approximately windowLen bytes
 // centered on pos, with ellipses marking truncation. pos must be a valid byte
-// offset into s.
+// offset into s. Start/end are snapped to rune boundaries to avoid splitting
+// multibyte characters.
 func buildContextualSnippet(s string, pos, windowLen int) string {
 	if pos < 0 || windowLen <= 0 || pos >= len(s) {
 		return s
@@ -466,6 +473,12 @@ func buildContextualSnippet(s string, pos, windowLen int) string {
 	end := start + windowLen
 	if end > len(s) {
 		end = len(s)
+	}
+	for start < len(s) && !utf8.RuneStart(s[start]) {
+		start--
+	}
+	for end > start && end < len(s) && !utf8.RuneStart(s[end]) {
+		end--
 	}
 	out := s[start:end]
 	if start > 0 {

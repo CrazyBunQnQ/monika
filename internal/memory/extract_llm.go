@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"monika/pkg/engine"
@@ -33,7 +34,7 @@ func (p *ProviderExtractionLLM) Chat(ctx context.Context, systemPrompt, userMess
 		case engine.EventContentDelta:
 			sb.WriteString(ev.Text)
 		case engine.EventError:
-			return sb.String(), nil
+			return sb.String(), fmt.Errorf("extraction LLM error: %s", ev.Error.Message)
 		}
 	}
 	return sb.String(), nil

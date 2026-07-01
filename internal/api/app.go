@@ -91,7 +91,10 @@ type App struct {
 	trayMgr   *TrayManager
 	tsBridge  *tsBridge
 	bgTaskMgr *BackgroundTaskManager
-	dbMgr     *DBManager
+
+	extractTimers  map[string]*time.Timer
+	extractTimerMu sync.Mutex
+	dbMgr          *DBManager
 
 	dapManager *dap.DapManager
 	debugAPI   *DebugAPI
@@ -1000,8 +1003,10 @@ func (a *App) startAgentLoop(ctx context.Context, cancel context.CancelFunc, sm 
 		}
 		sm.Unlock()
 
-		// Fire-and-forget memory extraction from the session transcript.
-		go a.extractAndSaveMemories(sessionID, providerID, model, s)
+		// Debounced memory extraction: wait 30s after the last agent-loop
+		// completion before extracting. Consecutive queued messages coalesce
+		// into one extraction run instead of N redundant LLM calls.
+		a.scheduleMemoryExtraction(sessionID, providerID, model, s)
 
 		// Sync frontend with updated queue (completed item removed)
 		if queueItemID != "" {
@@ -2125,12 +2130,14 @@ func (a *App) restoreTasksFromSession(s *Session) {
 }
 
 // buildTranscript constructs a compact conversation transcript from session
-// messages for memory extraction. Skips tool-call details, compaction summaries,
-// and empty content. Returns at most maxChars characters.
+// messages for memory extraction. Skips tool results, compaction summaries,
+// and empty content. Tool results are noisy (file contents, grep output) and
+// would consume the char budget without contributing extractable knowledge.
+// Returns at most maxChars characters, truncated on a rune boundary.
 func buildTranscript(s *Session, maxChars int) string {
 	var b strings.Builder
 	for _, m := range s.Messages {
-		if m.Name == "compaction_summary" {
+		if m.Name == "compaction_summary" || m.Role == "tool" {
 			continue
 		}
 		content := strings.TrimSpace(m.Content)
@@ -2146,10 +2153,21 @@ func buildTranscript(s *Session, maxChars int) string {
 			break
 		}
 	}
-	if b.Len() > maxChars {
-		return b.String()[:maxChars]
+	out := b.String()
+	if len(out) > maxChars {
+		r := []rune(out)
+		cutoff := 0
+		byteLen := 0
+		for _, ch := range r {
+			if byteLen+len(string(ch)) > maxChars {
+				break
+			}
+			byteLen += len(string(ch))
+			cutoff++
+		}
+		out = string(r[:cutoff])
 	}
-	return b.String()
+	return out
 }
 
 // extractAndSaveMemories runs memory extraction on the session transcript and
@@ -2171,7 +2189,9 @@ func (a *App) extractAndSaveMemories(sessionID, providerID, model string, s *Ses
 		Provider: providerEng,
 		Model:    model,
 	}
-	result, err := memory.ExtractMemories(context.Background(), llm, memory.ScopeProject, sessionID, transcript)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	result, err := memory.ExtractMemories(ctx, llm, memory.ScopeProject, sessionID, transcript)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[monika] memory extraction failed: %v\n", err)
 		return
@@ -2189,6 +2209,33 @@ func (a *App) extractAndSaveMemories(sessionID, providerID, model string, s *Ses
 			fmt.Fprintf(os.Stderr, "[monika] memory extracted: '%s' [%s] scope=%s\n", c.Title, c.Category, c.Scope)
 		}
 	}
+}
+
+// scheduleMemoryExtraction debounces extraction: resets a 30s timer on each
+// call, so rapid-fire queued messages only trigger one extraction run after
+// the conversation settles. Passes a snapshot of messages to avoid racing
+// with concurrent agent-loop appends.
+func (a *App) scheduleMemoryExtraction(sessionID, providerID, model string, s *Session) {
+	if a.kbStore == nil {
+		return
+	}
+	a.extractTimerMu.Lock()
+	defer a.extractTimerMu.Unlock()
+	if a.extractTimers == nil {
+		a.extractTimers = make(map[string]*time.Timer)
+	}
+	if t, ok := a.extractTimers[sessionID]; ok {
+		t.Stop()
+	}
+	msgSnapshot := make([]engine2.ChatMessage, len(s.Messages))
+	copy(msgSnapshot, s.Messages)
+	a.extractTimers[sessionID] = time.AfterFunc(30*time.Second, func() {
+		a.extractTimerMu.Lock()
+		delete(a.extractTimers, sessionID)
+		a.extractTimerMu.Unlock()
+		snap := &Session{Messages: msgSnapshot}
+		go a.extractAndSaveMemories(sessionID, providerID, model, snap)
+	})
 }
 
 func (a *App) getSessionManager(projectPath string) *SessionManager {
