@@ -54,6 +54,34 @@ func TestKBStoreWriteAndSearch(t *testing.T) {
 	}
 }
 
+func TestKBStoreCJKBigramSearch(t *testing.T) {
+	homeDir := t.TempDir()
+	projectDir := t.TempDir()
+
+	store, err := NewKBStore(homeDir, projectDir)
+	if err != nil {
+		t.Fatalf("NewKBStore: %v", err)
+	}
+	defer store.Close()
+
+	err = store.WriteFile(ScopeProject, CategoryLesson, "Wails/WebView 托盘菜单弹窗白屏问题与优化方案",
+		"在某些 Windows 环境下，Wails WebView2 托盘弹出时会出现短暂白屏。", []string{"wails", "tray", "ui"}, "high")
+	if err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Simulate a natural Chinese user query — different wording from the stored title.
+	// Before the bi-gram fix, strings.Fields returned the entire sentence as one
+	// LIKE pattern, which never matched. Now bi-gram extraction should find "托盘" etc.
+	results, err := store.Search("现在的托盘图标菜单每次打开的时候都白屏一段时间", ScopeProject, 5)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected results for CJK query, got 0 — bi-gram search is broken")
+	}
+}
+
 func TestKBStoreBuildMemoryBlock(t *testing.T) {
 	homeDir := t.TempDir()
 	projectDir := t.TempDir()

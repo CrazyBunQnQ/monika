@@ -352,17 +352,53 @@ func (s *KBStore) execFTS(query, scope string, limit int) ([]KBFile, error) {
 	return scanKBFiles(rows)
 }
 
+// isCJKRune reports whether r is a CJK ideograph or Japanese kana.
+func isCJKRune(r rune) bool {
+	return (r >= 0x4E00 && r <= 0x9FFF) || // CJK Unified Ideographs
+		(r >= 0x3400 && r <= 0x4DBF) || // CJK Extension A
+		(r >= 0x3040 && r <= 0x30FF) // Hiragana + Katakana
+}
+
+// splitSearchTerms extracts search terms from a query string. For
+// whitespace-delimited words (English, etc.) it uses strings.Fields. For CJK
+// text (which has no word boundaries), it additionally extracts 2-character
+// bi-grams so that LIKE matching can find relevant memories. Without bi-grams,
+// the entire CJK sentence becomes one LIKE pattern and almost never matches.
+func splitSearchTerms(query string) []string {
+	var terms []string
+	seen := make(map[string]bool)
+	add := func(s string) {
+		if !seen[s] {
+			seen[s] = true
+			terms = append(terms, s)
+		}
+	}
+	for _, f := range strings.Fields(query) {
+		if containsCJK(f) {
+			runes := []rune(f)
+			for i := 0; i+1 < len(runes); i++ {
+				if isCJKRune(runes[i]) && isCJKRune(runes[i+1]) {
+					add(string(runes[i : i+2]))
+				}
+			}
+		} else if len(f) > 1 {
+			add(f)
+		}
+	}
+	return terms
+}
+
 // searchLike 使用 LIKE 子串匹配搜索（适用于中文等 FTS5 unicode61 无法正确分词的语言）。
-// 将查询按空白拆分为多个词，每个词分别 LIKE 匹配，用 AND 组合。
+// CJK 查询通过 bi-gram 提取后用 OR 组合，任何 bi-gram 命中即召回。
 func (s *KBStore) searchLike(query, scope string, limit int) ([]KBFile, error) {
-	words := strings.Fields(query)
-	if len(words) == 0 {
+	terms := splitSearchTerms(query)
+	if len(terms) == 0 {
 		return nil, nil
 	}
 
 	var conditions []string
 	var args []any
-	for _, w := range words {
+	for _, w := range terms {
 		likePattern := "%" + likeEscape(w) + "%"
 		conditions = append(conditions, `(f.title LIKE ? ESCAPE '\' OR f.content LIKE ? ESCAPE '\')`)
 		args = append(args, likePattern, likePattern)
@@ -388,10 +424,6 @@ func (s *KBStore) searchLike(query, scope string, limit int) ([]KBFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Re-window snippets around the first query-word match. The SQL preview is
-	// always substr(content,1,200), so when the match lives later in the body
-	// the user sees irrelevant leading text. Windowing here helps for the
-	// common case where the match is within the first 200 chars.
 	for i, f := range results {
 		if f.Snippet == "" {
 			continue
@@ -409,7 +441,7 @@ func (s *KBStore) searchLike(query, scope string, limit int) ([]KBFile, error) {
 func findMatchPosition(s, query string) int {
 	sLower := strings.ToLower(s)
 	minPos := -1
-	for _, w := range strings.Fields(strings.ToLower(query)) {
+	for _, w := range splitSearchTerms(strings.ToLower(query)) {
 		if len(w) <= 1 {
 			continue
 		}

@@ -247,6 +247,10 @@ func (tm *TrayManager) Init() error {
 		tm.showPopup()
 	})
 
+	// Pre-create popup window (hidden) so WebView2 renders content
+	// in the background, eliminating white flash on first show.
+	tm.createPopupWindow()
+
 	tm.systemTray.Run()
 	return nil
 }
@@ -432,7 +436,8 @@ func (tm *TrayManager) createPopupWindow() {
 		Windows: application.WindowsWindow{
 			HiddenOnTaskbar: true,
 		},
-		URL: "/#/tray-popup",
+		BackgroundColour: application.NewRGB(0x16, 0x18, 0x20),
+		URL:              "/#/tray-popup",
 	})
 	tm.mu.Lock()
 	tm.popupWindow = pw
