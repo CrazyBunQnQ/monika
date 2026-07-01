@@ -42,15 +42,19 @@ export function QueuePanel() {
         }
     }
 
-    const handleDragStart = (index: number) => () => {
+    const handleDragStart = (index: number) => (e: React.DragEvent) => {
         setDragIndex(index)
+        e.dataTransfer.effectAllowed = 'move'
+        e.dataTransfer.setData('text/plain', String(index))
     }
 
     const handleDragOver = (e: React.DragEvent) => {
         e.preventDefault()
+        e.dataTransfer.dropEffect = 'move'
     }
 
-    const handleDrop = (index: number) => () => {
+    const handleDrop = (index: number) => (e: React.DragEvent) => {
+        e.preventDefault()
         if (dragIndex === null || dragIndex === index) return
         const execIndex = queue.findIndex((q) => q.status === 'executing')
         if (execIndex >= 0 && index <= execIndex) return

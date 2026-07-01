@@ -16,9 +16,9 @@ interface QueueItemProps {
     sessionId: string
     projectPath: string
     manualMode: boolean
-    onDragStart: () => void
+    onDragStart: (e: React.DragEvent) => void
     onDragOver: (e: React.DragEvent) => void
-    onDrop: () => void
+    onDrop: (e: React.DragEvent) => void
 }
 
 export function QueueItem({ item, sessionId, projectPath, manualMode, onDragStart, onDragOver, onDrop }: QueueItemProps) {

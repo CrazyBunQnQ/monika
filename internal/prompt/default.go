@@ -48,7 +48,7 @@ const defaultToolUsage = `## Tool Usage
 - When output ends with "[N more lines below]", use the suggested offset to continue
 - Output has line-number and hash prefixes (e.g. "42│a1b2c3│ code") — copy 'a1b2c3:42' as anchor for file_edit
 - For large files (100+ lines), use 'summary' parameter to get structured AST summary instead
-- Never read an entire file blindly — grep for the specific symbols you ne
+- Never read an entire file blindly — grep for the specific symbols you 
 
 ### Parallel tool calls
 - When multiple INDEPENDENT tool calls are needed, invoke them in a single message
@@ -313,4 +313,7 @@ const defaultRemember = `## Remember
 - ALWAYS read with file_read before editing with file_edit — never edit blind
 - ALWAYS check if you already read a file before reading it again
 - Before modifying shared code, grep for ALL references and verify no callers break
-- When in doubt, do the smallest thing that works`
+- When in doubt, do the smallest thing that works
+- BEFORE working on an unfamiliar file or module, ALWAYS memory_search for relevant architecture notes or past lessons
+- AFTER solving a non-trivial bug, ALWAYS memory_write a lesson (root cause → fix → generalization)
+- If a <recalled-memory> entry looks relevant, ALWAYS memory_read it BEFORE acting`
