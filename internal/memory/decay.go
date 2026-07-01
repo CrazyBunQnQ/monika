@@ -49,11 +49,19 @@ func (s *KBStore) RunDecay(scope string, policy DecayPolicy) (archived, deleted 
 		effectiveAge := ageDays * multiplier
 
 		if effectiveAge >= float64(policy.DeleteAfterDays) {
-			if err := s.SoftDelete(scope, f.Path); err != nil {
-				continue
+			if f.AccessCount >= 10 {
+				if err := s.SetFileStatus(scope, f.Path, "archived"); err != nil {
+					continue
+				}
+				s.LogEntry(scope, "高频保护", fmt.Sprintf("%s 已归档但保留 (age=%.0fd, conf=%s, access=%d)", f.Path, ageDays, f.Confidence, f.AccessCount))
+				archived++
+			} else {
+				if err := s.SoftDelete(scope, f.Path); err != nil {
+					continue
+				}
+				s.LogEntry(scope, "自动遗忘", fmt.Sprintf("%s 已过期删除 (age=%.0fd, conf=%s)", f.Path, ageDays, f.Confidence))
+				deleted++
 			}
-			s.LogEntry(scope, "自动遗忘", fmt.Sprintf("%s 已过期删除 (age=%.0fd, conf=%s)", f.Path, ageDays, f.Confidence))
-			deleted++
 		} else if effectiveAge >= float64(policy.ArchiveAfterDays) {
 			if err := s.SetFileStatus(scope, f.Path, "archived"); err != nil {
 				continue

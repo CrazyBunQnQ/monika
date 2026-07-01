@@ -161,6 +161,31 @@ func (s *KBStore) fillBacklinks(scope string, results []KBFile) {
 	}
 }
 
+func (s *KBStore) recordAccess(scope string, results []KBFile) {
+	db := s.dbFor(scope)
+	if db == nil || len(results) == 0 {
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	tx, err := db.Begin()
+	if err != nil {
+		return
+	}
+	stmt, err := tx.Prepare(`UPDATE file_index SET access_count = access_count + 1, last_accessed = ? WHERE id = ?`)
+	if err != nil {
+		tx.Rollback()
+		return
+	}
+	defer stmt.Close()
+	for _, f := range results {
+		if f.Scope != scope {
+			continue
+		}
+		_, _ = stmt.Exec(now, f.ID)
+	}
+	_ = tx.Commit()
+}
+
 func (s *KBStore) GraphTraverse(scope, seedPath string, maxHops int, relationFilter string) ([]GraphNode, error) {
 	db := s.dbFor(scope)
 	if db == nil {
@@ -195,12 +220,12 @@ func (s *KBStore) GraphTraverse(scope, seedPath string, maxHops int, relationFil
 
 			var f KBFile
 			row := db.QueryRow(
-				`SELECT id, path, scope, category, title, tags, confidence, status, char_count, linked_to, created_at, updated_at
+				`SELECT id, path, scope, category, title, tags, confidence, status, char_count, linked_to, created_at, updated_at, access_count, last_accessed
 				 FROM file_index WHERE path = ? AND status != 'trash'`,
 				edge.Target)
 			var tagsJSON, linkedJSON, ca, ua string
 			if err := row.Scan(&f.ID, &f.Path, &f.Scope, &f.Category, &f.Title, &tagsJSON,
-				&f.Confidence, &f.Status, &f.CharCount, &linkedJSON, &ca, &ua); err != nil {
+				&f.Confidence, &f.Status, &f.CharCount, &linkedJSON, &ca, &ua, &f.AccessCount, new(string)); err != nil {
 				continue
 			}
 			json.Unmarshal([]byte(tagsJSON), &f.Tags)

@@ -175,6 +175,8 @@ func openDB(dbPath string) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	_, _ = db.Exec(`ALTER TABLE file_index ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0`)
+	_, _ = db.Exec(`ALTER TABLE file_index ADD COLUMN last_accessed TEXT NOT NULL DEFAULT ''`)
 	if err := ensureEdgesTable(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate edges: %w", err)
@@ -233,6 +235,7 @@ func (s *KBStore) Search(query, scope string, limit int) ([]KBFile, error) {
 		return nil, err
 	}
 	s.fillBacklinks(scope, results)
+	s.recordAccess(scope, results)
 	return results, nil
 }
 
@@ -296,6 +299,8 @@ func (s *KBStore) searchAuto(query string, limit int) ([]KBFile, error) {
 	}
 	s.fillBacklinks(ScopeProject, merged)
 	s.fillBacklinks(ScopeGlobal, merged)
+	s.recordAccess(ScopeProject, merged)
+	s.recordAccess(ScopeGlobal, merged)
 	return merged, nil
 }
 
@@ -352,7 +357,7 @@ func (s *KBStore) execFTS(query, scope string, limit int) ([]KBFile, error) {
 	q := `
 		SELECT f.id, f.path, f.scope, f.category, f.title, f.tags,
 		       f.confidence, f.status, f.char_count, f.linked_to,
-		       f.created_at, f.updated_at,
+		       f.created_at, f.updated_at, f.access_count, f.last_accessed,
 		       snippet(file_fts, 2, '<b>', '</b>', '...', 40)
 		FROM file_fts
 		JOIN file_index f ON file_fts.rowid = f.id
@@ -429,7 +434,7 @@ func (s *KBStore) searchLike(query, scope string, limit int) ([]KBFile, error) {
 	rows, err := s.dbFor(scope).Query(`
 		SELECT f.id, f.path, f.scope, f.category, f.title, f.tags,
 		       f.confidence, f.status, f.char_count, f.linked_to,
-		       f.created_at, f.updated_at,
+		       f.created_at, f.updated_at, f.access_count, f.last_accessed,
 		       substr(f.content, 1, 200)
 		FROM file_index f
 		WHERE f.status != 'trash'
@@ -675,13 +680,13 @@ func (s *KBStore) ListFiles(scope, category string) ([]KBFile, error) {
 	var err error
 	if category != "" {
 		rows, err = db.Query(`
-			SELECT id, path, scope, category, title, tags, confidence, status, char_count, linked_to, created_at, updated_at
+			SELECT id, path, scope, category, title, tags, confidence, status, char_count, linked_to, created_at, updated_at, access_count, last_accessed
 			FROM file_index WHERE category = ? AND status != 'trash'
 			ORDER BY updated_at DESC
 		`, category)
 	} else {
 		rows, err = db.Query(`
-			SELECT id, path, scope, category, title, tags, confidence, status, char_count, linked_to, created_at, updated_at
+			SELECT id, path, scope, category, title, tags, confidence, status, char_count, linked_to, created_at, updated_at, access_count, last_accessed
 			FROM file_index WHERE status != 'trash'
 			ORDER BY updated_at DESC
 		`)
@@ -768,6 +773,27 @@ func (s *KBStore) SoftDelete(scope, relPath string) error {
 	}
 	if err := os.Rename(oldPath, filepath.Join(trashPath, filepath.Base(relPath))); err != nil {
 		return fmt.Errorf("soft-delete rename: %w", err)
+	}
+	return nil
+}
+
+func (s *KBStore) Restore(scope, relPath string) error {
+	db := s.dbFor(scope)
+	if db == nil {
+		return fmt.Errorf("scope %q has no database initialized", scope)
+	}
+	_, err := db.Exec("UPDATE file_index SET status = 'active', updated_at = ? WHERE path = ?",
+		time.Now().UTC().Format(time.RFC3339), relPath)
+	if err != nil {
+		return err
+	}
+	trashPath := filepath.Join(s.rootFor(scope), ".trash", relPath)
+	activePath := filepath.Join(s.rootFor(scope), relPath)
+	if err := os.MkdirAll(filepath.Dir(activePath), 0755); err != nil {
+		return fmt.Errorf("restore mkdir: %w", err)
+	}
+	if err := os.Rename(trashPath, activePath); err != nil {
+		return fmt.Errorf("restore rename: %w", err)
 	}
 	return nil
 }
@@ -903,18 +929,16 @@ func scanKBFiles(rows *sql.Rows) ([]KBFile, error) {
 	var results []KBFile
 	for rows.Next() {
 		var f KBFile
-		var tagsJSON, linkedJSON, ca, ua, snippet string
+		var tagsJSON, linkedJSON, ca, ua, la, snippet string
 		if err := rows.Scan(&f.ID, &f.Path, &f.Scope, &f.Category, &f.Title, &tagsJSON,
-			&f.Confidence, &f.Status, &f.CharCount, &linkedJSON, &ca, &ua, &snippet); err != nil {
+			&f.Confidence, &f.Status, &f.CharCount, &linkedJSON, &ca, &ua, &f.AccessCount, &la, &snippet); err != nil {
 			return nil, err
 		}
-		// Ignore unmarshal/parse errors: tags/linked_to are internally written as
-		// valid JSON and timestamps always use RFC3339, so failures here are
-		// recoverable per-row corruption, not fatal DB errors.
 		json.Unmarshal([]byte(tagsJSON), &f.Tags)
 		json.Unmarshal([]byte(linkedJSON), &f.LinkedTo)
 		f.CreatedAt, _ = time.Parse(time.RFC3339, ca)
 		f.UpdatedAt, _ = time.Parse(time.RFC3339, ua)
+		f.LastAccessed, _ = time.Parse(time.RFC3339, la)
 		f.Snippet = snippet
 		results = append(results, f)
 	}
@@ -928,18 +952,16 @@ func scanKBFilesFlat(rows *sql.Rows) ([]KBFile, error) {
 	var results []KBFile
 	for rows.Next() {
 		var f KBFile
-		var tagsJSON, linkedJSON, ca, ua string
+		var tagsJSON, linkedJSON, ca, ua, la string
 		if err := rows.Scan(&f.ID, &f.Path, &f.Scope, &f.Category, &f.Title, &tagsJSON,
-			&f.Confidence, &f.Status, &f.CharCount, &linkedJSON, &ca, &ua); err != nil {
+			&f.Confidence, &f.Status, &f.CharCount, &linkedJSON, &ca, &ua, &f.AccessCount, &la); err != nil {
 			return nil, err
 		}
-		// Ignore unmarshal/parse errors: tags/linked_to are internally written as
-		// valid JSON and timestamps always use RFC3339, so failures here are
-		// recoverable per-row corruption, not fatal DB errors.
 		json.Unmarshal([]byte(tagsJSON), &f.Tags)
 		json.Unmarshal([]byte(linkedJSON), &f.LinkedTo)
 		f.CreatedAt, _ = time.Parse(time.RFC3339, ca)
 		f.UpdatedAt, _ = time.Parse(time.RFC3339, ua)
+		f.LastAccessed, _ = time.Parse(time.RFC3339, la)
 		results = append(results, f)
 	}
 	if results == nil {

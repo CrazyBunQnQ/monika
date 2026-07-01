@@ -23,21 +23,23 @@ const (
 )
 
 type KBFile struct {
-	ID         int64     `json:"id"`
-	Path       string    `json:"path"`
-	Scope      string    `json:"scope"`
-	Category   string    `json:"category"`
-	Title      string    `json:"title"`
-	Tags       []string  `json:"tags"`
-	Confidence string    `json:"confidence"`
-	Status     string    `json:"status"`
-	CharCount  int       `json:"char_count"`
-	LinkedTo   []string  `json:"linked_to,omitempty"`
-	Backlinks  []string  `json:"backlinks,omitempty"`
-	Entities   []string  `json:"entities,omitempty"`
-	Snippet    string    `json:"snippet,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID           int64     `json:"id"`
+	Path         string    `json:"path"`
+	Scope        string    `json:"scope"`
+	Category     string    `json:"category"`
+	Title        string    `json:"title"`
+	Tags         []string  `json:"tags"`
+	Confidence   string    `json:"confidence"`
+	Status       string    `json:"status"`
+	CharCount    int       `json:"char_count"`
+	LinkedTo     []string  `json:"linked_to,omitempty"`
+	Backlinks    []string  `json:"backlinks,omitempty"`
+	Entities     []string  `json:"entities,omitempty"`
+	Snippet      string    `json:"snippet,omitempty"`
+	AccessCount  int       `json:"access_count"`
+	LastAccessed time.Time `json:"last_accessed,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 func GlobalKBPath(homeDir string) string {

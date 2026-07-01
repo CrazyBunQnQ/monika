@@ -160,7 +160,7 @@ func (s *KBStore) QueryByEntity(scope, entityName string) ([]KBFile, error) {
 	rows, err := db.Query(`
 		SELECT f.id, f.path, f.scope, f.category, f.title, f.tags,
 		       f.confidence, f.status, f.char_count, f.linked_to,
-		       f.created_at, f.updated_at, ''
+		       f.created_at, f.updated_at, f.access_count, f.last_accessed, ''
 		FROM file_index f
 		JOIN memory_entities me ON f.id = me.memory_id
 		JOIN entities e ON me.entity_id = e.id
