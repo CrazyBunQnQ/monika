@@ -175,6 +175,14 @@ func openDB(dbPath string) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	if err := ensureEdgesTable(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate edges: %w", err)
+	}
+	if err := ensureEntitiesTables(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate entities: %w", err)
+	}
 	return db, nil
 }
 
@@ -220,7 +228,12 @@ func (s *KBStore) Search(query, scope string, limit int) ([]KBFile, error) {
 	if scope == ScopeAuto {
 		return s.searchAuto(query, limit)
 	}
-	return s.SearchHybrid(query, scope, limit)
+	results, err := s.SearchHybrid(query, scope, limit)
+	if err != nil {
+		return nil, err
+	}
+	s.fillBacklinks(scope, results)
+	return results, nil
 }
 
 // SearchHybrid performs multi-channel lexical search (FTS5 + LIKE) on a single
@@ -281,6 +294,8 @@ func (s *KBStore) searchAuto(query string, limit int) ([]KBFile, error) {
 	if len(merged) > limit {
 		merged = rerankCandidates(query, merged, limit)
 	}
+	s.fillBacklinks(ScopeProject, merged)
+	s.fillBacklinks(ScopeGlobal, merged)
 	return merged, nil
 }
 
@@ -506,8 +521,8 @@ func (s *KBStore) WriteFile(scope, category, title, content string, tags []strin
 		confidence = "medium"
 	}
 
-	// Dedup check: lexical signals only (no LLM). Runs on every write, so it
-	// must stay cheap. Rejects near-duplicates; guides caller to memory_update.
+	var relatedPaths []string
+
 	queryText := title + " " + content
 	if existing, _ := s.Search(queryText, scope, 3); len(existing) > 0 {
 		for _, e := range existing {
@@ -516,11 +531,22 @@ func (s *KBStore) WriteFile(scope, category, title, content string, tags []strin
 					e.Title, e.Path, sim)
 			} else if sim >= 0.5 && detectContradiction(title, content, e.Title+" "+e.Snippet) {
 				_ = s.markConflict(scope, title, e.Path)
+			} else if sim >= 0.35 {
+				relatedPaths = append(relatedPaths, e.Path)
 			}
 		}
 	}
 
-	return s.writeFileUnchecked(scope, category, title, content, tags, confidence)
+	if err := s.writeFileUnchecked(scope, category, title, content, tags, confidence); err != nil {
+		return err
+	}
+
+	newPath := categoryPath(category, title)
+	for _, rp := range relatedPaths {
+		_ = s.addTypedLink(scope, newPath, rp, "related")
+	}
+
+	return nil
 }
 
 // writeFileUnchecked writes the memory without running the dedup check.
@@ -573,6 +599,8 @@ func (s *KBStore) writeFileUnchecked(scope, category, title, content string, tag
 	if err != nil {
 		return fmt.Errorf("upsert: %w", err)
 	}
+
+	_ = s.indexEntities(scope, relPath, content)
 	return nil
 }
 
@@ -730,6 +758,8 @@ func (s *KBStore) SoftDelete(scope, relPath string) error {
 	if _, err := db.Exec("DELETE FROM file_fts WHERE rowid = ?", id); err != nil {
 		return fmt.Errorf("soft-delete fts: %w", err)
 	}
+	_ = s.removeEdgesForPath(scope, relPath)
+	_ = s.removeEntitiesForPath(scope, id)
 	oldPath := filepath.Join(s.rootFor(scope), relPath)
 	trashSubdir := filepath.Join(".trash", filepath.Dir(relPath))
 	trashPath := filepath.Join(s.rootFor(scope), trashSubdir)
@@ -969,6 +999,10 @@ func (s *KBStore) ReindexFromDisk(scope string) (int, error) {
 			if err := s.setLinkedTo(scope, relPath, links); err != nil {
 				return nil
 			}
+		}
+		_ = s.indexEntities(scope, relPath, body)
+		for _, link := range links {
+			_ = s.addTypedLink(scope, relPath, link, "related")
 		}
 		count++
 		return nil

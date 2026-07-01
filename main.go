@@ -257,6 +257,9 @@ changes as you install or configure them. Always search before assuming:
 			for _, r := range results {
 				fmt.Fprintf(&b, "- **%s** [%s] path: %s\n  snippet: %s\n",
 					r.Title, r.Category, r.Path, r.Snippet)
+				if len(r.LinkedTo) > 0 {
+					fmt.Fprintf(&b, "  links_to: %s\n", strings.Join(r.LinkedTo, ", "))
+				}
 			}
 			b.WriteString("\nUse memory_read(path) to get full content if any entry above looks relevant.")
 			return b.String()
@@ -419,9 +422,11 @@ changes as you install or configure them. Always search before assuming:
 				},
 			}
 			go func() {
-				time.Sleep(10 * time.Second) // let the app settle before the first review
+				time.Sleep(10 * time.Second)
 				for _, scope := range []string{memory.ScopeProject, memory.ScopeGlobal} {
 					kbStore.AutoReviewIfNeeded(context.Background(), reviewLLM, scope)
+					clusterLLM := &memory.ProviderExtractionLLM{Provider: defaultProvider, Model: pr.Model}
+					_ = kbStore.GenerateTopicSummaries(context.Background(), clusterLLM, scope)
 				}
 			}()
 		}

@@ -264,4 +264,5 @@ func RegisterMemory(r *tool.ToolRegistry, store *memory.KBStore) {
 	r.Register(NewMemoryWrite(store))
 	r.Register(NewMemoryIndex(store))
 	r.Register(NewMemoryReindex(store))
+	r.Register(NewMemoryGraph(store))
 }

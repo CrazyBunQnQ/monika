@@ -2244,6 +2244,11 @@ func (a *App) extractAndSaveMemories(sessionID, providerID, model string, s *Ses
 			fmt.Fprintf(os.Stderr, "[monika] memory write failed '%s': %v\n", c.Title, err)
 		} else {
 			fmt.Fprintf(os.Stderr, "[monika] memory extracted: '%s' [%s] scope=%s\n", c.Title, c.Category, c.Scope)
+			for _, rel := range c.Relations {
+				if rel.Title != "" {
+					_ = a.kbStore.LinkByTitle(c.Scope, c.Category, c.Title, rel.Title, rel.Relation)
+				}
+			}
 		}
 	}
 }

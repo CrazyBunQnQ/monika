@@ -70,7 +70,10 @@ func (t *memorySearchTool) Execute(ctx context.Context, args json.RawMessage) (t
 			sb.WriteString(fmt.Sprintf("   tags: %s\n", strings.Join(r.Tags, ", ")))
 		}
 		if len(r.LinkedTo) > 0 {
-			sb.WriteString(fmt.Sprintf("   links: %s\n", strings.Join(r.LinkedTo, ", ")))
+			sb.WriteString(fmt.Sprintf("   links_to: %s\n", strings.Join(r.LinkedTo, ", ")))
+		}
+		if len(r.Backlinks) > 0 {
+			sb.WriteString(fmt.Sprintf("   backlinks: %s\n", strings.Join(r.Backlinks, ", ")))
 		}
 		if r.Snippet != "" {
 			sb.WriteString(fmt.Sprintf("   snippet: %s\n", r.Snippet))

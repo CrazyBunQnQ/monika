@@ -8,12 +8,18 @@ import (
 )
 
 type ExtractCandidate struct {
-	Title      string   `json:"title"`
-	Content    string   `json:"content"`
-	Category   string   `json:"category"`
-	Scope      string   `json:"scope"`
-	Tags       []string `json:"tags"`
-	Confidence string   `json:"confidence"`
+	Title      string         `json:"title"`
+	Content    string         `json:"content"`
+	Category   string         `json:"category"`
+	Scope      string         `json:"scope"`
+	Tags       []string       `json:"tags"`
+	Confidence string         `json:"confidence"`
+	Relations  []RelationLink `json:"relations,omitempty"`
+}
+
+type RelationLink struct {
+	Title    string `json:"title"`
+	Relation string `json:"relation"`
 }
 
 type ExtractResult struct {
@@ -60,7 +66,8 @@ func extractStage1(ctx context.Context, llm ExtractionLLM, scope, sessionID, tra
       "category": "lesson | topic | knowledge_update",
       "scope": "global | project",
       "tags": ["tag1", "tag2"],
-      "confidence": "high | medium | low"
+      "confidence": "high | medium | low",
+      "relations": [{"title": "related memory title", "relation": "causes|fixes|related|supersedes|part-of"}]
     }
   ],
   "profile_delta": "如果从对话中发现用户偏好/风格变化，写简短摘要"
@@ -70,6 +77,7 @@ func extractStage1(ctx context.Context, llm ExtractionLLM, scope, sessionID, tra
 - 只提取有长期价值的知识，不提取一次性操作
 - 置信度 high: 明确的教训或事实；medium: 可能有用的发现；low: 不确定但值得记录
 - content 用 markdown，包含必要的上下文、代码片段、链接
+- relations 仅在你确信存在因果或依赖关系时填写，否则留空
 - 不要重复已有的知识`
 
 	userMsg := fmt.Sprintf("Session ID: %s\nScope: %s\n\n--- Conversation Transcript ---\n%s",
