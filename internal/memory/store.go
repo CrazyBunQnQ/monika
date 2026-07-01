@@ -514,7 +514,7 @@ func (s *KBStore) WriteFile(scope, category, title, content string, tags []strin
 			if sim := computeWriteSimilarity(title, tags, e); sim >= 0.75 {
 				return fmt.Errorf("similar memory already exists: %s (path: %s, similarity: %.2f). Use memory_update to merge instead",
 					e.Title, e.Path, sim)
-			} else if sim >= 0.5 && detectContradiction(title, content, e.Title) {
+			} else if sim >= 0.5 && detectContradiction(title, content, e.Title+" "+e.Snippet) {
 				_ = s.markConflict(scope, title, e.Path)
 			}
 		}
@@ -527,6 +527,9 @@ func (s *KBStore) WriteFile(scope, category, title, content string, tags []strin
 // Used by bulkImport/ReindexFromDisk where the file already exists on disk
 // and must be indexed as-is rather than rejected as a near-duplicate.
 func (s *KBStore) writeFileUnchecked(scope, category, title, content string, tags []string, confidence string) error {
+	if s.dbFor(scope) == nil {
+		return fmt.Errorf("scope %q has no database initialized", scope)
+	}
 	root := s.rootFor(scope)
 	if tags == nil {
 		tags = []string{}
@@ -667,8 +670,20 @@ func (s *KBStore) ListFiles(scope, category string) ([]KBFile, error) {
 // The index is intended for inclusion in the system prompt so the LLM can
 // discover existing memories and proactively memory_read relevant ones.
 func (s *KBStore) BuildIndex(scope string, limit int) (string, error) {
-	files, err := s.ListFiles(scope, "")
-	if err != nil || len(files) == 0 {
+	var files []KBFile
+	if scope == ScopeAuto {
+		proj, _ := s.ListFiles(ScopeProject, "")
+		glob, _ := s.ListFiles(ScopeGlobal, "")
+		files = append(files, proj...)
+		files = append(files, glob...)
+	} else {
+		var err error
+		files, err = s.ListFiles(scope, "")
+		if err != nil {
+			return "", nil
+		}
+	}
+	if len(files) == 0 {
 		return "", nil
 	}
 	sort.Slice(files, func(i, j int) bool {
@@ -700,6 +715,9 @@ func categoryLabel(category string) string {
 
 func (s *KBStore) SoftDelete(scope, relPath string) error {
 	db := s.dbFor(scope)
+	if db == nil {
+		return fmt.Errorf("scope %q has no database initialized", scope)
+	}
 	_, err := db.Exec("UPDATE file_index SET status = 'trash', updated_at = ? WHERE path = ?",
 		time.Now().UTC().Format(time.RFC3339), relPath)
 	if err != nil {
@@ -727,6 +745,10 @@ func (s *KBStore) SoftDelete(scope, relPath string) error {
 // setLinkedTo 把某文件的出链列表写入 DB linked_to 列。
 // 与 addLink 写入 markdown 的「> 关联：[[...]]」行保持同步，让搜索结果能直接返回依赖关系。
 func (s *KBStore) setLinkedTo(scope, relPath string, links []string) error {
+	db := s.dbFor(scope)
+	if db == nil {
+		return fmt.Errorf("scope %q has no database initialized", scope)
+	}
 	if links == nil {
 		links = []string{}
 	}
@@ -735,7 +757,7 @@ func (s *KBStore) setLinkedTo(scope, relPath string, links []string) error {
 		return fmt.Errorf("marshal linked_to: %w", err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err = s.dbFor(scope).Exec(
+	_, err = db.Exec(
 		"UPDATE file_index SET linked_to = ?, updated_at = ? WHERE path = ?",
 		string(linksJSON), now, relPath)
 	if err != nil {
@@ -745,11 +767,15 @@ func (s *KBStore) setLinkedTo(scope, relPath string, links []string) error {
 }
 
 func (s *KBStore) SetFileStatus(scope, relPath, status string) error {
+	db := s.dbFor(scope)
+	if db == nil {
+		return fmt.Errorf("scope %q has no database initialized", scope)
+	}
 	root := s.rootFor(scope)
 	fullPath := filepath.Join(root, relPath)
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	_, err := s.dbFor(scope).Exec("UPDATE file_index SET status = ?, updated_at = ? WHERE path = ?", status, now, relPath)
+	_, err := db.Exec("UPDATE file_index SET status = ?, updated_at = ? WHERE path = ?", status, now, relPath)
 	if err != nil {
 		return fmt.Errorf("set status: %w", err)
 	}
@@ -766,7 +792,12 @@ func (s *KBStore) SetFileStatus(scope, relPath, status string) error {
 }
 
 func (s *KBStore) GetStatistics(scope string) (total, active, archived int, lastUpdate string, err error) {
-	err = s.dbFor(scope).QueryRow(`
+	db := s.dbFor(scope)
+	if db == nil {
+		err = fmt.Errorf("scope %q has no database initialized", scope)
+		return
+	}
+	err = db.QueryRow(`
 		SELECT COUNT(*),
 		       SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END),
 		       SUM(CASE WHEN status = 'archived' OR status = 'deprecated' THEN 1 ELSE 0 END),

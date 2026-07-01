@@ -621,6 +621,12 @@ func (a *App) PersistSelection(providerID, modelID string) {
 }
 
 func (a *App) DeleteSession(projectPath, sessionID string) error {
+	a.extractTimerMu.Lock()
+	if t, ok := a.extractTimers[sessionID]; ok {
+		t.Stop()
+		delete(a.extractTimers, sessionID)
+	}
+	a.extractTimerMu.Unlock()
 	sm := a.getSessionManager(projectPath)
 	return sm.Delete(sessionID)
 }
@@ -1006,7 +1012,9 @@ func (a *App) startAgentLoop(ctx context.Context, cancel context.CancelFunc, sm 
 		// Debounced memory extraction: wait 30s after the last agent-loop
 		// completion before extracting. Consecutive queued messages coalesce
 		// into one extraction run instead of N redundant LLM calls.
-		a.scheduleMemoryExtraction(sessionID, providerID, model, s)
+		msgSnapshot := make([]engine2.ChatMessage, len(s.Messages))
+		copy(msgSnapshot, s.Messages)
+		a.scheduleMemoryExtraction(sessionID, providerID, model, msgSnapshot)
 
 		// Sync frontend with updated queue (completed item removed)
 		if queueItemID != "" {
@@ -2133,9 +2141,12 @@ func (a *App) restoreTasksFromSession(s *Session) {
 // messages for memory extraction. Skips tool results, compaction summaries,
 // and empty content. Tool results are noisy (file contents, grep output) and
 // would consume the char budget without contributing extractable knowledge.
-// Returns at most maxChars characters, truncated on a rune boundary.
+// When the transcript exceeds maxChars, keeps the MOST RECENT messages (which
+// contain the freshest, most relevant knowledge) and drops older ones.
 func buildTranscript(s *Session, maxChars int) string {
-	var b strings.Builder
+	type entry struct{ text string }
+	var entries []entry
+	total := 0
 	for _, m := range s.Messages {
 		if m.Name == "compaction_summary" || m.Role == "tool" {
 			continue
@@ -2148,24 +2159,50 @@ func buildTranscript(s *Session, maxChars int) string {
 		if role == "" {
 			role = "unknown"
 		}
-		fmt.Fprintf(&b, "[%s]: %s\n\n", role, content)
-		if b.Len() > maxChars {
+		line := fmt.Sprintf("[%s]: %s\n\n", role, content)
+		entries = append(entries, entry{line})
+		total += len(line)
+	}
+	if total <= maxChars {
+		var b strings.Builder
+		for _, e := range entries {
+			b.WriteString(e.text)
+		}
+		return b.String()
+	}
+	// Keep most recent entries that fit within budget
+	cutoff := len(entries)
+	running := 0
+	for i := len(entries) - 1; i >= 0; i-- {
+		if running+len(entries[i].text) > maxChars {
+			cutoff = i + 1
 			break
 		}
+		running += len(entries[i].text)
+		if i == 0 {
+			cutoff = 0
+		}
+	}
+	var b strings.Builder
+	if cutoff > 0 {
+		b.WriteString("…\n\n")
+	}
+	for i := cutoff; i < len(entries); i++ {
+		b.WriteString(entries[i].text)
 	}
 	out := b.String()
 	if len(out) > maxChars {
 		r := []rune(out)
-		cutoff := 0
+		c := 0
 		byteLen := 0
 		for _, ch := range r {
 			if byteLen+len(string(ch)) > maxChars {
 				break
 			}
 			byteLen += len(string(ch))
-			cutoff++
+			c++
 		}
-		out = string(r[:cutoff])
+		out = string(r[:c])
 	}
 	return out
 }
@@ -2215,7 +2252,7 @@ func (a *App) extractAndSaveMemories(sessionID, providerID, model string, s *Ses
 // call, so rapid-fire queued messages only trigger one extraction run after
 // the conversation settles. Passes a snapshot of messages to avoid racing
 // with concurrent agent-loop appends.
-func (a *App) scheduleMemoryExtraction(sessionID, providerID, model string, s *Session) {
+func (a *App) scheduleMemoryExtraction(sessionID, providerID, model string, msgs []engine2.ChatMessage) {
 	if a.kbStore == nil {
 		return
 	}
@@ -2227,13 +2264,13 @@ func (a *App) scheduleMemoryExtraction(sessionID, providerID, model string, s *S
 	if t, ok := a.extractTimers[sessionID]; ok {
 		t.Stop()
 	}
-	msgSnapshot := make([]engine2.ChatMessage, len(s.Messages))
-	copy(msgSnapshot, s.Messages)
+	snapshot := make([]engine2.ChatMessage, len(msgs))
+	copy(snapshot, msgs)
 	a.extractTimers[sessionID] = time.AfterFunc(30*time.Second, func() {
 		a.extractTimerMu.Lock()
 		delete(a.extractTimers, sessionID)
 		a.extractTimerMu.Unlock()
-		snap := &Session{Messages: msgSnapshot}
+		snap := &Session{Messages: snapshot}
 		go a.extractAndSaveMemories(sessionID, providerID, model, snap)
 	})
 }

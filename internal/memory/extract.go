@@ -80,21 +80,73 @@ func extractStage1(ctx context.Context, llm ExtractionLLM, scope, sessionID, tra
 		return nil, fmt.Errorf("extraction llm: %w", err)
 	}
 
-	jsonStr := strings.TrimSpace(resp)
-	if idx := strings.Index(jsonStr, "```json"); idx >= 0 {
-		jsonStr = jsonStr[idx+7:]
-		if end := strings.Index(jsonStr, "```"); end >= 0 {
-			jsonStr = jsonStr[:end]
-		}
-	} else if idx := strings.Index(jsonStr, "{"); idx >= 0 {
-		jsonStr = jsonStr[idx:]
-	}
-
+	jsonStr := extractJSON(resp)
 	var result ExtractResult
 	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
 		return nil, fmt.Errorf("parse extraction: %w\nresponse: %s", err, resp)
 	}
 	return &result, nil
+}
+
+// extractJSON isolates the JSON object from an LLM response that may contain
+// code fences, prose before/after, or bare backtick fences. It finds the first
+// balanced {} block and returns it.
+func extractJSON(raw string) string {
+	s := strings.TrimSpace(raw)
+	// Strip ```json ... ``` or ```JSON ... ``` fences
+	if idx := strings.Index(strings.ToLower(s), "```json"); idx >= 0 {
+		s = s[idx+7:]
+		if end := strings.Index(s, "```"); end >= 0 {
+			s = s[:end]
+		}
+		return strings.TrimSpace(s)
+	}
+	// Bare ``` fence
+	if strings.HasPrefix(s, "```") {
+		s = s[3:]
+		if nl := strings.Index(s, "\n"); nl >= 0 {
+			s = s[nl+1:]
+		}
+		if end := strings.Index(s, "```"); end >= 0 {
+			s = s[:end]
+		}
+		return strings.TrimSpace(s)
+	}
+	// Find first balanced {} block
+	start := strings.Index(s, "{")
+	if start < 0 {
+		return s
+	}
+	depth := 0
+	inStr := false
+	escaped := false
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if c == '\\' {
+			escaped = true
+			continue
+		}
+		if c == '"' {
+			inStr = !inStr
+			continue
+		}
+		if inStr {
+			continue
+		}
+		if c == '{' {
+			depth++
+		} else if c == '}' {
+			depth--
+			if depth == 0 {
+				return s[start : i+1]
+			}
+		}
+	}
+	return s[start:]
 }
 
 // extractStage2SelfQuestion asks the LLM to identify knowledge that Stage 1
@@ -126,16 +178,7 @@ Return JSON with the same format as the extraction (candidates array). If nothin
 		return nil, err
 	}
 
-	jsonStr := strings.TrimSpace(resp)
-	if idx := strings.Index(jsonStr, "```json"); idx >= 0 {
-		jsonStr = jsonStr[idx+7:]
-		if end := strings.Index(jsonStr, "```"); end >= 0 {
-			jsonStr = jsonStr[:end]
-		}
-	} else if idx := strings.Index(jsonStr, "{"); idx >= 0 {
-		jsonStr = jsonStr[idx:]
-	}
-
+	jsonStr := extractJSON(resp)
 	var result ExtractResult
 	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
 		return nil, fmt.Errorf("parse stage2: %w", err)
