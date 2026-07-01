@@ -41,6 +41,10 @@
   min-height: 30px;
 }
 
+.dv-tabs-and-actions-container.dv-single-tab {
+  display: none;
+}
+
 /* ── Tab transitions ── */
 .dockview-theme-dark .dv-tab {
   transition: background-color 0.15s ease;
