@@ -1,6 +1,7 @@
 import { useState, KeyboardEvent, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useStore } from '../../store'
 import { formatTokens } from '../../lib/format'
+import { stripTransientBlocks } from '../../lib/stripTransientBlocks'
 import ModelPicker from './ModelPicker'
 import WorktreeChip from './WorktreeChip'
 import WorktreeManager from './WorktreeManager'
@@ -803,7 +804,7 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, isGenerating, quotedM
             const isShellMode = inputMode === 'shell'
             const histSrc = isShellMode
                 ? historyRef.current
-                : useStore.getState().sessionMessages[sessionIdRef.current]?.filter(m => m.role === 'user').map(m => m.content) || []
+                : useStore.getState().sessionMessages[sessionIdRef.current]?.filter(m => m.role === 'user').map(m => stripTransientBlocks(m.content)) || []
 
             if (e.key === 'ArrowUp' && historyIndexRef.current <= histSrc.length - 1 && (isShellMode || historyIndexRef.current !== -1 || isCursorOnFirstLine(el!))) {
                 e.preventDefault()
