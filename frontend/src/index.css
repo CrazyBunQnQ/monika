@@ -420,6 +420,17 @@
   .markdown-body li > ul, .markdown-body li > ol { margin-top: 2px; margin-bottom: 2px; }
 
   /* tables */
+  .markdown-body .md-table-wrap {
+    overflow-x: auto;
+    margin: 10px 0;
+  }
+
+  .markdown-body .md-table-wrap table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 0;
+  }
+
   .markdown-body table {
     border-collapse: collapse;
     width: 100%;

@@ -67,6 +67,11 @@ const mdComponents: Components = {
         }
         return <code {...props}>{processChildren(children)}</code>
     },
+    table: ({ children }: any) => (
+        <div className="md-table-wrap">
+            <table>{children}</table>
+        </div>
+    ),
     ...colorComponents,
 }
 
