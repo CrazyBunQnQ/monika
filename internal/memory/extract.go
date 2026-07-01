@@ -25,15 +25,13 @@ type ExtractionLLM interface {
 	Chat(ctx context.Context, systemPrompt, userMessage string) (string, error)
 }
 
-func ExtractMemories(ctx context.Context, llm ExtractionLLM, scope, sessionID, compactionSummary string) (*ExtractResult, error) {
-	result, err := extractStage1(ctx, llm, scope, sessionID, compactionSummary)
+func ExtractMemories(ctx context.Context, llm ExtractionLLM, scope, sessionID, transcript string) (*ExtractResult, error) {
+	result, err := extractStage1(ctx, llm, scope, sessionID, transcript)
 	if err != nil {
 		return nil, err
 	}
 
-	// Stage 2: self-questioning pass (ProMem pattern). Best-effort —
-	// failures do not invalidate Stage 1 results.
-	gapFacts, gapErr := extractStage2SelfQuestion(ctx, llm, compactionSummary, result)
+	gapFacts, gapErr := extractStage2SelfQuestion(ctx, llm, transcript, result)
 	if gapErr == nil && len(gapFacts) > 0 {
 		result.Candidates = append(result.Candidates, gapFacts...)
 	}
@@ -41,8 +39,8 @@ func ExtractMemories(ctx context.Context, llm ExtractionLLM, scope, sessionID, c
 	return result, nil
 }
 
-func extractStage1(ctx context.Context, llm ExtractionLLM, scope, sessionID, compactionSummary string) (*ExtractResult, error) {
-	systemPrompt := `你是一个知识提取器。从以下 session 总结中提取值得长期保留的知识。
+func extractStage1(ctx context.Context, llm ExtractionLLM, scope, sessionID, transcript string) (*ExtractResult, error) {
+	systemPrompt := `你是一个知识提取器。从以下对话记录中提取值得长期保留的知识。
 
 类型定义：
 - "lesson": 具体经验教训（问题→根因→解决方案→泛化教训）
@@ -74,8 +72,8 @@ func extractStage1(ctx context.Context, llm ExtractionLLM, scope, sessionID, com
 - content 用 markdown，包含必要的上下文、代码片段、链接
 - 不要重复已有的知识`
 
-	userMsg := fmt.Sprintf("Session ID: %s\nScope: %s\n\n--- Compaction Summary ---\n%s",
-		sessionID, scope, compactionSummary)
+	userMsg := fmt.Sprintf("Session ID: %s\nScope: %s\n\n--- Conversation Transcript ---\n%s",
+		sessionID, scope, transcript)
 
 	resp, err := llm.Chat(ctx, systemPrompt, userMsg)
 	if err != nil {
@@ -102,21 +100,21 @@ func extractStage1(ctx context.Context, llm ExtractionLLM, scope, sessionID, com
 // extractStage2SelfQuestion asks the LLM to identify knowledge that Stage 1
 // missed. Returns additional candidates (may be empty). Errors are non-fatal;
 // the caller treats them as "no gaps found".
-func extractStage2SelfQuestion(ctx context.Context, llm ExtractionLLM, summary string, stage1 *ExtractResult) ([]ExtractCandidate, error) {
+func extractStage2SelfQuestion(ctx context.Context, llm ExtractionLLM, transcript string, stage1 *ExtractResult) ([]ExtractCandidate, error) {
 	var extractedSB strings.Builder
 	for i, c := range stage1.Candidates {
 		fmt.Fprintf(&extractedSB, "%d. [%s] %s\n", i+1, c.Category, c.Title)
 	}
 
-	prompt := `You are reviewing a knowledge extraction for gaps. Based on the conversation summary and already-extracted knowledge below, identify important facts or lessons that were MISSED.
+	prompt := `You are reviewing a knowledge extraction for gaps. Based on the conversation transcript and already-extracted knowledge below, identify important facts or lessons that were MISSED.
 
 Rules:
 - Only identify genuinely missing items, not refinements of existing ones
 - Focus on actionable knowledge: root causes, patterns, preferences, constraints
 - If nothing important was missed, return an empty array
 
-Conversation summary:
-` + summary + `
+Conversation transcript:
+` + transcript + `
 
 Already extracted:
 ` + extractedSB.String() + `

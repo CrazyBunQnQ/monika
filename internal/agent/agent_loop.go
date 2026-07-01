@@ -272,6 +272,7 @@ type AgentLoop struct {
 	askUserFn         tool.AskUserFunc
 	taskStore         tool.TaskStore
 	memSearchFn       func(query string) string // memory search callback (auto recall)
+	memIndexFn        func() string             // memory index callback (dynamic index)
 	memQueue          MemoryQueue               // memory update queue (p2-3)
 	dbSchemaNote      string                    // one-shot DB availability hint
 	maxSteps          int
@@ -377,6 +378,13 @@ func WithMemSearchFn(fn func(query string) string) LoopOption {
 	return func(a *AgentLoop) { a.memSearchFn = fn }
 }
 
+// WithMemIndexFn registers a memory index callback. The returned string is
+// injected as a <memory-index> block at each user message, giving the LLM
+// a fresh view of all saved memories so it can proactively read relevant ones.
+func WithMemIndexFn(fn func() string) LoopOption {
+	return func(a *AgentLoop) { a.memIndexFn = fn }
+}
+
 // WithMemQueue registers a MemoryQueue. Notes queued by memory tools (e.g.
 // memory_write) are drained and injected as a <memory-update> block at the
 // start of the next user message, so writes take effect immediately.
@@ -437,15 +445,36 @@ func (a *AgentLoop) buildEntryPrefix(userMessage string) string {
 		b.WriteString("\n</database-schema-available>\n\n")
 	}
 
-	// recalled-memory (auto search) — injected first so context precedes tasks.
-	if a.memSearchFn != nil && userMessage != "" {
-		if recalled := a.memSearchFn(userMessage); recalled != "" {
-			b.WriteString("<recalled-memory>\n")
-			b.WriteString(recalled)
-			b.WriteString("\n</recalled-memory>\n\n")
+	// recalled-memory (auto search) — enriched with current task subjects
+	// for better recall. userMessage alone may be too terse to match stored
+	// memories; appending in-progress task subjects provides extra signal.
+	if a.memSearchFn != nil {
+		searchQuery := userMessage
+		if a.taskStore != nil && a.sessionID != "" {
+			for _, t := range a.taskStore.List(a.sessionID) {
+				if t.Status == "in_progress" {
+					searchQuery += " " + t.Subject
+				}
+			}
+		}
+		if searchQuery != "" {
+			if recalled := a.memSearchFn(searchQuery); recalled != "" {
+				b.WriteString("<recalled-memory>\n")
+				b.WriteString(recalled)
+				b.WriteString("\n</recalled-memory>\n\n")
+			}
 		}
 	}
 
+	// memory-index — fresh overview of all saved memories, recomputed per
+	// message so newly written memories appear immediately.
+	if a.memIndexFn != nil {
+		if index := a.memIndexFn(); index != "" {
+			b.WriteString("<memory-index>\nSaved memories. Use memory_read(path) when one looks relevant.\n\n")
+			b.WriteString(index)
+			b.WriteString("\n</memory-index>\n\n")
+		}
+	}
 	// memory-update — drain notes queued by memory tools since the last message.
 	if a.memQueue != nil {
 		if notes := a.memQueue.DrainPending(); len(notes) > 0 {

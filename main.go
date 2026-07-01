@@ -193,18 +193,20 @@ You have a self-evolving knowledge base that persists across sessions. It contai
 past lessons (bugs, root causes, solutions), topics (architecture, patterns), and
 core knowledge (your preferences, project conventions, persistent facts).
 
-Each message is prefixed with a <recalled-memory> block showing potentially
-relevant memories. If any entry looks relevant, call memory_read(path) for full
-details.
+You are the PRIMARY maintainer of this knowledge base. A background process does
+best-effort extraction as a fallback, but you should not rely on it.
 
-**When to search memory proactively:**
-- Encountering a bug or unexpected behavior → memory_search for similar past issues
-- Working with an unfamiliar file or module → memory_search for architecture notes
-- Using a framework or library → memory_search for prior experience and conventions
+**Reading memories — MANDATORY, not optional:**
+- Each message is prefixed with a <recalled-memory> block — if any entry looks relevant, call memory_read(path) for full details BEFORE acting
+- Before working on an unfamiliar file/module → memory_search for architecture notes
+- When encountering a bug or unexpected behavior → memory_search for similar past issues
+- When using a framework or library → memory_search for prior experience and conventions
 
-The system automatically extracts and saves knowledge from your sessions — focus
-on USING existing memories, not writing them. If you discover something worth
-keeping, use memory_write or memory_update.
+**Writing memories — be proactive:**
+- Solved a non-trivial bug → memory_write a lesson (root cause → fix → generalization)
+- Discovered a project convention or architectural pattern → memory_write a topic
+- Learned a user preference → memory_update existing knowledge
+- Use memory_search first to avoid duplicates, then memory_write for new or memory_update for existing
 
 Tools: memory_search, memory_read, memory_write, memory_update, memory_index.
 Memory types: lessons (bugs/causes/solutions), topics (architecture/patterns),
@@ -234,16 +236,6 @@ changes as you install or configure them. Always search before assuming:
 
 	// {{WorkingDirectory}} is kept as a placeholder; it's replaced with the
 	// actual project directory at agent-loop creation time (see app.go startAgentLoop).
-	// Append a compact memory index to the (static) system prompt so the LLM
-	// can discover existing memories and proactively memory_read relevant ones.
-	// Computed once at App startup; new memories written mid-session are handled
-	// by the memory queue which injects <memory-update> blocks into user messages.
-	if kbStore != nil {
-		memIndex, _ := kbStore.BuildIndex(memory.ScopeAuto, 50)
-		if memIndex != "" {
-			systemPrompt += "\n\n# Memory Index\n\nSaved memories from previous sessions. Use memory_read(path) when one looks relevant.\n\n" + memIndex
-		}
-	}
 	loopOpts := []agent.LoopOption{
 		agent.WithProjectDir(""),
 		agent.WithModel(pr.Model),
@@ -270,6 +262,12 @@ changes as you install or configure them. Always search before assuming:
 			return b.String()
 		}
 		loopOpts = append(loopOpts, agent.WithMemSearchFn(memSearchFn))
+
+		memIndexFn := func() string {
+			idx, _ := kbStore.BuildIndex(memory.ScopeAuto, 50)
+			return idx
+		}
+		loopOpts = append(loopOpts, agent.WithMemIndexFn(memIndexFn))
 	}
 
 	// Wire permission pipeline

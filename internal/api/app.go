@@ -1000,7 +1000,7 @@ func (a *App) startAgentLoop(ctx context.Context, cancel context.CancelFunc, sm 
 		}
 		sm.Unlock()
 
-		// Fire-and-forget memory extraction from the latest compaction summary.
+		// Fire-and-forget memory extraction from the session transcript.
 		go a.extractAndSaveMemories(sessionID, providerID, model, s)
 
 		// Sync frontend with updated queue (completed item removed)
@@ -1525,8 +1525,6 @@ func (a *App) TriggerCompact(projectPath, sessionID, providerID, model string) e
 		}
 		sm.Unlock()
 
-		// Fire-and-forget memory extraction from the compaction summary.
-		go a.extractAndSaveMemories(sessionID, providerID, model, s)
 	}()
 
 	return nil
@@ -2126,21 +2124,43 @@ func (a *App) restoreTasksFromSession(s *Session) {
 	a.EmitTaskEvent(s.ID, taskItems)
 }
 
-// extractAndSaveMemories runs memory extraction on the latest compaction summary
-// and writes candidates to the knowledge base. Best-effort — errors are logged
-// but never surfaced to the user.
+// buildTranscript constructs a compact conversation transcript from session
+// messages for memory extraction. Skips tool-call details, compaction summaries,
+// and empty content. Returns at most maxChars characters.
+func buildTranscript(s *Session, maxChars int) string {
+	var b strings.Builder
+	for _, m := range s.Messages {
+		if m.Name == "compaction_summary" {
+			continue
+		}
+		content := strings.TrimSpace(m.Content)
+		if content == "" {
+			continue
+		}
+		role := m.Role
+		if role == "" {
+			role = "unknown"
+		}
+		fmt.Fprintf(&b, "[%s]: %s\n\n", role, content)
+		if b.Len() > maxChars {
+			break
+		}
+	}
+	if b.Len() > maxChars {
+		return b.String()[:maxChars]
+	}
+	return b.String()
+}
+
+// extractAndSaveMemories runs memory extraction on the session transcript and
+// writes candidates to the knowledge base. Best-effort — errors are logged but
+// never surfaced to the user.
 func (a *App) extractAndSaveMemories(sessionID, providerID, model string, s *Session) {
 	if a.kbStore == nil {
 		return
 	}
-	var summary string
-	for i := len(s.Messages) - 1; i >= 0; i-- {
-		if s.Messages[i].Name == "compaction_summary" {
-			summary = s.Messages[i].Content
-			break
-		}
-	}
-	if summary == "" {
+	transcript := buildTranscript(s, 8000)
+	if transcript == "" {
 		return
 	}
 	providerEng, ok := a.providers[providerID]
@@ -2151,7 +2171,7 @@ func (a *App) extractAndSaveMemories(sessionID, providerID, model string, s *Ses
 		Provider: providerEng,
 		Model:    model,
 	}
-	result, err := memory.ExtractMemories(context.Background(), llm, memory.ScopeProject, sessionID, summary)
+	result, err := memory.ExtractMemories(context.Background(), llm, memory.ScopeProject, sessionID, transcript)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[monika] memory extraction failed: %v\n", err)
 		return
