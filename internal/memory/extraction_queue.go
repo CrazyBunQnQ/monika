@@ -14,6 +14,7 @@ type ExtractionItem struct {
 	SessionID  string `json:"session_id"`
 	Transcript string `json:"transcript"`
 	CreatedAt  string `json:"created_at"`
+	Status     string `json:"status"` // "pending" | "processing"
 }
 
 type ExtractionQueue struct {
@@ -29,6 +30,18 @@ func NewExtractionQueue(dir string) (*ExtractionQueue, error) {
 	if err := q.load(); err != nil {
 		return nil, err
 	}
+	q.mu.Lock()
+	recovered := 0
+	for i := range q.items {
+		if q.items[i].Status == "processing" {
+			q.items[i].Status = "pending"
+			recovered++
+		}
+	}
+	if recovered > 0 {
+		_ = q.saveLocked()
+	}
+	q.mu.Unlock()
 	return q, nil
 }
 
@@ -38,6 +51,7 @@ func (q *ExtractionQueue) EnqueueOrReplace(item ExtractionItem) error {
 	if item.CreatedAt == "" {
 		item.CreatedAt = time.Now().UTC().Format(time.RFC3339)
 	}
+	item.Status = "pending"
 	filtered := q.items[:0]
 	for _, existing := range q.items {
 		if existing.SessionID != item.SessionID {
@@ -51,19 +65,39 @@ func (q *ExtractionQueue) EnqueueOrReplace(item ExtractionItem) error {
 func (q *ExtractionQueue) Dequeue() (ExtractionItem, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if len(q.items) == 0 {
-		return ExtractionItem{}, false
+	for i := range q.items {
+		if q.items[i].Status == "pending" {
+			q.items[i].Status = "processing"
+			_ = q.saveLocked()
+			return q.items[i], true
+		}
 	}
-	item := q.items[0]
-	q.items = q.items[1:]
+	return ExtractionItem{}, false
+}
+
+func (q *ExtractionQueue) Complete(itemID string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	filtered := q.items[:0]
+	for _, existing := range q.items {
+		if existing.ID != itemID {
+			filtered = append(filtered, existing)
+		}
+	}
+	q.items = filtered
 	_ = q.saveLocked()
-	return item, true
 }
 
 func (q *ExtractionQueue) Len() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return len(q.items)
+	count := 0
+	for _, item := range q.items {
+		if item.Status == "pending" {
+			count++
+		}
+	}
+	return count
 }
 
 func (q *ExtractionQueue) load() error {

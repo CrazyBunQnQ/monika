@@ -2281,6 +2281,7 @@ func (a *App) startExtractionWorkerLocked(projectPath string, q *memory.Extracti
 			}
 			a.extractWorkerMu.Unlock()
 			a.runExtraction(item)
+			q.Complete(item.ID)
 		}
 	}()
 }

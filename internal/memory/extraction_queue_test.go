@@ -34,6 +34,9 @@ func TestExtractionQueueEnqueueAndDequeue(t *testing.T) {
 	if !ok || first.SessionID != "s1" {
 		t.Fatalf("expected s1 first, got %+v ok=%v", first, ok)
 	}
+	if first.Status != "processing" {
+		t.Fatalf("expected status=processing after Dequeue, got %s", first.Status)
+	}
 	second, ok := q.Dequeue()
 	if !ok || second.SessionID != "s2" {
 		t.Fatalf("expected s2 second, got %+v ok=%v", second, ok)
@@ -108,5 +111,58 @@ func TestExtractionQueueAtomicWrite(t *testing.T) {
 	tmpPath := filepath.Join(dir, ".monika", "extraction_queue.json.tmp")
 	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
 		t.Fatalf("tmp file should not exist after save, got err=%v", err)
+	}
+}
+
+func TestExtractionQueueCompleteRemovesItem(t *testing.T) {
+	dir := t.TempDir()
+	q, _ := NewExtractionQueue(dir)
+	q.EnqueueOrReplace(ExtractionItem{ID: "a", SessionID: "s1", Transcript: "t1"})
+	q.EnqueueOrReplace(ExtractionItem{ID: "b", SessionID: "s2", Transcript: "t2"})
+
+	item, _ := q.Dequeue()
+	q.Complete(item.ID)
+
+	if q.Len() != 1 {
+		t.Fatalf("expected Len=1 after Complete, got %d", q.Len())
+	}
+	next, _ := q.Dequeue()
+	if next.SessionID != "s2" {
+		t.Fatalf("expected s2 remaining, got %s", next.SessionID)
+	}
+}
+
+func TestExtractionQueueCrashRecovery(t *testing.T) {
+	dir := t.TempDir()
+	q1, _ := NewExtractionQueue(dir)
+	q1.EnqueueOrReplace(ExtractionItem{ID: "a", SessionID: "s1", Transcript: "t1"})
+
+	item, _ := q1.Dequeue()
+	if item.Status != "processing" {
+		t.Fatalf("expected processing status, got %s", item.Status)
+	}
+
+	q2, err := NewExtractionQueue(dir)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if q2.Len() != 1 {
+		t.Fatalf("expected Len=1 after crash recovery, got %d", q2.Len())
+	}
+	recovered, _ := q2.Dequeue()
+	if recovered.SessionID != "s1" {
+		t.Fatalf("expected s1 recovered, got %s", recovered.SessionID)
+	}
+}
+
+func TestExtractionQueueLenSkipsProcessing(t *testing.T) {
+	dir := t.TempDir()
+	q, _ := NewExtractionQueue(dir)
+	q.EnqueueOrReplace(ExtractionItem{ID: "a", SessionID: "s1", Transcript: "t1"})
+	q.EnqueueOrReplace(ExtractionItem{ID: "b", SessionID: "s2", Transcript: "t2"})
+
+	q.Dequeue()
+	if q.Len() != 1 {
+		t.Fatalf("expected Len=1 (one processing), got %d", q.Len())
 	}
 }
