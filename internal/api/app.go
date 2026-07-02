@@ -624,11 +624,14 @@ func (a *App) PersistSelection(providerID, modelID string) {
 		fmt.Fprintf(os.Stderr, "[monika] WARNING: failed to marshal config: %v\n", err)
 		return
 	}
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "[monika] WARNING: failed to create config dir: %v\n", err)
+		return
+	}
 	if err := os.WriteFile(configPath, data, 0600); err != nil {
 		fmt.Fprintf(os.Stderr, "[monika] WARNING: failed to write config: %v\n", err)
 	}
 }
-
 func (a *App) DeleteSession(projectPath, sessionID string) error {
 	sm := a.getSessionManager(projectPath)
 	return sm.Delete(sessionID)
@@ -3685,6 +3688,10 @@ func (a *App) writeConfig() {
 	}
 
 	writeTo := func(configPath string) {
+		if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+			fmt.Fprintf(os.Stderr, "[monika] writeConfig mkdir: %v\n", err)
+			return
+		}
 		tmp := configPath + ".tmp"
 		if err := os.WriteFile(tmp, data, 0600); err != nil {
 			fmt.Fprintf(os.Stderr, "[monika] writeConfig write: %v\n", err)
@@ -4531,6 +4538,9 @@ func (a *App) SaveProvider(args json.RawMessage) error {
 		if pc.ModelsDevProvider == "" {
 			pc.ModelsDevProvider = existing.ModelsDevProvider
 		}
+	}
+	if a.cfg.ModelProviders == nil {
+		a.cfg.ModelProviders = make(map[string]config2.ProviderConfig)
 	}
 	a.cfg.ModelProviders[req.ID] = pc
 
