@@ -615,21 +615,16 @@ func (a *App) GetModels(providerID string) ([]engine2.Model, error) {
 }
 
 func (a *App) PersistSelection(providerID, modelID string) {
+	a.mu.Lock()
 	a.cfg.ModelProvider = providerID
 	a.cfg.Model = modelID
+	a.mu.Unlock()
 
-	configPath := filepath.Join(a.home, ".monika", "config.json")
-	data, err := json.MarshalIndent(&a.cfg, "", "  ")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[monika] WARNING: failed to marshal config: %v\n", err)
-		return
-	}
-	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "[monika] WARNING: failed to create config dir: %v\n", err)
-		return
-	}
-	if err := os.WriteFile(configPath, data, 0600); err != nil {
-		fmt.Fprintf(os.Stderr, "[monika] WARNING: failed to write config: %v\n", err)
+	if err := a.writeConfigForScope("global", func(cfg *config2.Config) {
+		cfg.ModelProvider = providerID
+		cfg.Model = modelID
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "[monika] WARNING: failed to persist model selection: %v\n", err)
 	}
 }
 func (a *App) DeleteSession(projectPath, sessionID string) error {
@@ -3649,7 +3644,9 @@ func (a *App) SaveAgent(args json.RawMessage) error {
 	if !found {
 		a.cfg.Agents = append(a.cfg.Agents, entry)
 	}
-	a.writeConfig()
+	a.writeConfigForScope("global", func(cfg *config2.Config) {
+		cfg.Agents = a.cfg.Agents
+	})
 	a.agentRegistry.MergeConfig(a.cfg.Agents)
 	return nil
 }
@@ -3673,7 +3670,9 @@ func (a *App) DeleteAgent(args json.RawMessage) error {
 			Name: req.Name, Disabled: true,
 		})
 	}
-	a.writeConfig()
+	a.writeConfigForScope("global", func(cfg *config2.Config) {
+		cfg.Agents = a.cfg.Agents
+	})
 	a.agentRegistry.MergeConfig(a.cfg.Agents)
 	return nil
 }
@@ -3706,7 +3705,22 @@ func (a *App) writeConfig() {
 	if pp := a.projectPath(); pp != "" && pp != a.home {
 		projectConfig := filepath.Join(pp, ".monika", "config.json")
 		if _, err := os.Stat(projectConfig); err == nil {
-			writeTo(projectConfig)
+			projectCfg := a.cfg
+			projectCfg.ModelProvider = ""
+			projectCfg.Model = ""
+			projectCfg.ModelProviders = nil
+			projectCfg.Agents = nil
+			projectData, err := json.MarshalIndent(&projectCfg, "", "  ")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[monika] writeConfig project marshal: %v\n", err)
+				return
+			}
+			tmp := projectConfig + ".tmp"
+			if err := os.WriteFile(tmp, projectData, 0600); err != nil {
+				fmt.Fprintf(os.Stderr, "[monika] writeConfig project write: %v\n", err)
+				return
+			}
+			os.Rename(tmp, projectConfig)
 		}
 	}
 }
@@ -3917,7 +3931,9 @@ func (a *App) ToggleSkillEnabled(args json.RawMessage) error {
 		filtered = append(filtered, req.Name)
 	}
 	a.cfg.Skill.DisabledSkills = filtered
-	a.writeConfig()
+	a.writeConfigForScope("global", func(cfg *config2.Config) {
+		cfg.Skill = a.cfg.Skill
+	})
 	return nil
 }
 
@@ -3928,7 +3944,9 @@ func (a *App) AddSkillPath(args json.RawMessage) error {
 		return err
 	}
 	a.cfg.Skill.Paths = append(a.cfg.Skill.Paths, req.Path)
-	a.writeConfig()
+	a.writeConfigForScope("global", func(cfg *config2.Config) {
+		cfg.Skill = a.cfg.Skill
+	})
 	return nil
 }
 
@@ -3945,7 +3963,9 @@ func (a *App) RemoveSkillPath(args json.RawMessage) error {
 		}
 	}
 	a.cfg.Skill.Paths = filtered
-	a.writeConfig()
+	a.writeConfigForScope("global", func(cfg *config2.Config) {
+		cfg.Skill = a.cfg.Skill
+	})
 	return nil
 }
 
@@ -4297,7 +4317,9 @@ func (a *App) ImportMCPServers(args json.RawMessage) ([]string, error) {
 		}
 		imported = append(imported, name)
 	}
-	a.writeConfig()
+	a.writeConfigForScope("global", func(cfg *config2.Config) {
+		cfg.MCP = a.cfg.MCP
+	})
 	return imported, nil
 }
 
@@ -4500,7 +4522,9 @@ func (a *App) SaveMCPServer(args json.RawMessage) error {
 	if !found {
 		a.cfg.MCP.Servers = append(a.cfg.MCP.Servers, srv)
 	}
-	a.writeConfig()
+	a.writeConfigForScope("global", func(cfg *config2.Config) {
+		cfg.MCP = a.cfg.MCP
+	})
 	return nil
 }
 
@@ -4517,7 +4541,9 @@ func (a *App) DeleteMCPServer(args json.RawMessage) error {
 		}
 	}
 	a.cfg.MCP.Servers = filtered
-	a.writeConfig()
+	a.writeConfigForScope("global", func(cfg *config2.Config) {
+		cfg.MCP = a.cfg.MCP
+	})
 	return nil
 }
 
@@ -4571,7 +4597,9 @@ func (a *App) SaveProvider(args json.RawMessage) error {
 		a.syncProviderFromModelsDev(req.ID)
 	}
 
-	a.writeConfig()
+	a.writeConfigForScope("global", func(cfg *config2.Config) {
+		cfg.ModelProviders = a.cfg.ModelProviders
+	})
 
 	// Initialize engine at runtime so provider is immediately available.
 	engineID := pc.WireAPI
@@ -4610,7 +4638,9 @@ func (a *App) DeleteProvider(args json.RawMessage) error {
 	}
 	delete(a.cfg.ModelProviders, req.ID)
 	delete(a.providers, req.ID)
-	a.writeConfig()
+	a.writeConfigForScope("global", func(cfg *config2.Config) {
+		cfg.ModelProviders = a.cfg.ModelProviders
+	})
 	return nil
 }
 
