@@ -780,11 +780,11 @@ func (a *App) SendMessage(projectPath, sessionID, text, providerID, model string
 		return err
 	}
 
+	providerID, model = a.validateModel(providerID, model)
 	if _, ok := a.providers[providerID]; !ok {
 		sm.Unlock()
 		return fmt.Errorf("provider %q not found", providerID)
 	}
-
 	// Enqueue only when the agent is generating or there are pending items;
 	// otherwise send directly for immediate execution.
 	if busy || sm.NextQueuedItem(s) != nil {
@@ -1451,6 +1451,8 @@ func (a *App) TriggerCompact(projectPath, sessionID, providerID, model string) e
 		return fmt.Errorf("session %s not found: %w", sessionID, err)
 	}
 
+	providerID, model = a.validateModel(providerID, model)
+
 	if len(s.Messages) < 2 {
 		return fmt.Errorf("not enough messages to compact")
 	}
@@ -1459,7 +1461,6 @@ func (a *App) TriggerCompact(projectPath, sessionID, providerID, model string) e
 	if !ok {
 		return fmt.Errorf("provider %q not available", providerID)
 	}
-
 	conv := &agent2.Conversation{
 		ID:              s.ID,
 		Messages:        s.Messages,
@@ -3708,6 +3709,27 @@ func (a *App) writeConfig() {
 			writeTo(projectConfig)
 		}
 	}
+}
+
+func (a *App) validateModel(providerID, modelID string) (resolvedProvider, resolvedModel string) {
+	if providerID != "" {
+		if _, ok := a.providers[providerID]; !ok {
+			fmt.Fprintf(os.Stderr, "[monika] provider %q not found, falling back to default\n", providerID)
+			return a.cfg.ModelProvider, a.cfg.Model
+		}
+	}
+	if providerID != "" && modelID != "" {
+		if pc, ok := a.cfg.ModelProviders[providerID]; ok {
+			for _, m := range pc.Models {
+				if m.ID == modelID {
+					return providerID, modelID
+				}
+			}
+			fmt.Fprintf(os.Stderr, "[monika] model %q not in provider %q model list, falling back to default\n", modelID, providerID)
+			return a.cfg.ModelProvider, a.cfg.Model
+		}
+	}
+	return providerID, modelID
 }
 
 func (a *App) modelLimits(providerID, modelID string) (contextTokens, outputTokens int64) {

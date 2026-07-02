@@ -360,6 +360,48 @@ changes as you install or configure them. Always search before assuming:
 			}
 		})
 
+	// Register Agent management tools (list/create/delete) with deferred App binding
+	var agentSaveFn func(json.RawMessage) error
+	var agentDeleteFn func(json.RawMessage) error
+	agentListFn := func() []builtin.AgentInfo {
+		if appService == nil {
+			return nil
+		}
+		agents := appService.ListAgents()
+		result := make([]builtin.AgentInfo, len(agents))
+		for i, a := range agents {
+			result[i] = builtin.AgentInfo{
+				Name: a.Name, Description: a.Description, Model: a.Model,
+				Provider: a.Provider, Hidden: a.Hidden, Disabled: a.Disabled,
+				IsCustom: a.IsCustom, Source: a.Source, Permission: a.Permission,
+			}
+		}
+		return result
+	}
+	agentCheckFn := func(name string) (bool, bool) {
+		a, ok := agentRegistry.Get(name)
+		if !ok {
+			return false, false
+		}
+		return a.IsCustom, true
+	}
+	builtin.RegisterAgentManagement(registry,
+		func(args json.RawMessage) error {
+			if agentSaveFn == nil {
+				return fmt.Errorf("agent management not available yet")
+			}
+			return agentSaveFn(args)
+		},
+		func(args json.RawMessage) error {
+			if agentDeleteFn == nil {
+				return fmt.Errorf("agent management not available yet")
+			}
+			return agentDeleteFn(args)
+		},
+		agentListFn,
+		agentCheckFn,
+	)
+
 	var taskStoreAccessor api.TaskStoreAccessor
 	if accessor, ok := taskStore.(api.TaskStoreAccessor); ok {
 		taskStoreAccessor = accessor
@@ -455,6 +497,14 @@ changes as you install or configure them. Always search before assuming:
 	skillUninstallFn = func(name string) error {
 		args, _ := json.Marshal(map[string]string{"Name": name})
 		return appService.UninstallSkill(args)
+	}
+
+	// Wire agent management callbacks to App
+	agentSaveFn = func(args json.RawMessage) error {
+		return appService.SaveAgent(args)
+	}
+	agentDeleteFn = func(args json.RawMessage) error {
+		return appService.DeleteAgent(args)
 	}
 
 	// Wire MCP management callbacks to App

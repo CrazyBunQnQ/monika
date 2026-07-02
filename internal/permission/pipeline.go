@@ -30,13 +30,15 @@ var readOps = map[string]bool{
 }
 
 var writeOps = map[string]bool{
-	"bash":        true,
-	"file_write":  true,
-	"file_edit":   true,
-	"patch":       true,
-	"task_create": true,
-	"task_update": true,
-	"spawn_agent": true,
+	"bash":         true,
+	"file_write":   true,
+	"file_edit":    true,
+	"patch":        true,
+	"task_create":  true,
+	"task_update":  true,
+	"spawn_agent":  true,
+	"create_agent": true,
+	"delete_agent": true,
 }
 
 // Pipeline ties together HardRuleEngine and ConfirmUI into a single permission

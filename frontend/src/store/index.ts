@@ -1435,19 +1435,21 @@ export const useStore = create<AppState>((set, get) => ({
         const state = get();
         const persistedProvider = defaults?.provider || '';
         const persistedModel = defaults?.model || '';
-        const validProvider = persistedProvider && providers.some((p) => p.id === persistedProvider)
+        const defaultProv = persistedProvider && providers.some((p) => p.id === persistedProvider)
             ? persistedProvider
-            : state.selectedProvider && providers.some((p) => p.id === state.selectedProvider)
-                ? state.selectedProvider
-                : (providers.length > 0 ? providers[0].id : '');
+            : (providers.length > 0 ? providers[0].id : '');
+        const selectedProv = state.selectedProvider && providers.some((p) => p.id === state.selectedProvider)
+            ? state.selectedProvider
+            : defaultProv;
         set({
             availableProviders: providers,
-            selectedProvider: validProvider,
-            defaultProvider: validProvider,
-            ...(persistedModel ? { selectedModel: persistedModel, defaultModel: persistedModel } : {}),
+            selectedProvider: selectedProv,
+            defaultProvider: defaultProv,
+            defaultModel: persistedModel || state.defaultModel,
+            ...(state.selectedModel ? { selectedModel: state.selectedModel } : persistedModel ? { selectedModel: persistedModel } : {}),
         });
         if (providers.length > 0) {
-            await get().loadModelsForProvider(validProvider);
+            await get().loadModelsForProvider(selectedProv);
         }
     },
 
@@ -1790,13 +1792,9 @@ export const useStore = create<AppState>((set, get) => ({
 
     loadProviderDetails: async () => {
         try {
-            const [providers, defaults] = await Promise.all([
-                Call.ByName('monika/internal/api.App.GetProviders'),
-                Call.ByName('monika/internal/api.App.GetDefaultModel'),
-            ])
+            const providers = await Call.ByName('monika/internal/api.App.GetProviders') as any[]
             set({
                 providerDetails: providers || [],
-                ...(defaults ? { selectedProvider: defaults.provider || '', selectedModel: defaults.model || '' } : {}),
             })
         } catch { set({ providerDetails: [] }) }
         // Refresh availableProviders and modelsByProvider so ModelPicker picks up changes

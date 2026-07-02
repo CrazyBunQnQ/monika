@@ -202,6 +202,20 @@ func RegisterSpawnAgent(r *tool.ToolRegistry, registry *agent.AgentRegistry, dis
 	r.Register(NewSpawnAgent(registry, dispatchFn, pendingStore))
 }
 
+// RegisterAgentManagement registers list_agents, create_agent, and delete_agent tools.
+// The callbacks are typically wired to App methods.
+func RegisterAgentManagement(
+	r *tool.ToolRegistry,
+	saveFn func(json.RawMessage) error,
+	deleteFn func(json.RawMessage) error,
+	listFn func() []AgentInfo,
+	checkFn func(name string) (isCustom bool, exists bool),
+) {
+	r.Register(NewAgentListTool(listFn))
+	r.Register(NewAgentCreateTool(saveFn))
+	r.Register(NewAgentDeleteTool(deleteFn, checkFn))
+}
+
 func RegisterSkillTool(r *tool.ToolRegistry, skEng engine.SkillEngine, home string, getCwd func() string, cfg *config.Config) {
 	r.Register(NewSkillTool(skEng, home, getCwd, cfg))
 }

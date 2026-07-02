@@ -34,7 +34,7 @@ type AgentEntry struct {
 	Name         string            `yaml:"name" json:"name"`
 	Description  string            `yaml:"description,omitempty" json:"description,omitempty"`
 	Model        string            `yaml:"model,omitempty" json:"model,omitempty"`
-	SystemPrompt string            `yaml:"system_prompt,omitempty" json:"system_prompt,omitempty"`
+	SystemPrompt string            `yaml:"system_prompt,omitempty" json:"systemPrompt,omitempty"`
 	Temperature  *float64          `yaml:"temperature,omitempty" json:"temperature,omitempty"`
 	Hidden       bool              `yaml:"hidden,omitempty" json:"hidden,omitempty"`
 	Disabled     bool              `yaml:"disabled,omitempty" json:"disabled,omitempty"`

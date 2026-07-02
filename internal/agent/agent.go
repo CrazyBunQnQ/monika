@@ -6,11 +6,11 @@ type Agent struct {
 	Name         string            `json:"name"`
 	Description  string            `json:"description,omitempty"`
 	SystemPrompt string            `json:"systemPrompt,omitempty"`
-	Model        string            `json:"model,omitempty"`   // "provider/model"，空则继承
-	Provider     string            `json:"provider,omitempty"` // 保留兼容
+	Model        string            `json:"model,omitempty"`       // "provider/model"，空则继承
+	Provider     string            `json:"provider,omitempty"`    // 保留兼容
 	Temperature  *float64          `json:"temperature,omitempty"` // nil 用默认
 	Hidden       bool              `json:"hidden,omitempty"`
-	Disabled     bool              `json:"disabled,omitempty"` // 内置 agent 被 config 禁用
+	Disabled     bool              `json:"disabled,omitempty"`   // 内置 agent 被 config 禁用
 	Permission   map[string]string `json:"permission,omitempty"` // tool → allow/ask/deny
 	IsCustom     bool              `json:"isCustom"`
 	Source       string            `json:"source"` // "builtin" | "custom"
@@ -70,6 +70,7 @@ func (r *AgentRegistry) MergeConfig(entries []config.AgentEntry) {
 				continue
 			}
 			// merge config fields into existing
+			existing.Disabled = false
 			if e.Description != "" {
 				existing.Description = e.Description
 			}
