@@ -31,6 +31,10 @@ func NewAgentRegistry(agents []Agent) *AgentRegistry {
 	return r
 }
 
+func (r *AgentRegistry) Add(a Agent) {
+	r.agents[a.Name] = a
+}
+
 func (r *AgentRegistry) Get(name string) (Agent, bool) {
 	a, ok := r.agents[name]
 	return a, ok

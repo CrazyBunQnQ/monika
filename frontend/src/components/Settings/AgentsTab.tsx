@@ -323,7 +323,7 @@ function AgentsTab() {
         </button>
       </div>
 
-      {agents.length === 0 ? (
+      {agents.filter(a => !a.disabled).length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-[var(--text-dim)]">
           <IconBot size={32} />
           <span className="text-[13px] mt-3">No agents configured.</span>
@@ -331,7 +331,7 @@ function AgentsTab() {
         </div>
       ) : (
         <div className="space-y-3">
-          {agents.map((agent) => (
+          {agents.filter(a => !a.disabled).map((agent) => (
             <div
               key={agent.name}
               className="rounded-lg px-4 py-3 w-full relative group/card"
