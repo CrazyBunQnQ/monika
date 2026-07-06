@@ -21,6 +21,10 @@ interface VideoResult {
     timeline?: { t: number; what: string }[]
     key_moments?: { t: number; title: string; description: string }[]
     thumbnails?: { t: number; url: string }[]
+    // image_understand uses these instead of thumbnails[]/timeline
+    mimeType?: string
+    size?: number
+    thumbnail?: string
     error?: string
 }
 
@@ -120,12 +124,17 @@ export function MediaToolBlock({ tool, onOpenMedia }: MediaToolBlockProps) {
                 </span>
             </div>
 
-            {(isRunning || isError || parsed) && (
+            {(isRunning || isError || parsed || tool.output) && (
                 <div className="px-3 py-2.5">
                     {isRunning && <RunningState isVideo={isVideo} parsed={parsed} />}
                     {isError && <ErrorState output={tool.output} />}
                     {!isRunning && !isError && parsed && (
                         <ResultState toolName={tool.name} parsed={parsed} onOpenMedia={onOpenMedia} />
+                    )}
+                    {!isRunning && !isError && !parsed && tool.output && (
+                        <div className="text-[13px]" style={{ color: 'var(--text)' }}>
+                            <MarkdownBlock content={tool.output} streaming={false} />
+                        </div>
                     )}
                 </div>
             )}
@@ -184,10 +193,10 @@ function ResultState({ toolName, parsed, onOpenMedia }: ResultStateProps) {
 }
 
 function ImageResult({ parsed, onOpenMedia }: { parsed: VideoResult; onOpenMedia?: (filePath: string, fileName: string, mime: string) => void }) {
-    const thumb = parsed.thumbnails?.[0]?.url
+    const thumb = parsed.thumbnail || parsed.thumbnails?.[0]?.url
     const handleClick = () => {
         if (parsed.filePath && onOpenMedia) {
-            onOpenMedia(parsed.filePath, parsed.fileName || 'image', 'image/png')
+            onOpenMedia(parsed.filePath, parsed.fileName || 'image', parsed.mimeType || 'image/png')
         }
     }
     return (
