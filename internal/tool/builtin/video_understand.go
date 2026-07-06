@@ -461,9 +461,13 @@ func parseModelJSON(s string) map[string]any {
 		}
 		s = strings.TrimSpace(s)
 	}
-	var direct map[string]any
-	if err := json.Unmarshal([]byte(s), &direct); err == nil {
-		return direct
+	// Try the whole string first. We allocate a fresh map per attempt:
+	// json.Unmarshal may leave a destination map partially populated
+	// even when it returns an error (see encoding/json docs), so reusing
+	// the same `direct` across attempts would merge fields from a
+	// failed first parse with the second parse's result.
+	if m, err := unmarshalIntoFreshMap([]byte(s)); err == nil {
+		return m
 	}
 	// Fallback: find the first '{' and last '}'.
 	start := strings.Index(s, "{")
@@ -472,10 +476,19 @@ func parseModelJSON(s string) map[string]any {
 		return nil
 	}
 	candidate := s[start : end+1]
-	if err := json.Unmarshal([]byte(candidate), &direct); err != nil {
+	m, err := unmarshalIntoFreshMap([]byte(candidate))
+	if err != nil {
 		return nil
 	}
-	return direct
+	return m
+}
+
+func unmarshalIntoFreshMap(data []byte) (map[string]any, error) {
+	m := make(map[string]any)
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 func parseTimeline(arr []any) []timelineItem {
