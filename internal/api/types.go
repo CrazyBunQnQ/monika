@@ -297,3 +297,11 @@ type MediaContent struct {
 	DataB64  string `json:"dataB64"`
 	Size     int64  `json:"size"`
 }
+
+// MediaThumbnail is one sampled frame in the response from
+// App.GetMediaThumbnails. The URL is a data:image/jpeg;base64,... payload
+// ready to drop into an <img src>.
+type MediaThumbnail struct {
+	T   float64 `json:"t"`
+	URL string  `json:"url"`
+}

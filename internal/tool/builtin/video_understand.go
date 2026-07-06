@@ -94,6 +94,7 @@ func (v *videoUnderstand) Parameters() map[string]any {
 type videoResult struct {
 	FilePath        string         `json:"filePath"`
 	FileName        string         `json:"fileName"`
+	MimeType        string         `json:"mimeType"`
 	DurationSeconds float64        `json:"duration_seconds"`
 	FrameCount      int            `json:"frame_count"`
 	FrameInterval   float64        `json:"frame_interval_seconds"`
@@ -101,8 +102,11 @@ type videoResult struct {
 	Summary         string         `json:"summary"`
 	Timeline        []timelineItem `json:"timeline"`
 	KeyMoments      []keyMoment    `json:"key_moments"`
-	Thumbnails      []thumbnail    `json:"thumbnails,omitempty"`
-	Error           string         `json:"error,omitempty"`
+	// Thumbnails are NOT included here — the LLM has no use for base64
+	// JPEGs in the tool result and they'd bloat the conversation by
+	// 50-100k tokens per call. The frontend fetches them via
+	// App.GetMediaThumbnails separately when the user opens the card.
+	Error string `json:"error,omitempty"`
 }
 
 type timelineItem struct {
@@ -116,7 +120,8 @@ type keyMoment struct {
 	Description string  `json:"description"`
 }
 
-type thumbnail struct {
+// mediaThumbnail is the wire shape returned by App.GetMediaThumbnails.
+type mediaThumbnail struct {
 	T   float64 `json:"t"`
 	URL string  `json:"url"`
 }
@@ -235,7 +240,7 @@ func (v *videoUnderstand) Execute(ctx context.Context, args json.RawMessage) (to
 	}
 	defer os.RemoveAll(tmpDir)
 
-	frames, framePaths, err := extractFrames(safe, tmpDir, timestamps)
+	frames, _, err := extractFrames(ctx, safe, tmpDir, timestamps)
 	if err != nil {
 		return tool.ExecutionResult{Content: "ffmpeg frame extraction failed: " + err.Error(), IsError: true}, nil
 	}
@@ -275,8 +280,8 @@ func (v *videoUnderstand) Execute(ctx context.Context, args json.RawMessage) (to
 		}
 	}
 
-	// Build thumbnails from the first 8 frames for inline display.
-	result.Thumbnails = buildThumbnails(timestamps[:len(frames)], framePaths[:len(frames)], 8)
+	// Thumbnails are intentionally omitted — see comment on videoResult.
+	// The frontend pulls them via App.GetMediaThumbnails on demand.
 
 	out, err := json.Marshal(result)
 	if err != nil {
@@ -344,18 +349,23 @@ func ffprobeDuration(path string) (float64, error) {
 }
 
 // extractFrames runs ffmpeg once per timestamp to grab a single frame,
-// re-encoded to a 768px-wide JPEG. Returns the base64-encoded images ready
-// to embed in a multimodal message, plus the on-disk paths so the caller
-// can build thumbnails afterwards.
-func extractFrames(videoPath, tmpDir string, timestamps []float64) ([]engine.ImageRef, []string, error) {
+// re-encoded to a 768px-wide JPEG. The per-frame timeout is derived
+// from the parent context so that agent cancellation propagates to
+// ffmpeg instead of leaving zombie processes running for up to a
+// minute per frame.
+//
+// Returns the base64-encoded images ready to embed in a multimodal
+// message. The on-disk paths are intentionally not returned — the
+// thumbnails are now fetched lazily via App.GetMediaThumbnails
+// rather than embedded in the tool result.
+func extractFrames(parentCtx context.Context, videoPath, tmpDir string, timestamps []float64) ([]engine.ImageRef, error) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		return nil, nil, fmt.Errorf("ffmpeg not found on PATH: %w", err)
+		return nil, fmt.Errorf("ffmpeg not found on PATH: %w", err)
 	}
 	images := make([]engine.ImageRef, 0, len(timestamps))
-	paths := make([]string, 0, len(timestamps))
 	for i, t := range timestamps {
 		framePath := filepath.Join(tmpDir, fmt.Sprintf("frame-%03d.jpg", i))
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		ctx, cancel := context.WithTimeout(parentCtx, 60*time.Second)
 		cmd := exec.CommandContext(ctx, "ffmpeg",
 			"-ss", strconv.FormatFloat(t, 'f', 3, 64),
 			"-i", videoPath,
@@ -365,22 +375,21 @@ func extractFrames(videoPath, tmpDir string, timestamps []float64) ([]engine.Ima
 			"-y",
 			framePath,
 		)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			cancel()
-			return nil, nil, fmt.Errorf("ffmpeg at t=%.2fs: %w: %s", t, err, string(out))
-		}
+		out, err := cmd.CombinedOutput()
 		cancel()
+		if err != nil {
+			return nil, fmt.Errorf("ffmpeg at t=%.2fs: %w: %s", t, err, string(out))
+		}
 		data, err := os.ReadFile(framePath)
 		if err != nil {
-			return nil, nil, fmt.Errorf("read frame %d: %w", i, err)
+			return nil, fmt.Errorf("read frame %d: %w", i, err)
 		}
 		images = append(images, engine.ImageRef{
 			URL:    "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(data),
 			Detail: "low",
 		})
-		paths = append(paths, framePath)
 	}
-	return images, paths, nil
+	return images, nil
 }
 
 // buildVideoPrompt is the prompt sent to the multimodal model. It instructs
@@ -477,27 +486,70 @@ func parseKeyMoments(arr []any) []keyMoment {
 	return out
 }
 
-// buildThumbnails embeds up to maxN of the first frames as base64 data URLs
-// so the frontend MediaToolBlock can render them inline. Frames beyond
-// maxN are skipped to keep the tool result compact.
-func buildThumbnails(timestamps []float64, paths []string, maxN int) []thumbnail {
-	n := len(timestamps)
-	if n > len(paths) {
-		n = len(paths)
+// ExtractMediaThumbnails runs ffmpeg to produce up to maxN evenly-spaced
+// JPEGs of the given video, returning them as base64 data URLs paired
+// with their timestamp. Exposed (capitalized) so the API layer can wire
+// it to App.GetMediaThumbnails; the tool's main flow does not embed
+// thumbnails in the LLM-facing result.
+func ExtractMediaThumbnails(videoPath string, maxN int) ([]mediaThumbnail, error) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		return nil, fmt.Errorf("ffmpeg not found on PATH: %w", err)
 	}
-	if n > maxN {
-		n = maxN
+	if maxN <= 0 {
+		maxN = 8
 	}
-	out := make([]thumbnail, 0, n)
-	for i := 0; i < n; i++ {
-		data, err := os.ReadFile(paths[i])
+	if maxN > 32 {
+		maxN = 32
+	}
+	duration, err := ffprobeDuration(videoPath)
+	if err != nil {
+		return nil, err
+	}
+	if duration <= 0 || maxN == 1 {
+		ts := duration / 2
+		frame, err := snapshotFrame(videoPath, ts)
 		if err != nil {
-			continue
+			return nil, err
 		}
-		out = append(out, thumbnail{
-			T:   timestamps[i],
-			URL: "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(data),
-		})
+		return []mediaThumbnail{{T: ts, URL: frame}}, nil
 	}
-	return out
+	out := make([]mediaThumbnail, 0, maxN)
+	step := duration / float64(maxN-1)
+	for i := 0; i < maxN; i++ {
+		ts := step * float64(i)
+		frame, err := snapshotFrame(videoPath, ts)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, mediaThumbnail{T: ts, URL: frame})
+	}
+	return out, nil
+}
+
+func snapshotFrame(videoPath string, t float64) (string, error) {
+	tmpDir, err := os.MkdirTemp("", "monika-thumb-*")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(tmpDir)
+	framePath := filepath.Join(tmpDir, "thumb.jpg")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "ffmpeg",
+		"-ss", strconv.FormatFloat(t, 'f', 3, 64),
+		"-i", videoPath,
+		"-frames:v", "1",
+		"-q:v", "5",
+		"-vf", "scale=320:-1",
+		"-y",
+		framePath,
+	).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("ffmpeg at t=%.2fs: %w: %s", t, err, string(out))
+	}
+	data, err := os.ReadFile(framePath)
+	if err != nil {
+		return "", err
+	}
+	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(data), nil
 }

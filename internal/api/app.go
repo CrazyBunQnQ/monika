@@ -5529,6 +5529,48 @@ func (a *App) ReadMediaAsBase64(projectPath, filePath string) (*MediaContent, er
 // .mp4 cannot trick the upload pipeline into passing it to ffmpeg, and
 // a missing/unknown magic rejects the file regardless of extension.
 // Empty string means the format is not supported.
+
+// GetMediaThumbnails extracts up to maxN evenly-spaced thumbnails from a
+// video file inside the project. Used by the frontend MediaToolBlock to
+// lazily load frame strips without bloating the LLM-facing tool result.
+func (a *App) GetMediaThumbnails(projectPath, filePath string, maxN int) ([]MediaThumbnail, error) {
+	if projectPath == "" {
+		return nil, fmt.Errorf("projectPath is required")
+	}
+	if filePath == "" {
+		return nil, fmt.Errorf("filePath is required")
+	}
+	absProject, err := filepath.Abs(projectPath)
+	if err != nil {
+		return nil, fmt.Errorf("invalid project path: %w", err)
+	}
+	if real, err := filepath.EvalSymlinks(absProject); err == nil {
+		absProject = real
+	}
+	absFile := filePath
+	if !filepath.IsAbs(absFile) {
+		absFile = filepath.Join(absProject, filePath)
+	}
+	if real, err := filepath.EvalSymlinks(absFile); err == nil {
+		absFile = real
+	}
+	rel, err := filepath.Rel(absProject, absFile)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return nil, fmt.Errorf("path %s is outside project directory", filePath)
+	}
+
+	thumbs, err := builtin.ExtractMediaThumbnails(absFile, maxN)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]MediaThumbnail, 0, len(thumbs))
+	for _, t := range thumbs {
+		out = append(out, MediaThumbnail{T: t.T, URL: t.URL})
+	}
+	return out, nil
+}
+
+// Empty string means the format is not supported.
 func detectMediaMime(name string, data []byte) string {
 	ext := strings.ToLower(filepath.Ext(name))
 	// Magic-byte pass first.

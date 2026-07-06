@@ -1,6 +1,8 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import MarkdownBlock from './MarkdownBlock'
 import { IconVideo, IconImage, IconChevronDown, IconChevronRight, IconClock, IconPlay } from '../Icons'
+import { Call } from '@wailsio/runtime'
+import { useStore } from '../../store'
 
 interface ToolCall {
     id?: string
@@ -220,19 +222,14 @@ function ImageResult({ parsed, onOpenMedia }: { parsed: VideoResult; onOpenMedia
 }
 
 function VideoResultView({ parsed, onOpenMedia }: { parsed: VideoResult; onOpenMedia?: (filePath: string, fileName: string, mime: string) => void }) {
-    const thumbs = parsed.thumbnails || []
     return (
         <div className="space-y-3">
-            {thumbs.length > 0 && (
-                <ThumbStrip
-                    thumbs={thumbs}
-                    onOpen={() => {
-                        if (parsed.filePath && onOpenMedia) {
-                            onOpenMedia(parsed.filePath, parsed.fileName || 'video', 'video/mp4')
-                        }
-                    }}
-                />
-            )}
+            <LazyThumbStrip
+                filePath={parsed.filePath}
+                fileName={parsed.fileName || 'video'}
+                mime={parsed.mimeType || 'video/mp4'}
+                onOpenMedia={onOpenMedia}
+            />
             {parsed.summary && (
                 <div>
                     <MarkdownBlock content={parsed.summary} streaming={false} />
@@ -276,6 +273,74 @@ function VideoResultView({ parsed, onOpenMedia }: { parsed: VideoResult; onOpenM
                         ))}
                     </ul>
                 </CollapsibleSection>
+            )}
+        </div>
+    )
+}
+
+// LazyThumbStrip loads frame thumbnails via App.GetMediaThumbnails the
+// first time the user expands the section, rather than embedding them
+// in the LLM-facing tool result. This keeps the conversation cheap —
+// each call would otherwise burn ~50-100k tokens of base64 JPEG noise
+// the model has no use for.
+function LazyThumbStrip({ filePath, fileName, mime, onOpenMedia }: {
+    filePath?: string
+    fileName: string
+    mime: string
+    onOpenMedia?: (filePath: string, fileName: string, mime: string) => void
+}) {
+    const [open, setOpen] = useState(false)
+    const [thumbs, setThumbs] = useState<{ t: number; url: string }[] | null>(null)
+    const [loading, setLoading] = useState(false)
+    const [error, setError] = useState<string | null>(null)
+    const projectPath = useStore(s => s.projectPath)
+
+    useEffect(() => {
+        if (!open || thumbs !== null || !filePath) return
+        if (!projectPath) {
+            setError('No project open')
+            return
+        }
+        setLoading(true)
+        Call.ByName('monika/internal/api.App.GetMediaThumbnails', projectPath, filePath, 8)
+            .then((res: any) => {
+                if (Array.isArray(res)) {
+                    setThumbs(res.map((r: any) => ({ t: r.t ?? 0, url: r.url ?? '' })))
+                } else {
+                    setThumbs([])
+                }
+            })
+            .catch((e: any) => setError(e?.message || 'failed to load thumbnails'))
+            .finally(() => setLoading(false))
+    }, [open, thumbs, filePath, projectPath])
+
+    if (!filePath) return null
+
+    return (
+        <div className="rounded" style={{ border: BORDER }}>
+            <button
+                type="button"
+                onClick={() => setOpen(o => !o)}
+                className="w-full flex items-center gap-1.5 px-2 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wide"
+                style={{ color: 'var(--text-dim)', background: 'rgba(255,255,255,0.02)', border: 0 }}
+            >
+                {open ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
+                Thumbnails
+            </button>
+            {open && (
+                <div className="px-2 py-2">
+                    {loading && <span className="text-[11px]" style={{ color: 'var(--text-dim)' }}>Loading…</span>}
+                    {error && <span className="text-[11px]" style={{ color: 'var(--red)' }}>{error}</span>}
+                    {thumbs && thumbs.length > 0 && (
+                        <ThumbStrip
+                            thumbs={thumbs}
+                            onOpen={() => onOpenMedia && onOpenMedia(filePath, fileName, mime)}
+                        />
+                    )}
+                    {thumbs && thumbs.length === 0 && !loading && !error && (
+                        <span className="text-[11px]" style={{ color: 'var(--text-dim)' }}>No frames sampled.</span>
+                    )}
+                </div>
             )}
         </div>
     )
