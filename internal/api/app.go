@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -5419,21 +5421,38 @@ func (a *App) UploadMedia(projectPath, fileName, dataB64 string) (*MediaUploadRe
 	if safe == "" {
 		safe = "upload.bin"
 	}
-	stamp := time.Now().UTC().Format("20060102-150405")
-	relPath := filepath.ToSlash(filepath.Join(".monika", "media", stamp+"-"+safe))
-	absPath := filepath.Join(absProject, ".monika", "media", stamp+"-"+safe)
+	// Combine second-precision timestamp with a short random suffix so two
+	// drops in the same second with the same filename can't collide on
+	// disk or in the frontend's paste-store key. The suffix flows into
+	// the returned FileName so the chip label is also unique.
+	now := time.Now().UTC()
+	stamp := now.Format("20060102-150405") + "-" + randHex(6)
+	diskName := stamp + "-" + safe
+	relPath := filepath.ToSlash(filepath.Join(".monika", "media", diskName))
+	absPath := filepath.Join(absProject, ".monika", "media", diskName)
 	if err := os.WriteFile(absPath, data, 0o644); err != nil {
 		return nil, fmt.Errorf("write file: %w", err)
 	}
 
 	return &MediaUploadResult{
 		Path:     relPath,
-		FileName: safe,
+		FileName: diskName,
 		Size:     int64(len(data)),
 		MimeType: mime,
 		IsVideo:  isVideo,
 		IsImage:  isImage,
 	}, nil
+}
+
+// randHex returns n hex characters of crypto-random data. Used to disambiguate
+// uploads within the same second without needing global locking.
+func randHex(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	b := make([]byte, (n+1)/2)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)[:n]
 }
 
 // ReadMediaAsBase64 returns a base64-encoded copy of a media file inside the
