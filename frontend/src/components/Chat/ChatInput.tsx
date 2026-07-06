@@ -497,7 +497,13 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, isGenerating, quotedM
     }, [])
 
     const isMediaFile = useCallback((file: File): boolean => {
-        return file.type.startsWith('video/') || file.type.startsWith('image/')
+        // Browsers often return an empty MIME for less-common extensions
+        // (.m4v, .heic, .webm on some platforms), so fall back to extension
+        // matching when file.type is empty or uninformative.
+        if (file.type) {
+            return file.type.startsWith('video/') || file.type.startsWith('image/')
+        }
+        return /\.(mp4|m4v|mov|webm|mkv|avi|heic|avif|png|jpe?g|webp|gif)$/i.test(file.name)
     }, [])
 
     const readFileAsBase64 = useCallback((file: File): Promise<string> => {
@@ -553,9 +559,17 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, isGenerating, quotedM
     const handleDrop = useCallback(async (e: React.DragEvent<HTMLDivElement>) => {
         dragCounterRef.current = 0
         setIsDraggingMedia(false)
-        const files = Array.from(e.dataTransfer.files || []).filter(isMediaFile)
-        if (files.length === 0) return
+        const dropped = Array.from(e.dataTransfer.files || [])
+        // Always preventDefault when something was dropped, even if we end up
+        // rejecting all of it; otherwise the browser navigates to the file.
+        if (dropped.length === 0) return
         e.preventDefault()
+
+        const accepted = dropped.filter(isMediaFile)
+        const skipped = dropped.length - accepted.length
+        if (skipped > 0) {
+            setMediaUploadError(`Skipped ${skipped} non-media file${skipped === 1 ? '' : 's'}.`)
+        }
 
         if (!projectPath) {
             setMediaUploadError('Open a project before dropping media files.')
@@ -563,7 +577,7 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, isGenerating, quotedM
         }
 
         const inserted: { label: string; path: string }[] = []
-        for (const file of files) {
+        for (const file of accepted) {
             try {
                 const data = await readFileAsBase64(file)
                 const result = await App.UploadMedia(projectPath, file.name, data)
@@ -578,8 +592,11 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, isGenerating, quotedM
         }
         if (inserted.length > 0) {
             insertMediaChips(inserted)
-            // Clear error after a moment if everything succeeded.
-            setTimeout(() => setMediaUploadError(null), 2500)
+            if (skipped === 0) {
+                // Only auto-dismiss the error when the drop was clean; partial
+                // failures should stay visible until the user dismisses them.
+                setTimeout(() => setMediaUploadError(null), 2500)
+            }
         }
     }, [isMediaFile, insertMediaChips, projectPath, readFileAsBase64])
 
