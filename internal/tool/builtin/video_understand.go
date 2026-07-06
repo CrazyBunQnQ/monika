@@ -47,10 +47,7 @@ vision model, and returns a structured analysis as JSON with:
 Use when the user references a video and wants a summary, asks what happens in
 it, or asks about a specific scene.
 
-Prerequisites: ffmpeg and ffprobe must be on PATH. Audio transcription is
-NOT supported in this version (the transcribeAudio parameter is accepted but
-returns an error if whisper.cpp is not detected).
-
+Prerequisites: ffmpeg and ffprobe must be on PATH.
 Limits: max 500 MB, max 60 min duration, max 128 sampled frames per call.`
 }
 
@@ -81,10 +78,6 @@ func (v *videoUnderstand) Parameters() map[string]any {
 			"endTime": map[string]any{
 				"type":        "number",
 				"description": "End time in seconds (default full duration).",
-			},
-			"transcribeAudio": map[string]any{
-				"type":        "boolean",
-				"description": "Whether to transcribe the audio track. Currently requires whisper on PATH; otherwise returns an error.",
 			},
 		},
 		"required": []string{"filePath"},
@@ -127,36 +120,73 @@ type mediaThumbnail struct {
 }
 
 func (v *videoUnderstand) Execute(ctx context.Context, args json.RawMessage) (tool.ExecutionResult, error) {
+	out, err := v.runAnalysis(ctx, args, nil)
+	if err != nil {
+		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
+	}
+	return tool.ExecutionResult{Content: out}, nil
+}
+
+// ExecuteStreaming returns a channel of progress events so the chat UI
+// can render "Sampling frames... 5/32..." in real time instead of a
+// frozen spinner. The channel is closed when the analysis completes;
+// the agent loop accumulates the EventTextDelta content as the final
+// tool result, so the structured JSON still surfaces as the tool output.
+func (v *videoUnderstand) ExecuteStreaming(ctx context.Context, args json.RawMessage) (<-chan agent.Event, error) {
+	ch := make(chan agent.Event, 32)
+	go func() {
+		defer close(ch)
+		progress := func(msg string) {
+			select {
+			case ch <- agent.Event{Type: agent.EventTextDelta, Content: msg}:
+			case <-ctx.Done():
+			}
+		}
+		out, err := v.runAnalysis(ctx, args, progress)
+		if err != nil {
+			select {
+			case ch <- agent.Event{Type: agent.EventError, Content: err.Error()}:
+			case <-ctx.Done():
+			}
+			return
+		}
+		// Push the final JSON as one last EventTextDelta so it lands in
+		// the tool output. The frontend's MediaToolBlock parses it.
+		select {
+		case ch <- agent.Event{Type: agent.EventTextDelta, Content: "\n\n" + out}:
+		case <-ctx.Done():
+		}
+	}()
+	return ch, nil
+}
+
+func (v *videoUnderstand) runAnalysis(ctx context.Context, args json.RawMessage, progress func(string)) (string, error) {
 	var p struct {
-		FilePath        string  `json:"filePath"`
-		Question        string  `json:"question"`
-		FrameInterval   float64 `json:"frameInterval"`
-		MaxFrames       int     `json:"maxFrames"`
-		StartTime       float64 `json:"startTime"`
-		EndTime         float64 `json:"endTime"`
-		TranscribeAudio bool    `json:"transcribeAudio"`
+		FilePath      string  `json:"filePath"`
+		Question      string  `json:"question"`
+		FrameInterval float64 `json:"frameInterval"`
+		MaxFrames     int     `json:"maxFrames"`
+		StartTime     float64 `json:"startTime"`
+		EndTime       float64 `json:"endTime"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
-		return tool.ExecutionResult{Content: "invalid arguments: " + err.Error(), IsError: true}, nil
+		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 	if p.FilePath == "" {
-		return tool.ExecutionResult{Content: "filePath is required", IsError: true}, nil
+		return "", fmt.Errorf("filePath is required")
 	}
 
 	safe, err := resolveToolPath(p.FilePath, tool.ProjectDirOrDefault(ctx, v.projectDir))
 	if err != nil {
-		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
+		return "", err
 	}
 
 	info, err := os.Stat(safe)
 	if err != nil {
-		return tool.ExecutionResult{Content: "cannot stat video: " + err.Error(), IsError: true}, nil
+		return "", fmt.Errorf("cannot stat video: %w", err)
 	}
 	if info.Size() > maxVideoBytes {
-		return tool.ExecutionResult{
-			Content: fmt.Sprintf("video too large: %d bytes (max %d)", info.Size(), maxVideoBytes),
-			IsError: true,
-		}, nil
+		return "", fmt.Errorf("video too large: %d bytes (max %d)", info.Size(), maxVideoBytes)
 	}
 
 	// Apply defaults and clamp to sane bounds.
@@ -176,22 +206,18 @@ func (v *videoUnderstand) Execute(ctx context.Context, args json.RawMessage) (to
 		p.MaxFrames = maxVideoFrames
 	}
 
-	// ffprobe for duration.
-	duration, err := ffprobeDuration(safe)
+	if progress != nil {
+		progress(fmt.Sprintf("📹 Reading video metadata (%s)...\n", formatBytes(info.Size())))
+	}
+	duration, err := ffprobeDuration(ctx, safe)
 	if err != nil {
-		return tool.ExecutionResult{
-			Content: "ffprobe failed (is ffmpeg installed?): " + err.Error(),
-			IsError: true,
-		}, nil
+		return "", fmt.Errorf("ffprobe failed (is ffmpeg installed?): %w", err)
 	}
 	if duration <= 0 {
-		return tool.ExecutionResult{Content: "video has no detectable duration", IsError: true}, nil
+		return "", fmt.Errorf("video has no detectable duration")
 	}
 	if duration > maxVideoSecs {
-		return tool.ExecutionResult{
-			Content: fmt.Sprintf("video too long: %.0fs (max %ds)", duration, maxVideoSecs),
-			IsError: true,
-		}, nil
+		return "", fmt.Errorf("video too long: %.0fs (max %ds)", duration, maxVideoSecs)
 	}
 
 	start := p.StartTime
@@ -203,60 +229,48 @@ func (v *videoUnderstand) Execute(ctx context.Context, args json.RawMessage) (to
 		end = duration
 	}
 	if end <= start {
-		return tool.ExecutionResult{
-			Content: fmt.Sprintf("endTime (%.2f) must be greater than startTime (%.2f)", end, start),
-			IsError: true,
-		}, nil
+		return "", fmt.Errorf("endTime (%.2f) must be greater than startTime (%.2f)", end, start)
 	}
 
-	// Build the list of sample timestamps.
 	timestamps := sampleTimestamps(start, end, p.FrameInterval, p.MaxFrames)
 	if len(timestamps) == 0 {
-		return tool.ExecutionResult{Content: "no frames to sample in the given range", IsError: true}, nil
-	}
-
-	if p.TranscribeAudio {
-		if _, err := exec.LookPath("whisper"); err != nil {
-			return tool.ExecutionResult{
-				Content: "transcribeAudio=true but 'whisper' is not on PATH. Install whisper.cpp and place the binary on PATH to enable audio transcription.",
-				IsError: true,
-			}, nil
-		}
-		// Transcription is a v2 feature — refuse loudly rather than silently no-op.
-		return tool.ExecutionResult{
-			Content: "audio transcription is not yet implemented; set transcribeAudio=false for now.",
-			IsError: true,
-		}, nil
+		return "", fmt.Errorf("no frames to sample in the given range")
 	}
 
 	if v.vision == nil {
-		return tool.ExecutionResult{Content: "vision provider not configured", IsError: true}, nil
+		return "", fmt.Errorf("vision provider not configured")
 	}
 
-	// Extract frames to a temporary directory.
+	if progress != nil {
+		progress(fmt.Sprintf("🖼 Sampling %d frames from %s of video (%.0fs total)...\n",
+			len(timestamps), formatDuration(end-start), duration))
+	}
+
 	tmpDir, err := os.MkdirTemp("", "monika-video-*")
 	if err != nil {
-		return tool.ExecutionResult{Content: "cannot create temp dir: " + err.Error(), IsError: true}, nil
+		return "", fmt.Errorf("cannot create temp dir: %w", err)
 	}
 	defer os.RemoveAll(tmpDir)
 
-	frames, _, err := extractFrames(ctx, safe, tmpDir, timestamps)
+	frames, err := extractFrames(ctx, safe, tmpDir, timestamps)
 	if err != nil {
-		return tool.ExecutionResult{Content: "ffmpeg frame extraction failed: " + err.Error(), IsError: true}, nil
+		return "", fmt.Errorf("ffmpeg frame extraction failed: %w", err)
+	}
+
+	if progress != nil {
+		progress(fmt.Sprintf("🤖 Sending %d frames to vision model...\n", len(frames)))
 	}
 
 	prompt := buildVideoPrompt(duration, len(frames), p.FrameInterval, p.Question)
-
 	resp, err := v.vision(ctx, prompt, frames)
 	if err != nil {
-		return tool.ExecutionResult{Content: "vision call failed: " + err.Error(), IsError: true}, nil
+		return "", fmt.Errorf("vision call failed: %w", err)
 	}
 
-	// Build the result. Try to parse the model reply as JSON; if it fails,
-	// fall back to wrapping the raw text as the summary.
 	result := videoResult{
 		FilePath:        p.FilePath,
 		FileName:        filepath.Base(safe),
+		MimeType:        "video/mp4",
 		DurationSeconds: duration,
 		FrameCount:      len(frames),
 		FrameInterval:   p.FrameInterval,
@@ -280,14 +294,37 @@ func (v *videoUnderstand) Execute(ctx context.Context, args json.RawMessage) (to
 		}
 	}
 
-	// Thumbnails are intentionally omitted — see comment on videoResult.
-	// The frontend pulls them via App.GetMediaThumbnails on demand.
+	if progress != nil {
+		progress("✅ Done.\n")
+	}
 
 	out, err := json.Marshal(result)
 	if err != nil {
-		return tool.ExecutionResult{Content: "encode result: " + err.Error(), IsError: true}, nil
+		return "", fmt.Errorf("encode result: %w", err)
 	}
-	return tool.ExecutionResult{Content: string(out)}, nil
+	return string(out), nil
+}
+
+func formatBytes(n int64) string {
+	if n < 1024 {
+		return fmt.Sprintf("%d B", n)
+	}
+	if n < 1024*1024 {
+		return fmt.Sprintf("%.1f KB", float64(n)/1024)
+	}
+	if n < 1024*1024*1024 {
+		return fmt.Sprintf("%.1f MB", float64(n)/1024/1024)
+	}
+	return fmt.Sprintf("%.2f GB", float64(n)/1024/1024/1024)
+}
+
+func formatDuration(seconds float64) string {
+	if seconds >= 60 {
+		m := int(seconds / 60)
+		s := seconds - float64(m*60)
+		return fmt.Sprintf("%dm%.0fs", m, s)
+	}
+	return fmt.Sprintf("%.0fs", seconds)
 }
 
 // sampleTimestamps returns a deterministic, evenly-spaced set of timestamps
@@ -319,11 +356,11 @@ func sampleTimestamps(start, end, interval float64, maxN int) []float64 {
 // ffprobeDuration runs `ffprobe -v error -show_entries format=duration -of json`
 // on path and returns the duration in seconds. Returns an error if ffprobe is
 // missing or the video is unreadable.
-func ffprobeDuration(path string) (float64, error) {
+func ffprobeDuration(parentCtx context.Context, path string) (float64, error) {
 	if _, err := exec.LookPath("ffprobe"); err != nil {
 		return 0, fmt.Errorf("ffprobe not found on PATH: %w", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(parentCtx, 30*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "ffprobe",
 		"-v", "error",
@@ -492,6 +529,10 @@ func parseKeyMoments(arr []any) []keyMoment {
 // it to App.GetMediaThumbnails; the tool's main flow does not embed
 // thumbnails in the LLM-facing result.
 func ExtractMediaThumbnails(videoPath string, maxN int) ([]mediaThumbnail, error) {
+	return extractThumbnails(context.Background(), videoPath, maxN)
+}
+
+func extractThumbnails(parentCtx context.Context, videoPath string, maxN int) ([]mediaThumbnail, error) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		return nil, fmt.Errorf("ffmpeg not found on PATH: %w", err)
 	}
@@ -501,7 +542,7 @@ func ExtractMediaThumbnails(videoPath string, maxN int) ([]mediaThumbnail, error
 	if maxN > 32 {
 		maxN = 32
 	}
-	duration, err := ffprobeDuration(videoPath)
+	duration, err := ffprobeDuration(parentCtx, videoPath)
 	if err != nil {
 		return nil, err
 	}
