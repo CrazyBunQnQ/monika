@@ -11,7 +11,7 @@ import AutocompleteDropdown, { AcItem, AcState } from './AutocompleteDropdown'
 import { findLabels, LabelRegion, renderChipHTML } from './LabelChip'
 import { App } from '../../../bindings/monika'
 import { Call } from '@wailsio/runtime'
-import { IconSend } from '../Icons'
+import { IconSend, IconImage } from '../Icons'
 import { QueuePanel } from '../QueuePanel/QueuePanel'
 
 const INIT_TEMPLATE = `Please analyze this project and check if an \`AGENTS.md\` file exists in the project root.
@@ -556,23 +556,27 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, isGenerating, quotedM
         e.dataTransfer.dropEffect = 'copy'
     }, [])
 
-    const handleDrop = useCallback(async (e: React.DragEvent<HTMLDivElement>) => {
-        dragCounterRef.current = 0
-        setIsDraggingMedia(false)
-        const dropped = Array.from(e.dataTransfer.files || [])
-        // Always preventDefault when something was dropped, even if we end up
-        // rejecting all of it; otherwise the browser navigates to the file.
-        if (dropped.length === 0) return
-        e.preventDefault()
+    // Clear the auto-dismiss timer on unmount so we don't setState on a
+    // detached component (also avoids the earlier timer masking a newer
+    // error from a subsequent drop).
+    const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+    useEffect(() => {
+        return () => {
+            if (errorTimerRef.current) clearTimeout(errorTimerRef.current)
+        }
+    }, [])
 
-        const accepted = dropped.filter(isMediaFile)
-        const skipped = dropped.length - accepted.length
+    // Shared upload pipeline used by both drag-drop and the file-picker
+    // button. Returns nothing — all state goes through React setters.
+    const handlePickedFiles = useCallback(async (files: File[]) => {
+        const accepted = files.filter(isMediaFile)
+        const skipped = files.length - accepted.length
         if (skipped > 0) {
             setMediaUploadError(`Skipped ${skipped} non-media file${skipped === 1 ? '' : 's'}.`)
         }
 
         if (!projectPath) {
-            setMediaUploadError('Open a project before dropping media files.')
+            setMediaUploadError('Open a project before attaching media files.')
             return
         }
 
@@ -593,12 +597,24 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, isGenerating, quotedM
         if (inserted.length > 0) {
             insertMediaChips(inserted)
             if (skipped === 0) {
-                // Only auto-dismiss the error when the drop was clean; partial
-                // failures should stay visible until the user dismisses them.
-                setTimeout(() => setMediaUploadError(null), 2500)
+                // Only auto-dismiss the error when the upload was clean;
+                // partial failures stay visible until the user dismisses.
+                if (errorTimerRef.current) clearTimeout(errorTimerRef.current)
+                errorTimerRef.current = setTimeout(() => setMediaUploadError(null), 2500)
             }
         }
     }, [isMediaFile, insertMediaChips, projectPath, readFileAsBase64])
+
+    const handleDrop = useCallback(async (e: React.DragEvent<HTMLDivElement>) => {
+        dragCounterRef.current = 0
+        setIsDraggingMedia(false)
+        const dropped = Array.from(e.dataTransfer.files || [])
+        // Always preventDefault when something was dropped, even if we end up
+        // rejecting all of it; otherwise the browser navigates to the file.
+        if (dropped.length === 0) return
+        e.preventDefault()
+        await handlePickedFiles(dropped)
+    }, [handlePickedFiles])
 
     const COMMANDS: AcItem[] = [
         { name: 'init', detail: 'Create/update AGENTS.md from project analysis', icon: '/', insert: '/init ' },
@@ -1024,6 +1040,33 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, isGenerating, quotedM
                             onClose={() => setWorktreeManagerOpen(false)}
                         />
                     )}
+
+                    {/* File picker fallback for keyboard / screen-reader users.
+                        Native HTML5 drag-drop is mouse-only; this button
+                        covers the rest. Accepts the same media types the
+                        drop handler does. */}
+                    <button
+                        type="button"
+                        title="Attach image or video"
+                        aria-label="Attach image or video"
+                        disabled={disabled}
+                        onClick={() => {
+                            const input = document.createElement('input')
+                            input.type = 'file'
+                            input.accept = 'image/*,video/*,.mp4,.m4v,.mov,.webm,.mkv,.avi,.heic,.avif'
+                            input.multiple = true
+                            input.onchange = () => {
+                                const files = Array.from(input.files || [])
+                                if (files.length === 0) return
+                                handlePickedFiles(files)
+                            }
+                            input.click()
+                        }}
+                        className="flex items-center justify-center w-7 h-7 rounded hover:bg-white/5 disabled:opacity-40 disabled:cursor-not-allowed"
+                        style={{ color: 'var(--text-dim)' }}
+                    >
+                        <IconImage size={14} />
+                    </button>
 
                     <span className="text-[11px] text-[var(--text-dim)] select-none" style={{ fontFeatureSettings: '"tnum"' }}>
                         tok: {tokenText}
