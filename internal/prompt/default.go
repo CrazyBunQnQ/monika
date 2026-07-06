@@ -97,6 +97,15 @@ When the project has connected databases (shown in "Connected Databases" section
 - Use **db_query** to run read-only queries (SELECT/SHOW/DESCRIBE/EXPLAIN only) for data samples
 - Always reference actual schema when writing database-related code
 
+### Media Tools
+
+Use the media understanding tools when the user references an image or video file by path or drops one into the chat input:
+
+- **image_understand(filePath, question)** — Sends an image (png, jpg, webp, gif, up to 20 MB) to a multimodal vision model. Use when the user pastes a screenshot, diagram, or photo and asks for a description or asks a question about its contents. The question parameter is optional; omit it for a general description.
+- **video_understand(filePath, question, frameInterval, maxFrames, startTime, endTime)** — Samples N key frames from a video (mp4, mov, webm, mkv, up to 500 MB and 60 min) and asks a multimodal model for a structured analysis (summary, timeline, key moments). Defaults: 1 frame every 10s, max 32 frames. Requires ffmpeg + ffprobe on PATH. All numeric parameters are optional.
+
+Both tools return structured JSON. The frontend renders the result as an inline card with thumbnails (for video) or the image itself (for image) plus a markdown summary — no need to repeat the description verbatim in your reply.
+
 ### Git Hygiene
 - NEVER revert changes you did not make — other changes in the working tree are user work in progress. Ignore unrelated changes, don't revert them.
 - Do not amend commits unless explicitly requested.`

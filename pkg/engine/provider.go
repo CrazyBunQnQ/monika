@@ -1,6 +1,9 @@
 package engine
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 type ChatRequest struct {
 	Provider string
@@ -12,12 +15,57 @@ type ChatRequest struct {
 type ChatMessage struct {
 	Role             string          `json:"role"`
 	Content          string          `json:"content"`
+	Images           []ImageRef      `json:"images,omitempty"`
 	ReasoningContent string          `json:"reasoning_content"`
 	ToolCalls        []ToolCall      `json:"tool_calls,omitempty"`
 	ToolCallID       string          `json:"tool_call_id,omitempty"`
 	Name             string          `json:"name,omitempty"`
 	TokenUsage       *Usage          `json:"token_usage,omitempty"`
 	QuotedMessages   []QuotedMessage `json:"quoted_messages,omitempty"`
+}
+
+// ImageRef is a reference to an image attached to a chat message.
+// URL may be either a data URL (data:image/jpeg;base64,...) or an https URL.
+// Detail hints at the model's processing resolution: "auto" | "low" | "high".
+type ImageRef struct {
+	URL    string `json:"url,omitempty"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// MarshalJSON renders the message content either as a plain string (the
+// historical behavior, used for text-only messages) or as an OpenAI-style
+// multipart array when one or more images are attached. This keeps the wire
+// format backward-compatible: messages without Images still serialize to
+// "role":"user","content":"hello", exactly as before.
+func (m ChatMessage) MarshalJSON() ([]byte, error) {
+	type alias ChatMessage // avoid recursion
+	if len(m.Images) == 0 {
+		return json.Marshal(alias(m))
+	}
+	parts := make([]map[string]any, 0, 1+len(m.Images))
+	if m.Content != "" {
+		parts = append(parts, map[string]any{"type": "text", "text": m.Content})
+	}
+	for _, img := range m.Images {
+		entry := map[string]any{
+			"type":      "image_url",
+			"image_url": map[string]any{"url": img.URL},
+		}
+		if img.Detail != "" {
+			entry["image_url"].(map[string]any)["detail"] = img.Detail
+		}
+		parts = append(parts, entry)
+	}
+	return json.Marshal(map[string]any{
+		"role":              m.Role,
+		"content":           parts,
+		"reasoning_content": m.ReasoningContent,
+		"tool_calls":        m.ToolCalls,
+		"tool_call_id":      m.ToolCallID,
+		"name":              m.Name,
+		"token_usage":       m.TokenUsage,
+		"quoted_messages":   m.QuotedMessages,
+	})
 }
 
 // QuotedMessage is a snapshot of a referenced message used for quoting/forwarding.

@@ -105,7 +105,7 @@ interface SessionTabInfo {
 }
 
 interface PreviewState {
-    mode: 'file' | 'diff' | 'task' | 'commit' | null
+    mode: 'file' | 'diff' | 'task' | 'commit' | 'media' | null
     filePath: string | null
     fileName: string | null
     fileContent: string | null
@@ -115,6 +115,7 @@ interface PreviewState {
     commitDetail?: CommitDetail | null
     commitFiles?: ChangeStat[] | null
     commitHash?: string | null
+    mediaMime?: string | null
 }
 
 export interface AgentInfo {
@@ -301,6 +302,7 @@ interface AppState {
 
     setPreviewFile: (filePath: string, fileName: string, content: string) => void
     setPreviewDiff: (filePath: string, fileName: string, lines: string[]) => void
+    setPreviewMedia: (filePath: string, fileName: string, mime: string) => void
     clearPreview: () => void
     markFileDirty: (path: string) => void
     markFileClean: (path: string) => void
@@ -1343,6 +1345,9 @@ export const useStore = create<AppState>((set, get) => ({
 
     setPreviewFile: (filePath, fileName, content) => {
         set({ preview: { mode: 'file', filePath, fileName, fileContent: content, diffLines: null, conflictAiContent: null, conflictActive: false }, selectedBgTaskId: null })
+    },
+    setPreviewMedia: (filePath, fileName, mime) => {
+        set({ preview: { mode: 'media', filePath, fileName, fileContent: null, diffLines: null, conflictAiContent: null, conflictActive: false, mediaMime: mime }, selectedBgTaskId: null })
     },
 
     setPreviewDiff: (filePath, fileName, lines) => {

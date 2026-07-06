@@ -19,14 +19,16 @@ type ConfirmUI interface {
 var AddAlwaysAllowRule func(projectDir, tool, pattern string) error
 
 var readOps = map[string]bool{
-	"file_read": true,
-	"grep":      true,
-	"glob":      true,
-	"file_list": true,
-	"skill":     true,
-	"ask_user":  true,
-	"db_schema": true,
-	"db_query":  true,
+	"file_read":        true,
+	"grep":             true,
+	"glob":             true,
+	"file_list":        true,
+	"skill":            true,
+	"ask_user":         true,
+	"db_schema":        true,
+	"db_query":         true,
+	"image_understand": true,
+	"video_understand": true,
 }
 
 var writeOps = map[string]bool{

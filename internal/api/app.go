@@ -5365,3 +5365,201 @@ func (a *App) DebugGetKeys(sessionID string, scopesID int) ([]dap.DapScope, erro
 // 		}
 // 	}()
 // }
+
+// UploadMedia saves a base64-encoded video or image dropped onto the chat
+// input into the project directory and returns the project-relative path.
+// Files land in <project>/.monika/media/<timestamp>-<sanitized-name> so
+// they don't clutter normal workspace browsing.
+func (a *App) UploadMedia(projectPath, fileName, dataB64 string) (*MediaUploadResult, error) {
+	if projectPath == "" {
+		return nil, fmt.Errorf("projectPath is required")
+	}
+	if fileName == "" {
+		return nil, fmt.Errorf("fileName is required")
+	}
+
+	// Resolve & validate the project path so we don't accept relative inputs.
+	absProject, err := filepath.Abs(projectPath)
+	if err != nil {
+		return nil, fmt.Errorf("invalid project path: %w", err)
+	}
+	if real, err := filepath.EvalSymlinks(absProject); err == nil {
+		absProject = real
+	}
+	info, err := os.Stat(absProject)
+	if err != nil || !info.IsDir() {
+		return nil, fmt.Errorf("project directory does not exist: %s", projectPath)
+	}
+
+	data, err := base64.StdEncoding.DecodeString(dataB64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid base64: %w", err)
+	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("empty file data")
+	}
+	const maxUploadBytes = 500 * 1024 * 1024 // 500 MB
+	if len(data) > maxUploadBytes {
+		return nil, fmt.Errorf("file too large: %d bytes (max %d)", len(data), maxUploadBytes)
+	}
+
+	mime := detectMediaMime(fileName, data)
+	isVideo := strings.HasPrefix(mime, "video/")
+	isImage := strings.HasPrefix(mime, "image/")
+	if !isVideo && !isImage {
+		return nil, fmt.Errorf("unsupported file type: %s (only images and videos)", fileName)
+	}
+
+	mediaDir := filepath.Join(absProject, ".monika", "media")
+	if err := os.MkdirAll(mediaDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create media dir: %w", err)
+	}
+
+	safe := sanitizeFilename(fileName)
+	if safe == "" {
+		safe = "upload.bin"
+	}
+	stamp := time.Now().UTC().Format("20060102-150405")
+	relPath := filepath.ToSlash(filepath.Join(".monika", "media", stamp+"-"+safe))
+	absPath := filepath.Join(absProject, ".monika", "media", stamp+"-"+safe)
+	if err := os.WriteFile(absPath, data, 0o644); err != nil {
+		return nil, fmt.Errorf("write file: %w", err)
+	}
+
+	return &MediaUploadResult{
+		Path:     relPath,
+		FileName: safe,
+		Size:     int64(len(data)),
+		MimeType: mime,
+		IsVideo:  isVideo,
+		IsImage:  isImage,
+	}, nil
+}
+
+// ReadMediaAsBase64 returns a base64-encoded copy of a media file inside the
+// project directory so the Preview panel can render images and videos
+// without dragging them through Wails IPC untyped.
+func (a *App) ReadMediaAsBase64(projectPath, filePath string) (*MediaContent, error) {
+	if projectPath == "" {
+		return nil, fmt.Errorf("projectPath is required")
+	}
+	if filePath == "" {
+		return nil, fmt.Errorf("filePath is required")
+	}
+
+	absProject, err := filepath.Abs(projectPath)
+	if err != nil {
+		return nil, fmt.Errorf("invalid project path: %w", err)
+	}
+	if real, err := filepath.EvalSymlinks(absProject); err == nil {
+		absProject = real
+	}
+	absFile := filePath
+	if !filepath.IsAbs(absFile) {
+		absFile = filepath.Join(absProject, filePath)
+	}
+	if real, err := filepath.EvalSymlinks(absFile); err == nil {
+		absFile = real
+	}
+	rel, err := filepath.Rel(absProject, absFile)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return nil, fmt.Errorf("path %s is outside project directory", filePath)
+	}
+
+	const maxReadBytes = 200 * 1024 * 1024 // 200 MB cap on Preview loads
+	info, err := os.Stat(absFile)
+	if err != nil {
+		return nil, fmt.Errorf("stat: %w", err)
+	}
+	if info.Size() > maxReadBytes {
+		return nil, fmt.Errorf("file too large for preview: %d bytes (max %d)", info.Size(), maxReadBytes)
+	}
+
+	data, err := os.ReadFile(absFile)
+	if err != nil {
+		return nil, fmt.Errorf("read: %w", err)
+	}
+	mime := detectMediaMime(filepath.Base(absFile), data)
+
+	return &MediaContent{
+		Path:     filepath.ToSlash(rel),
+		FileName: filepath.Base(absFile),
+		MimeType: mime,
+		DataB64:  base64.StdEncoding.EncodeToString(data),
+		Size:     info.Size(),
+	}, nil
+}
+
+// detectMediaMime returns the MIME type from the file extension, falling
+// back to a magic-byte sniff. Empty string means the format is not
+// supported by the media tools.
+func detectMediaMime(name string, data []byte) string {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".webp":
+		return "image/webp"
+	case ".gif":
+		return "image/gif"
+	case ".mp4":
+		return "video/mp4"
+	case ".mov":
+		return "video/quicktime"
+	case ".webm":
+		return "video/webm"
+	case ".mkv":
+		return "video/x-matroska"
+	case ".avi":
+		return "video/x-msvideo"
+	}
+	if len(data) >= 8 {
+		if data[0] == 0x89 && data[1] == 'P' && data[2] == 'N' && data[3] == 'G' {
+			return "image/png"
+		}
+		if data[0] == 0xFF && data[1] == 0xD8 {
+			return "image/jpeg"
+		}
+		if len(data) >= 4 && string(data[0:4]) == "GIF8" {
+			return "image/gif"
+		}
+		if len(data) >= 12 && string(data[0:4]) == "RIFF" && string(data[8:12]) == "WEBP" {
+			return "image/webp"
+		}
+		// mp4: bytes 4-7 == "ftyp"
+		if len(data) >= 12 && string(data[4:8]) == "ftyp" {
+			return "video/mp4"
+		}
+		// webm/matroska: EBML header 0x1A 0x45 0xDF 0xA3
+		if len(data) >= 4 && data[0] == 0x1A && data[1] == 0x45 && data[2] == 0xDF && data[3] == 0xA3 {
+			return "video/webm"
+		}
+	}
+	return ""
+}
+
+// sanitizeFilename strips path separators and a few dangerous characters
+// from a user-supplied filename so the resulting path stays inside the
+// project's media directory.
+func sanitizeFilename(name string) string {
+	name = filepath.Base(name)
+	replacer := strings.NewReplacer(
+		" ", "_",
+		"..", "_",
+		"/", "_",
+		"\\", "_",
+		":", "_",
+		"\x00", "",
+	)
+	cleaned := replacer.Replace(name)
+	if len(cleaned) > 120 {
+		ext := filepath.Ext(cleaned)
+		base := cleaned[:len(cleaned)-len(ext)]
+		if len(base) > 100 {
+			base = base[:100]
+		}
+		cleaned = base + ext
+	}
+	return cleaned
+}

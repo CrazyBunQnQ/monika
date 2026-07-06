@@ -1,0 +1,503 @@
+package builtin
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"monika/internal/tool"
+	"monika/pkg/engine"
+)
+
+const (
+	maxVideoBytes  = 500 * 1024 * 1024 // 500 MB
+	maxVideoFrames = 128
+	maxVideoSecs   = 60 * 60 // 1 hour
+)
+
+type videoUnderstand struct {
+	projectDir string
+	vision     VisionCaller
+}
+
+func NewVideoUnderstand(projectDir string, vision VisionCaller) tool.Tool {
+	return &videoUnderstand{projectDir: projectDir, vision: vision}
+}
+
+func (v *videoUnderstand) Name() string { return "video_understand" }
+
+func (v *videoUnderstand) Description() string {
+	return `Analyze a video file (mp4, mov, webm, mkv, avi) inside the project directory.
+
+The tool samples N frames at fixed time intervals, sends them to a multimodal
+vision model, and returns a structured analysis as JSON with:
+  - summary: short overall description
+  - duration_seconds: total video length
+  - frame_count: number of frames actually sampled
+  - timeline: array of {t, what} entries describing what happens at each sample
+  - key_moments: array of {t, title, description} for notable events
+
+Use when the user references a video and wants a summary, asks what happens in
+it, or asks about a specific scene.
+
+Prerequisites: ffmpeg and ffprobe must be on PATH. Audio transcription is
+NOT supported in this version (the transcribeAudio parameter is accepted but
+returns an error if whisper.cpp is not detected).
+
+Limits: max 500 MB, max 60 min duration, max 128 sampled frames per call.`
+}
+
+func (v *videoUnderstand) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"filePath": map[string]any{
+				"type":        "string",
+				"description": "Absolute path to the video file inside the project directory.",
+			},
+			"question": map[string]any{
+				"type":        "string",
+				"description": "Specific question about the video (optional). If omitted, returns a general summary.",
+			},
+			"frameInterval": map[string]any{
+				"type":        "integer",
+				"description": "Seconds between sampled frames. Default 10, range 1-60.",
+			},
+			"maxFrames": map[string]any{
+				"type":        "integer",
+				"description": "Maximum frames to sample. Default 32, max 128.",
+			},
+			"startTime": map[string]any{
+				"type":        "number",
+				"description": "Start time in seconds (default 0).",
+			},
+			"endTime": map[string]any{
+				"type":        "number",
+				"description": "End time in seconds (default full duration).",
+			},
+			"transcribeAudio": map[string]any{
+				"type":        "boolean",
+				"description": "Whether to transcribe the audio track. Currently requires whisper on PATH; otherwise returns an error.",
+			},
+		},
+		"required": []string{"filePath"},
+	}
+}
+
+type videoResult struct {
+	FilePath        string         `json:"filePath"`
+	FileName        string         `json:"fileName"`
+	DurationSeconds float64        `json:"duration_seconds"`
+	FrameCount      int            `json:"frame_count"`
+	FrameInterval   float64        `json:"frame_interval_seconds"`
+	Question        string         `json:"question,omitempty"`
+	Summary         string         `json:"summary"`
+	Timeline        []timelineItem `json:"timeline"`
+	KeyMoments      []keyMoment    `json:"key_moments"`
+	Thumbnails      []thumbnail    `json:"thumbnails,omitempty"`
+	Error           string         `json:"error,omitempty"`
+}
+
+type timelineItem struct {
+	T    float64 `json:"t"`
+	What string  `json:"what"`
+}
+
+type keyMoment struct {
+	T           float64 `json:"t"`
+	Title       string  `json:"title"`
+	Description string  `json:"description"`
+}
+
+type thumbnail struct {
+	T   float64 `json:"t"`
+	URL string  `json:"url"`
+}
+
+func (v *videoUnderstand) Execute(ctx context.Context, args json.RawMessage) (tool.ExecutionResult, error) {
+	var p struct {
+		FilePath        string  `json:"filePath"`
+		Question        string  `json:"question"`
+		FrameInterval   float64 `json:"frameInterval"`
+		MaxFrames       int     `json:"maxFrames"`
+		StartTime       float64 `json:"startTime"`
+		EndTime         float64 `json:"endTime"`
+		TranscribeAudio bool    `json:"transcribeAudio"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil {
+		return tool.ExecutionResult{Content: "invalid arguments: " + err.Error(), IsError: true}, nil
+	}
+	if p.FilePath == "" {
+		return tool.ExecutionResult{Content: "filePath is required", IsError: true}, nil
+	}
+
+	safe, err := resolveToolPath(p.FilePath, tool.ProjectDirOrDefault(ctx, v.projectDir))
+	if err != nil {
+		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
+	}
+
+	info, err := os.Stat(safe)
+	if err != nil {
+		return tool.ExecutionResult{Content: "cannot stat video: " + err.Error(), IsError: true}, nil
+	}
+	if info.Size() > maxVideoBytes {
+		return tool.ExecutionResult{
+			Content: fmt.Sprintf("video too large: %d bytes (max %d)", info.Size(), maxVideoBytes),
+			IsError: true,
+		}, nil
+	}
+
+	// Apply defaults and clamp to sane bounds.
+	if p.FrameInterval <= 0 {
+		p.FrameInterval = 10
+	}
+	if p.FrameInterval < 1 {
+		p.FrameInterval = 1
+	}
+	if p.FrameInterval > 60 {
+		p.FrameInterval = 60
+	}
+	if p.MaxFrames <= 0 {
+		p.MaxFrames = 32
+	}
+	if p.MaxFrames > maxVideoFrames {
+		p.MaxFrames = maxVideoFrames
+	}
+
+	// ffprobe for duration.
+	duration, err := ffprobeDuration(safe)
+	if err != nil {
+		return tool.ExecutionResult{
+			Content: "ffprobe failed (is ffmpeg installed?): " + err.Error(),
+			IsError: true,
+		}, nil
+	}
+	if duration <= 0 {
+		return tool.ExecutionResult{Content: "video has no detectable duration", IsError: true}, nil
+	}
+	if duration > maxVideoSecs {
+		return tool.ExecutionResult{
+			Content: fmt.Sprintf("video too long: %.0fs (max %ds)", duration, maxVideoSecs),
+			IsError: true,
+		}, nil
+	}
+
+	start := p.StartTime
+	if start < 0 {
+		start = 0
+	}
+	end := p.EndTime
+	if end <= 0 || end > duration {
+		end = duration
+	}
+	if end <= start {
+		return tool.ExecutionResult{
+			Content: fmt.Sprintf("endTime (%.2f) must be greater than startTime (%.2f)", end, start),
+			IsError: true,
+		}, nil
+	}
+
+	// Build the list of sample timestamps.
+	timestamps := sampleTimestamps(start, end, p.FrameInterval, p.MaxFrames)
+	if len(timestamps) == 0 {
+		return tool.ExecutionResult{Content: "no frames to sample in the given range", IsError: true}, nil
+	}
+
+	if p.TranscribeAudio {
+		if _, err := exec.LookPath("whisper"); err != nil {
+			return tool.ExecutionResult{
+				Content: "transcribeAudio=true but 'whisper' is not on PATH. Install whisper.cpp and place the binary on PATH to enable audio transcription.",
+				IsError: true,
+			}, nil
+		}
+		// Transcription is a v2 feature — refuse loudly rather than silently no-op.
+		return tool.ExecutionResult{
+			Content: "audio transcription is not yet implemented; set transcribeAudio=false for now.",
+			IsError: true,
+		}, nil
+	}
+
+	if v.vision == nil {
+		return tool.ExecutionResult{Content: "vision provider not configured", IsError: true}, nil
+	}
+
+	// Extract frames to a temporary directory.
+	tmpDir, err := os.MkdirTemp("", "monika-video-*")
+	if err != nil {
+		return tool.ExecutionResult{Content: "cannot create temp dir: " + err.Error(), IsError: true}, nil
+	}
+	defer os.RemoveAll(tmpDir)
+
+	frames, framePaths, err := extractFrames(safe, tmpDir, timestamps)
+	if err != nil {
+		return tool.ExecutionResult{Content: "ffmpeg frame extraction failed: " + err.Error(), IsError: true}, nil
+	}
+
+	prompt := buildVideoPrompt(duration, len(frames), p.FrameInterval, p.Question)
+
+	resp, err := v.vision(ctx, prompt, frames)
+	if err != nil {
+		return tool.ExecutionResult{Content: "vision call failed: " + err.Error(), IsError: true}, nil
+	}
+
+	// Build the result. Try to parse the model reply as JSON; if it fails,
+	// fall back to wrapping the raw text as the summary.
+	result := videoResult{
+		FilePath:        p.FilePath,
+		FileName:        filepath.Base(safe),
+		DurationSeconds: duration,
+		FrameCount:      len(frames),
+		FrameInterval:   p.FrameInterval,
+		Question:        p.Question,
+	}
+	if parsed := parseModelJSON(resp); parsed != nil {
+		if s, ok := parsed["summary"].(string); ok {
+			result.Summary = s
+		}
+		if arr, ok := parsed["timeline"].([]any); ok {
+			result.Timeline = parseTimeline(arr)
+		}
+		if arr, ok := parsed["key_moments"].([]any); ok {
+			result.KeyMoments = parseKeyMoments(arr)
+		}
+	}
+	if result.Summary == "" {
+		result.Summary = strings.TrimSpace(resp)
+		if result.Summary == "" {
+			result.Summary = "(model returned no description)"
+		}
+	}
+
+	// Build thumbnails from the first 8 frames for inline display.
+	result.Thumbnails = buildThumbnails(timestamps[:len(frames)], framePaths[:len(frames)], 8)
+
+	out, err := json.Marshal(result)
+	if err != nil {
+		return tool.ExecutionResult{Content: "encode result: " + err.Error(), IsError: true}, nil
+	}
+	return tool.ExecutionResult{Content: string(out)}, nil
+}
+
+// sampleTimestamps returns a deterministic, evenly-spaced set of timestamps
+// (in seconds) between start and end, capped to maxN entries.
+func sampleTimestamps(start, end, interval float64, maxN int) []float64 {
+	span := end - start
+	if span <= 0 {
+		return nil
+	}
+	n := int(span/interval) + 1
+	if n > maxN {
+		n = maxN
+	}
+	if n < 1 {
+		n = 1
+	}
+	out := make([]float64, n)
+	if n == 1 {
+		out[0] = start + span/2
+		return out
+	}
+	step := span / float64(n-1)
+	for i := 0; i < n; i++ {
+		out[i] = start + step*float64(i)
+	}
+	return out
+}
+
+// ffprobeDuration runs `ffprobe -v error -show_entries format=duration -of json`
+// on path and returns the duration in seconds. Returns an error if ffprobe is
+// missing or the video is unreadable.
+func ffprobeDuration(path string) (float64, error) {
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		return 0, fmt.Errorf("ffprobe not found on PATH: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "ffprobe",
+		"-v", "error",
+		"-show_entries", "format=duration",
+		"-of", "json",
+		path,
+	).Output()
+	if err != nil {
+		return 0, err
+	}
+	var parsed struct {
+		Format struct {
+			Duration string `json:"duration"`
+		} `json:"format"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		return 0, err
+	}
+	if parsed.Format.Duration == "" {
+		return 0, fmt.Errorf("no duration in ffprobe output: %s", string(out))
+	}
+	return strconv.ParseFloat(parsed.Format.Duration, 64)
+}
+
+// extractFrames runs ffmpeg once per timestamp to grab a single frame,
+// re-encoded to a 768px-wide JPEG. Returns the base64-encoded images ready
+// to embed in a multimodal message, plus the on-disk paths so the caller
+// can build thumbnails afterwards.
+func extractFrames(videoPath, tmpDir string, timestamps []float64) ([]engine.ImageRef, []string, error) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		return nil, nil, fmt.Errorf("ffmpeg not found on PATH: %w", err)
+	}
+	images := make([]engine.ImageRef, 0, len(timestamps))
+	paths := make([]string, 0, len(timestamps))
+	for i, t := range timestamps {
+		framePath := filepath.Join(tmpDir, fmt.Sprintf("frame-%03d.jpg", i))
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		cmd := exec.CommandContext(ctx, "ffmpeg",
+			"-ss", strconv.FormatFloat(t, 'f', 3, 64),
+			"-i", videoPath,
+			"-frames:v", "1",
+			"-q:v", "5",
+			"-vf", "scale=768:-1",
+			"-y",
+			framePath,
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			cancel()
+			return nil, nil, fmt.Errorf("ffmpeg at t=%.2fs: %w: %s", t, err, string(out))
+		}
+		cancel()
+		data, err := os.ReadFile(framePath)
+		if err != nil {
+			return nil, nil, fmt.Errorf("read frame %d: %w", i, err)
+		}
+		images = append(images, engine.ImageRef{
+			URL:    "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(data),
+			Detail: "low",
+		})
+		paths = append(paths, framePath)
+	}
+	return images, paths, nil
+}
+
+// buildVideoPrompt is the prompt sent to the multimodal model. It instructs
+// the model to return structured JSON so the frontend can render a rich card.
+func buildVideoPrompt(durationSec float64, frameCount int, intervalSec float64, question string) string {
+	q := ""
+	if question != "" {
+		q = "\n\nUser question: " + question
+	}
+	return fmt.Sprintf(
+		"These are %d sampled key frames from a %.0f-second video (one frame every %.0f seconds, in order). "+
+			"Analyze the visual content and reply with ONLY a single JSON object — no markdown, no prose — using this exact shape:\n"+
+			`{"summary":"<1-3 sentences overall>","timeline":[{"t":<seconds>,"what":"<one short clause>"}],"key_moments":[{"t":<seconds>,"title":"<short>","description":"<one sentence>"}]}`+
+			"%s",
+		frameCount, durationSec, intervalSec, q,
+	)
+}
+
+// parseModelJSON extracts the first balanced JSON object from a model reply.
+// Models occasionally wrap the JSON in markdown fences or add leading prose,
+// so we try a permissive scan rather than a strict json.Unmarshal on the
+// whole string.
+func parseModelJSON(s string) map[string]any {
+	s = strings.TrimSpace(s)
+	// Strip ```json ... ``` fences if present.
+	if strings.HasPrefix(s, "```") {
+		if i := strings.Index(s, "\n"); i >= 0 {
+			s = s[i+1:]
+		}
+		if j := strings.LastIndex(s, "```"); j >= 0 {
+			s = s[:j]
+		}
+		s = strings.TrimSpace(s)
+	}
+	var direct map[string]any
+	if err := json.Unmarshal([]byte(s), &direct); err == nil {
+		return direct
+	}
+	// Fallback: find the first '{' and last '}'.
+	start := strings.Index(s, "{")
+	end := strings.LastIndex(s, "}")
+	if start < 0 || end <= start {
+		return nil
+	}
+	candidate := s[start : end+1]
+	if err := json.Unmarshal([]byte(candidate), &direct); err != nil {
+		return nil
+	}
+	return direct
+}
+
+func parseTimeline(arr []any) []timelineItem {
+	out := make([]timelineItem, 0, len(arr))
+	for _, v := range arr {
+		m, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		item := timelineItem{}
+		if t, ok := m["t"].(float64); ok {
+			item.T = t
+		}
+		if w, ok := m["what"].(string); ok {
+			item.What = w
+		}
+		if item.What != "" || item.T != 0 {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func parseKeyMoments(arr []any) []keyMoment {
+	out := make([]keyMoment, 0, len(arr))
+	for _, v := range arr {
+		m, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		km := keyMoment{}
+		if t, ok := m["t"].(float64); ok {
+			km.T = t
+		}
+		if s, ok := m["title"].(string); ok {
+			km.Title = s
+		}
+		if s, ok := m["description"].(string); ok {
+			km.Description = s
+		}
+		if km.Title != "" || km.Description != "" {
+			out = append(out, km)
+		}
+	}
+	return out
+}
+
+// buildThumbnails embeds up to maxN of the first frames as base64 data URLs
+// so the frontend MediaToolBlock can render them inline. Frames beyond
+// maxN are skipped to keep the tool result compact.
+func buildThumbnails(timestamps []float64, paths []string, maxN int) []thumbnail {
+	n := len(timestamps)
+	if n > len(paths) {
+		n = len(paths)
+	}
+	if n > maxN {
+		n = maxN
+	}
+	out := make([]thumbnail, 0, n)
+	for i := 0; i < n; i++ {
+		data, err := os.ReadFile(paths[i])
+		if err != nil {
+			continue
+		}
+		out = append(out, thumbnail{
+			T:   timestamps[i],
+			URL: "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(data),
+		})
+	}
+	return out
+}

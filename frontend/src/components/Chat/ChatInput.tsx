@@ -246,6 +246,9 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, isGenerating, quotedM
 
     const [ac, setAc] = useState<AcState>({ open: false, items: [], selectedIdx: 0, prefix: '' })
     const [worktreeManagerOpen, setWorktreeManagerOpen] = useState(false)
+    const [isDraggingMedia, setIsDraggingMedia] = useState(false)
+    const [mediaUploadError, setMediaUploadError] = useState<string | null>(null)
+    const dragCounterRef = useRef(0)
     const acDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
     const projectPath = useStore((s) => s.projectPath)
     const selectedProvider = useStore((s) => s.selectedProvider)
@@ -492,6 +495,93 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, isGenerating, quotedM
         setValue(newValue)
         pendingCursorRef.current = cursor + pastedText.length
     }, [])
+
+    const isMediaFile = useCallback((file: File): boolean => {
+        return file.type.startsWith('video/') || file.type.startsWith('image/')
+    }, [])
+
+    const readFileAsBase64 = useCallback((file: File): Promise<string> => {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader()
+            reader.onload = () => {
+                const result = reader.result as string
+                const comma = result.indexOf(',')
+                resolve(comma >= 0 ? result.slice(comma + 1) : result)
+            }
+            reader.onerror = () => reject(reader.error || new Error('read failed'))
+            reader.readAsDataURL(file)
+        })
+    }, [])
+
+    const insertMediaChips = useCallback((paths: { label: string; path: string }[]) => {
+        if (paths.length === 0) return
+        const el = editorRef.current
+        if (!el) return
+        const cursor = getTextOffset(el)
+        const joined = paths.map(p => `[${p.label}] `).join('')
+        const newValue = valueRef.current.slice(0, cursor) + joined + valueRef.current.slice(cursor)
+        // Stash each path under its visible label so the submit resolver
+        // expands the chip back to the actual project-relative path.
+        for (const p of paths) {
+            pasteStoreRef.current.set(`[${p.label}]`, p.path)
+        }
+        setValue(newValue)
+        pendingCursorRef.current = cursor + joined.length
+        // The value-change useEffect will re-render the editor DOM (the
+        // chip labels become styled chips via renderContentHTML).
+    }, [])
+
+    const handleDragEnter = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+        if (!e.dataTransfer.types.includes('Files')) return
+        dragCounterRef.current += 1
+        setIsDraggingMedia(true)
+        setMediaUploadError(null)
+    }, [])
+
+    const handleDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+        e.preventDefault()
+        dragCounterRef.current = Math.max(0, dragCounterRef.current - 1)
+        if (dragCounterRef.current === 0) setIsDraggingMedia(false)
+    }, [])
+
+    const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+        if (!e.dataTransfer.types.includes('Files')) return
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'copy'
+    }, [])
+
+    const handleDrop = useCallback(async (e: React.DragEvent<HTMLDivElement>) => {
+        dragCounterRef.current = 0
+        setIsDraggingMedia(false)
+        const files = Array.from(e.dataTransfer.files || []).filter(isMediaFile)
+        if (files.length === 0) return
+        e.preventDefault()
+
+        if (!projectPath) {
+            setMediaUploadError('Open a project before dropping media files.')
+            return
+        }
+
+        const inserted: { label: string; path: string }[] = []
+        for (const file of files) {
+            try {
+                const data = await readFileAsBase64(file)
+                const result = await App.UploadMedia(projectPath, file.name, data)
+                if (!result || !result.path) {
+                    setMediaUploadError(`Upload failed for ${file.name}`)
+                    continue
+                }
+                inserted.push({ label: result.fileName || file.name, path: result.path })
+            } catch (err: any) {
+                setMediaUploadError(err?.message || `Upload failed for ${file.name}`)
+            }
+        }
+        if (inserted.length > 0) {
+            insertMediaChips(inserted)
+            // Clear error after a moment if everything succeeded.
+            setTimeout(() => setMediaUploadError(null), 2500)
+        }
+    }, [isMediaFile, insertMediaChips, projectPath, readFileAsBase64])
 
     const COMMANDS: AcItem[] = [
         { name: 'init', detail: 'Create/update AGENTS.md from project analysis', icon: '/', insert: '/init ' },
@@ -867,13 +957,38 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, isGenerating, quotedM
                     onCompositionEnd={handleCompositionEnd}
                     onPaste={handlePaste}
                     onKeyDown={handleKeyDown}
+                    onDragEnter={handleDragEnter}
+                    onDragLeave={handleDragLeave}
+                    onDragOver={handleDragOver}
+                    onDrop={handleDrop}
                     className="text-[13px] text-[var(--text-primary)] outline-none px-[14px] pt-[12px] pb-[6px] resize-none w-full bg-transparent overflow-hidden whitespace-pre-wrap break-words border-0 min-h-[160px]"
                     style={{
                         fontFamily: 'inherit',
                         letterSpacing: 'inherit',
+                        boxShadow: isDraggingMedia ? 'inset 0 0 0 2px var(--accent)' : undefined,
+                        background: isDraggingMedia ? 'color-mix(in srgb, var(--accent) 6%, transparent)' : undefined,
+                        transition: 'box-shadow 0.15s ease, background 0.15s ease',
                     }}
-                    data-placeholder={disabled ? 'Generating...' : isGenerating ? 'Send a message... (will be queued)' : inputMode === 'shell' ? 'Run a shell command... (each command runs independently)' : 'Send a message... (Enter to submit, Shift+Enter for newline)'}
+                    data-placeholder={
+                        isDraggingMedia
+                            ? 'Drop video or image to attach'
+                            : disabled
+                            ? 'Generating...'
+                            : isGenerating
+                            ? 'Send a message... (will be queued)'
+                            : inputMode === 'shell'
+                            ? 'Run a shell command... (each command runs independently)'
+                            : 'Send a message... (Enter to submit, Shift+Enter for newline)'
+                    }
                 />
+                {mediaUploadError && (
+                    <div
+                        className="mx-[14px] mb-1 px-2 py-1 rounded text-[11px]"
+                        style={{ background: 'rgba(239,68,68,0.08)', color: 'var(--red)', border: '1px solid rgba(239,68,68,0.25)' }}
+                    >
+                        {mediaUploadError}
+                    </div>
+                )}
 
                 <div
                     className="flex items-center gap-2 px-[10px] pb-[8px]"
