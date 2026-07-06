@@ -5416,6 +5416,19 @@ func (a *App) UploadMedia(projectPath, fileName, dataB64 string) (*MediaUploadRe
 	if err := os.MkdirAll(mediaDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create media dir: %w", err)
 	}
+	// Reject the upload if .monika/media was replaced by a symlink between
+	// MkdirAll and the write below — otherwise a malicious local actor
+	// could redirect the file outside the project.
+	if linfo, lerr := os.Lstat(mediaDir); lerr == nil && linfo.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("media directory is a symlink, refusing to write")
+	}
+	// Same check for the resolved write target.
+	if resolved, rerr := filepath.EvalSymlinks(filepath.Dir(mediaDir)); rerr == nil {
+		realMedia := filepath.Join(resolved, filepath.Base(mediaDir))
+		if linfo2, lerr2 := os.Lstat(realMedia); lerr2 == nil && linfo2.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("media directory is a symlink, refusing to write")
+		}
+	}
 
 	safe := sanitizeFilename(fileName)
 	if safe == "" {
@@ -5509,30 +5522,16 @@ func (a *App) ReadMediaAsBase64(projectPath, filePath string) (*MediaContent, er
 	}, nil
 }
 
-// detectMediaMime returns the MIME type from the file extension, falling
-// back to a magic-byte sniff. Empty string means the format is not
-// supported by the media tools.
+// detectMediaMime identifies a media file by its magic bytes, using the
+// extension only as a tiebreaker to disambiguate formats with shared
+// signatures (e.g. mp4 vs mov both start with `ftyp`). The magic-byte
+// check is authoritative — an attacker who renames a binary blob to
+// .mp4 cannot trick the upload pipeline into passing it to ffmpeg, and
+// a missing/unknown magic rejects the file regardless of extension.
+// Empty string means the format is not supported.
 func detectMediaMime(name string, data []byte) string {
-	switch strings.ToLower(filepath.Ext(name)) {
-	case ".png":
-		return "image/png"
-	case ".jpg", ".jpeg":
-		return "image/jpeg"
-	case ".webp":
-		return "image/webp"
-	case ".gif":
-		return "image/gif"
-	case ".mp4":
-		return "video/mp4"
-	case ".mov":
-		return "video/quicktime"
-	case ".webm":
-		return "video/webm"
-	case ".mkv":
-		return "video/x-matroska"
-	case ".avi":
-		return "video/x-msvideo"
-	}
+	ext := strings.ToLower(filepath.Ext(name))
+	// Magic-byte pass first.
 	if len(data) >= 8 {
 		if data[0] == 0x89 && data[1] == 'P' && data[2] == 'N' && data[3] == 'G' {
 			return "image/png"
@@ -5546,15 +5545,45 @@ func detectMediaMime(name string, data []byte) string {
 		if len(data) >= 12 && string(data[0:4]) == "RIFF" && string(data[8:12]) == "WEBP" {
 			return "image/webp"
 		}
-		// mp4: bytes 4-7 == "ftyp"
 		if len(data) >= 12 && string(data[4:8]) == "ftyp" {
+			// Both mp4 and mov use the ISOBMFF ftyp box. Disambiguate by
+			// the major brand inside the box (bytes 8-12). Fall back to
+			// mp4 if the brand is unknown.
+			if len(data) >= 12 {
+				brand := string(data[8:12])
+				switch brand {
+				case "qt  ":
+					return "video/quicktime"
+				case "mp42", "isom", "avc1", "M4V ", "M4A ", "dash":
+					return "video/mp4"
+				default:
+					_ = ext // unknown brand — accept based on extension below
+				}
+			}
+			switch ext {
+			case ".mov":
+				return "video/quicktime"
+			case ".mp4", ".m4v":
+				return "video/mp4"
+			}
+			// Unknown ftyp box with unknown extension — still a real video
+			// container; default to mp4 since that's the most common.
 			return "video/mp4"
 		}
-		// webm/matroska: EBML header 0x1A 0x45 0xDF 0xA3
 		if len(data) >= 4 && data[0] == 0x1A && data[1] == 0x45 && data[2] == 0xDF && data[3] == 0xA3 {
+			// EBML is shared by webm and mkv.
+			if ext == ".mkv" {
+				return "video/x-matroska"
+			}
 			return "video/webm"
 		}
+		if len(data) >= 12 && string(data[0:4]) == "RIFF" && string(data[8:12]) == "AVI " {
+			return "video/x-msvideo"
+		}
 	}
+	// No matching magic bytes — extension alone is not enough to accept
+	// a media file, since the whole point of this guard is to prevent
+	// attackers from sneaking arbitrary bytes past the upload pipeline.
 	return ""
 }
 

@@ -158,32 +158,26 @@ type imageResult struct {
 	Thumbnail string `json:"thumbnail,omitempty"`
 }
 
-// detectImageMime returns the MIME type from the file extension, falling back
-// to a magic-byte sniff. Empty string means the format is not supported.
+// detectImageMime returns the MIME type from magic bytes only. An
+// extension alone is not enough — a renamed file with arbitrary
+// content must not be passed to the vision model. Empty string
+// means the format is not supported.
 func detectImageMime(path string, data []byte) string {
-	switch ext := strings.ToLower(filepath.Ext(path)); ext {
-	case ".png":
+	_ = path
+	if len(data) < 8 {
+		return ""
+	}
+	if data[0] == 0x89 && data[1] == 'P' && data[2] == 'N' && data[3] == 'G' {
 		return "image/png"
-	case ".jpg", ".jpeg":
+	}
+	if data[0] == 0xFF && data[1] == 0xD8 {
 		return "image/jpeg"
-	case ".webp":
-		return "image/webp"
-	case ".gif":
+	}
+	if string(data[0:4]) == "GIF8" {
 		return "image/gif"
 	}
-	if len(data) >= 8 {
-		if data[0] == 0x89 && data[1] == 'P' && data[2] == 'N' && data[3] == 'G' {
-			return "image/png"
-		}
-		if data[0] == 0xFF && data[1] == 0xD8 {
-			return "image/jpeg"
-		}
-		if string(data[0:4]) == "GIF8" {
-			return "image/gif"
-		}
-		if string(data[0:4]) == "RIFF" && len(data) >= 12 && string(data[8:12]) == "WEBP" {
-			return "image/webp"
-		}
+	if string(data[0:4]) == "RIFF" && len(data) >= 12 && string(data[8:12]) == "WEBP" {
+		return "image/webp"
 	}
 	return ""
 }
