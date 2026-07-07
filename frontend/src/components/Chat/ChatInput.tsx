@@ -503,7 +503,7 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, isGenerating, quotedM
         if (file.type) {
             return file.type.startsWith('video/') || file.type.startsWith('image/')
         }
-        return /\.(mp4|m4v|mov|webm|mkv|avi|heic|avif|png|jpe?g|webp|gif)$/i.test(file.name)
+        return /\.(mp4|m4v|mov|webm|mkv|avi|png|jpe?g|webp|gif)$/i.test(file.name)
     }, [])
 
     const readFileAsBase64 = useCallback((file: File): Promise<string> => {
@@ -545,6 +545,12 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, isGenerating, quotedM
     }, [])
 
     const handleDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+        // Only treat file-drag leaves as a counter event. Text/HTML
+        // drags never entered this branch (the counter was never
+        // incremented for them), so unconditionally decrementing here
+        // would let a stray non-file leave drive the counter to 0
+        // and silently drop the highlight state mid-drag.
+        if (!e.dataTransfer.types.includes('Files')) return
         e.preventDefault()
         dragCounterRef.current = Math.max(0, dragCounterRef.current - 1)
         if (dragCounterRef.current === 0) setIsDraggingMedia(false)
@@ -1053,7 +1059,7 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, isGenerating, quotedM
                         onClick={() => {
                             const input = document.createElement('input')
                             input.type = 'file'
-                            input.accept = 'image/*,video/*,.mp4,.m4v,.mov,.webm,.mkv,.avi,.heic,.avif'
+                            input.accept = 'image/*,video/*,.mp4,.m4v,.mov,.webm,.mkv,.avi,.png,.jpg,.jpeg,.webp,.gif'
                             input.multiple = true
                             input.onchange = () => {
                                 const files = Array.from(input.files || [])
@@ -1062,7 +1068,7 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, isGenerating, quotedM
                             }
                             input.click()
                         }}
-                        className="flex items-center justify-center w-7 h-7 rounded hover:bg-white/5 disabled:opacity-40 disabled:cursor-not-allowed"
+                        className="flex items-center justify-center w-7 h-7 rounded hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
                         style={{ color: 'var(--text-dim)' }}
                     >
                         <IconImage size={14} />

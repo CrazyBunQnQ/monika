@@ -479,9 +479,11 @@ func parseModelJSON(s string) map[string]any {
 	if m, err := unmarshalIntoFreshMap([]byte(s)); err == nil {
 		return m
 	}
-	// Fallback: find the first '{' and last '}'.
-	start := strings.Index(s, "{")
-	end := strings.LastIndex(s, "}")
+	// Fallback: find the first balanced {...} so a model reply that
+	// contains prose + JSON + prose + JSON (e.g. an example followed
+	// by the real answer) yields the second JSON object instead of
+	// an unbalanced slice that fails to unmarshal.
+	start, end := findFirstBalancedBraces(s)
 	if start < 0 || end <= start {
 		return nil
 	}
@@ -491,6 +493,42 @@ func parseModelJSON(s string) map[string]any {
 		return nil
 	}
 	return m
+}
+
+// findFirstBalancedBraces locates the first {...} span in s that is
+// balanced at the character level (string-quote aware). Returns the
+// half-open index pair [start, end] inclusive. Returns -1, -1 when no
+// balanced span exists. Comments inside JSON are not handled (the
+// prompt asks for raw JSON), but strings with embedded braces are.
+func findFirstBalancedBraces(s string) (int, int) {
+	start := strings.Index(s, "{")
+	if start < 0 {
+		return -1, -1
+	}
+	depth := 0
+	inStr := false
+	escape := false
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		if escape {
+			escape = false
+			continue
+		}
+		switch {
+		case c == '\\' && inStr:
+			escape = true
+		case c == '"':
+			inStr = !inStr
+		case !inStr && c == '{':
+			depth++
+		case !inStr && c == '}':
+			depth--
+			if depth == 0 {
+				return start, i
+			}
+		}
+	}
+	return -1, -1
 }
 
 func unmarshalIntoFreshMap(data []byte) (map[string]any, error) {

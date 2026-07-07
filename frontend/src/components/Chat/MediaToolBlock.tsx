@@ -85,7 +85,12 @@ export function MediaToolBlock({ tool, onOpenMedia }: MediaToolBlockProps) {
 
     const handleOpenMedia = () => {
         if (!parsed?.filePath || !onOpenMedia) return
-        const mime = isVideo ? 'video/mp4' : 'image/png'
+        // Fall back to a per-tool default only when parsed.mimeType
+        // is missing entirely. The video tool currently reports
+        // video/mp4 for everything (a known issue), so this still
+        // works for the common cases (mp4, png, jpg, webp, gif);
+        // webm/mov/heic get the right MIME from the upload path.
+        const mime = parsed.mimeType || (isVideo ? 'video/mp4' : 'image/png')
         onOpenMedia(parsed.filePath, parsed.fileName || 'media', mime)
     }
 
@@ -115,7 +120,7 @@ export function MediaToolBlock({ tool, onOpenMedia }: MediaToolBlockProps) {
                     <button
                         type="button"
                         onClick={handleOpenMedia}
-                        className="text-[10px] px-1.5 py-0.5 rounded hover:bg-white/5"
+                        className="text-[10px] px-1.5 py-0.5 rounded hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
                         style={{ color: 'var(--text-dim)', border: BORDER }}
                         title="Open in preview panel"
                     >
@@ -414,7 +419,7 @@ function ThumbCell({ t, url, onOpen }: { t: number; url: string; onOpen: () => v
             onMouseEnter={() => setHover(true)}
             onMouseLeave={() => setHover(false)}
             onClick={onOpen}
-            className="relative shrink-0 rounded overflow-hidden group"
+            className="relative shrink-0 rounded overflow-hidden group focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
             style={{
                 width: 110, height: 64,
                 background: 'rgba(255,255,255,0.04)',
