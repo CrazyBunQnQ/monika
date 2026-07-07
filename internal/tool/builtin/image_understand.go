@@ -81,18 +81,27 @@ func (i *imageUnderstand) Execute(ctx context.Context, args json.RawMessage) (to
 		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 	}
 
+	// Stat first so a multi-GB file never reaches the read buffer.
+	// Reading before size-checking turned image_understand into a
+	// trivial memory-exhaustion vector — a 4GB hostile image would
+	// get os.ReadFile'd in full before being rejected.
+	info, err := os.Stat(safe)
+	if err != nil {
+		return tool.ExecutionResult{Content: "cannot stat image: " + err.Error(), IsError: true}, nil
+	}
+	if info.Size() > maxImageBytes {
+		return tool.ExecutionResult{
+			Content: fmt.Sprintf("image too large: %d bytes (max %d)", info.Size(), maxImageBytes),
+			IsError: true,
+		}, nil
+	}
+
 	data, err := os.ReadFile(safe)
 	if err != nil {
 		return tool.ExecutionResult{Content: "cannot read image: " + err.Error(), IsError: true}, nil
 	}
 	if len(data) == 0 {
 		return tool.ExecutionResult{Content: "image file is empty", IsError: true}, nil
-	}
-	if len(data) > maxImageBytes {
-		return tool.ExecutionResult{
-			Content: fmt.Sprintf("image too large: %d bytes (max %d)", len(data), maxImageBytes),
-			IsError: true,
-		}, nil
 	}
 
 	mime := detectImageMime(safe, data)
@@ -140,7 +149,7 @@ func (i *imageUnderstand) Execute(ctx context.Context, args json.RawMessage) (to
 		FilePath: p.FilePath,
 		FileName: filepath.Base(safe),
 		MimeType: mime,
-		Size:     int64(len(data)),
+		Size:     info.Size(),
 		Question: p.Question,
 		Summary:  resp,
 	}
