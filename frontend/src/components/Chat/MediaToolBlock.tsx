@@ -70,6 +70,10 @@ export function MediaToolBlock({ tool, onOpenMedia }: MediaToolBlockProps) {
     const isError = tool.status === 'error'
     const style = MEDIA_STYLE[tool.name] || MEDIA_STYLE.video_understand
 
+    // Live progress text from the streaming tool. Empty when not running
+    // or when no EventToolProgress has arrived yet for this tool id.
+    const progress = useStore(s => (tool.id ? s.toolProgress[tool.id] : '') || '')
+
     let parsed: VideoResult | null = null
     if (tool.output && !isRunning) {
         try {
@@ -128,7 +132,7 @@ export function MediaToolBlock({ tool, onOpenMedia }: MediaToolBlockProps) {
 
             {(isRunning || isError || parsed || tool.output) && (
                 <div className="px-3 py-2.5">
-                    {isRunning && <RunningState isVideo={isVideo} parsed={parsed} />}
+                    {isRunning && <RunningState isVideo={isVideo} parsed={parsed} progress={progress} />}
                     {isError && <ErrorState output={tool.output} />}
                     {!isRunning && !isError && parsed && (
                         <ResultState toolName={tool.name} parsed={parsed} onOpenMedia={onOpenMedia} />
@@ -144,13 +148,18 @@ export function MediaToolBlock({ tool, onOpenMedia }: MediaToolBlockProps) {
     )
 }
 
-function RunningState({ isVideo, parsed }: { isVideo: boolean; parsed: VideoResult | null }) {
-    const phase = isVideo ? 'Sampling key frames and analyzing with vision model…' : 'Analyzing image…'
+function RunningState({ isVideo, parsed, progress }: { isVideo: boolean; parsed: VideoResult | null; progress?: string }) {
+    // When live progress messages arrive from the streaming tool, show
+    // the most recent one instead of the generic phase text. Falls
+    // back to the static phase until the first progress event lands.
+    const phase = isVideo
+        ? (progress || 'Sampling key frames and analyzing with vision model…')
+        : (progress || 'Analyzing image…')
     return (
         <div className="flex items-center gap-2" style={{ color: 'var(--text-dim)' }}>
             <SpinnerDot />
-            <span>{phase}</span>
-            {parsed?.frame_count != null && (
+            <span className="whitespace-pre-wrap">{phase}</span>
+            {parsed?.frame_count != null && !isVideo && (
                 <span className="text-[10px] ml-1" style={{ color: 'var(--text-faint, var(--text-dim))' }}>
                     ({parsed.frame_count} frames)
                 </span>

@@ -1160,6 +1160,19 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 							default:
 							}
 							streamOutput.WriteString(ev.Content)
+						case EventToolProgress:
+							// Progress is forwarded to the frontend so the
+							// matching tool card can update its running
+							// state live, but is intentionally NOT
+							// accumulated into streamOutput: those
+							// messages would otherwise land as raw text
+							// in the chat stream AND pollute the
+							// tool's JSON output.
+							select {
+							case ch <- ev:
+							case <-ctx.Done():
+								return
+							}
 						case EventThinking:
 							select {
 							case ch <- ev:

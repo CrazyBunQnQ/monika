@@ -194,6 +194,10 @@ interface AppState {
     preview: PreviewState
     dirtyFiles: Set<string>
     fileTreeActiveTab: 'files' | 'tasks' | 'debug'
+    // Per-tool-call progress messages emitted by streaming tools via
+    // EventToolProgress. Keyed by tool call id so MediaToolBlock can
+    // read the latest line for a specific tool card.
+    toolProgress: Record<string, string>
 
     fileTreeVersion: number
     sessionListVersion: number
@@ -261,6 +265,7 @@ interface AppState {
     addToolStart: (tool: ToolCall) => void
     updateToolDone: (toolId: string, output: string, status: 'done' | 'error') => void
     updateToolInput: (toolId: string, input: string) => void
+    setToolProgress: (toolId: string, message: string) => void
     updateSessionMessage: (id: string, delta: string) => void
     updateSessionThinking: (id: string, delta: string) => void
     addSessionToolStart: (id: string, tool: ToolCall) => void
@@ -423,6 +428,7 @@ export const useStore = create<AppState>((set, get) => ({
     sessionTokens: {},
     tokenCount: 0,
     tokenMax: 0,
+    toolProgress: {},
     projectPath: '',
     branch: '',
     activeSessionId: '',
@@ -559,6 +565,9 @@ export const useStore = create<AppState>((set, get) => ({
             }
             return { messages: msgs }
         }),
+
+    setToolProgress: (toolId, message) =>
+        set((s) => ({ toolProgress: { ...s.toolProgress, [toolId]: message } })),
 
     updateSessionMessage: (id, delta) => {
         set((s) => {
@@ -2126,6 +2135,10 @@ export function setupWailsEvents() {
                         }
                     }
                 }
+                // Clear any pending progress message for this tool.
+                if (data.tool?.id) {
+                    store.setToolProgress(data.tool.id, '')
+                }
                 break
 
             case 'tool_done':
@@ -2139,6 +2152,18 @@ export function setupWailsEvents() {
                     if (data.tool.name === 'file_write' || data.tool.name === 'file_edit' || data.tool.name === 'bash') {
                         store.bumpFileTreeVersion()
                     }
+                }
+                break
+
+            case 'tool_progress':
+                // Streaming tools (e.g. video_understand) emit progress
+                // messages with sid = tool call id. Stash them in the
+                // toolProgress map so MediaToolBlock can render the
+                // latest line under the running spinner. The matching
+                // tool_output event below clears the entry when the
+                // tool completes.
+                if (sid) {
+                    store.setToolProgress(sid, data.content || '')
                 }
                 break
 

@@ -2011,6 +2011,9 @@ func (a *App) handleAgentEvent(sessionID, model string, ev agent2.Event) {
 		se.Content = ev.Content
 		se.RetryAttempt = ev.RetryAttempt
 		se.RetryMax = ev.RetryMax
+	case agent2.EventToolProgress:
+		se.Type = "tool_progress"
+		se.Content = ev.Content
 	}
 
 	a.eventBus.Emit(se)

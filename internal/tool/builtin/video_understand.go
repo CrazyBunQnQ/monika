@@ -130,30 +130,34 @@ func (v *videoUnderstand) Execute(ctx context.Context, args json.RawMessage) (to
 // ExecuteStreaming returns a channel of progress events so the chat UI
 // can render "Sampling frames... 5/32..." in real time instead of a
 // frozen spinner. The channel is closed when the analysis completes;
-// the agent loop accumulates the EventTextDelta content as the final
-// tool result, so the structured JSON still surfaces as the tool output.
+// the agent loop accumulates EventTextDelta content as the final tool
+// result, so the structured JSON still surfaces as the tool output.
 func (v *videoUnderstand) ExecuteStreaming(ctx context.Context, args json.RawMessage) (<-chan agent.Event, error) {
 	ch := make(chan agent.Event, 32)
 	go func() {
 		defer close(ch)
 		progress := func(msg string) {
 			select {
-			case ch <- agent.Event{Type: agent.EventTextDelta, Content: msg}:
+			case ch <- agent.Event{Type: agent.EventToolProgress, Content: msg}:
 			case <-ctx.Done():
 			}
 		}
 		out, err := v.runAnalysis(ctx, args, progress)
 		if err != nil {
+			// Encode the error into a JSON envelope rather than
+			// emitting EventError. EventError is forwarded to the
+			// frontend as a session-level fatal error and would
+			// terminate the user's session mid-analysis, which is
+			// not what we want for a tool-internal failure.
+			errJSON, _ := json.Marshal(map[string]string{"error": err.Error()})
 			select {
-			case ch <- agent.Event{Type: agent.EventError, Content: err.Error()}:
+			case ch <- agent.Event{Type: agent.EventTextDelta, Content: string(errJSON)}:
 			case <-ctx.Done():
 			}
 			return
 		}
-		// Push the final JSON as one last EventTextDelta so it lands in
-		// the tool output. The frontend's MediaToolBlock parses it.
 		select {
-		case ch <- agent.Event{Type: agent.EventTextDelta, Content: "\n\n" + out}:
+		case ch <- agent.Event{Type: agent.EventTextDelta, Content: out}:
 		case <-ctx.Done():
 		}
 	}()
