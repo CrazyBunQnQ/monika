@@ -21,19 +21,19 @@ import (
 // session-agnostic: whichever session invokes video/image_understand uses its
 // own provider.
 //
-// The returned UsageEvent is the LAST usage chunk the provider emitted on the
+// The returned Usage is the LAST usage chunk the provider emitted on the
 // stream (vision calls produce a single non-streaming usage event). Callers
 // should fold this into the tool's ExecutionResult so the agent loop can
 // surface it through the same EventUsage channel the chat path uses; without
 // that propagation vision calls are invisible to budget display and
 // compaction decisions.
-type VisionCaller func(ctx context.Context, prompt string, images []engine.ImageRef) (string, *engine.UsageEvent, error)
+type VisionCaller func(ctx context.Context, prompt string, images []engine.ImageRef) (string, *engine.Usage, error)
 
 // NewDefaultVisionCaller returns a VisionCaller backed by a static map of
 // provider engines. Callers that already maintain a provider map (main.go
 // uses bootstrap.Result.Providers) pass this directly to RegisterDefaults.
 func NewDefaultVisionCaller(providers map[string]engine.ProviderEngine) VisionCaller {
-	return func(ctx context.Context, prompt string, images []engine.ImageRef) (string, *engine.UsageEvent, error) {
+	return func(ctx context.Context, prompt string, images []engine.ImageRef) (string, *engine.Usage, error) {
 		providerID := tool.ProviderFromContext(ctx)
 		model := tool.ModelFromContext(ctx)
 
@@ -62,14 +62,12 @@ func NewDefaultVisionCaller(providers map[string]engine.ProviderEngine) VisionCa
 		}
 
 		var sb strings.Builder
-		var lastUsage *engine.UsageEvent
+		var lastUsage *engine.Usage
 		for ev := range evCh {
 			switch ev.Kind {
 			case engine.EventContentDelta:
 				sb.WriteString(ev.Text)
 			case engine.EventUsage:
-				// Copy the value so the caller's pointer isn't tied to
-				// the channel buffer reuse patterns of the provider.
 				u := ev.Usage
 				lastUsage = &u
 			case engine.EventError:

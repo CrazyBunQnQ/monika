@@ -1240,10 +1240,20 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 				// Surface token usage from tools that talk to an LLM on
 				// their own (image/video_understand). Without this the
 				// vision calls are invisible to budget tracking and
-				// compaction decisions.
+				// compaction decisions. The tool stores the wire-format
+				// engine.Usage it received from the provider stream;
+				// translate it into the agent.UsageEvent the wire
+				// expects.
 				if execResult.Usage != nil {
-					if u, ok := execResult.Usage.(engine.UsageEvent); ok {
-						ch <- Event{Type: EventUsage, Usage: u}
+					if u, ok := execResult.Usage.(*engine.Usage); ok && u != nil {
+						ch <- Event{Type: EventUsage, Usage: UsageEvent{
+							InputTokens:      u.InputTokens,
+							OutputTokens:     u.OutputTokens,
+							TotalTokens:      u.TotalTokens,
+							ReasoningTokens:  u.ReasoningTokens,
+							CacheReadTokens:  u.CacheReadTokens,
+							CacheWriteTokens: u.CacheWriteTokens,
+						}}
 					}
 				}
 				sendToolOutput(pc.tc, results[rIdx].output, results[rIdx].status,

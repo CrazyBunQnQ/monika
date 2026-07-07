@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"monika/internal/agent"
 	"monika/internal/tool"
 	"monika/pkg/engine"
 )
@@ -157,8 +158,16 @@ func (v *videoUnderstand) ExecuteStreaming(ctx context.Context, args json.RawMes
 			return
 		}
 		if usage != nil {
+			u := agent.UsageEvent{
+				InputTokens:      usage.InputTokens,
+				OutputTokens:     usage.OutputTokens,
+				TotalTokens:      usage.TotalTokens,
+				ReasoningTokens:  usage.ReasoningTokens,
+				CacheReadTokens:  usage.CacheReadTokens,
+				CacheWriteTokens: usage.CacheWriteTokens,
+			}
 			select {
-			case ch <- agent.Event{Type: agent.EventUsage, Usage: *usage}:
+			case ch <- agent.Event{Type: agent.EventUsage, Usage: u}:
 			case <-ctx.Done():
 			}
 		}
@@ -170,7 +179,7 @@ func (v *videoUnderstand) ExecuteStreaming(ctx context.Context, args json.RawMes
 	return ch, nil
 }
 
-func (v *videoUnderstand) runAnalysis(ctx context.Context, args json.RawMessage, progress func(string)) (string, *engine.UsageEvent, error) {
+func (v *videoUnderstand) runAnalysis(ctx context.Context, args json.RawMessage, progress func(string)) (string, *engine.Usage, error) {
 	var p struct {
 		FilePath      string  `json:"filePath"`
 		Question      string  `json:"question"`
@@ -339,6 +348,12 @@ func formatDuration(seconds float64) string {
 
 // sampleTimestamps returns a deterministic, evenly-spaced set of timestamps
 // (in seconds) between start and end, capped to maxN entries.
+//
+// The last sample is placed at min(end - 1% span, end - 0.1s) so that
+// ffmpeg -ss doesn't seek to (or past) the final keyframe. Seeking to
+// the exact end of a video returns "Output file is empty, nothing
+// was encoded" because the demuxer can't find a frame at that exact
+// PTS; a small backoff is enough to land on the last real frame.
 func sampleTimestamps(start, end, interval float64, maxN int) []float64 {
 	span := end - start
 	if span <= 0 {
@@ -351,12 +366,22 @@ func sampleTimestamps(start, end, interval float64, maxN int) []float64 {
 	if n < 1 {
 		n = 1
 	}
+	// Leave at least 100ms (or 1% of the span) of headroom from the
+	// end so ffmpeg's keyframe-seeking lands on a real frame.
+	backoff := span * 0.01
+	if backoff < 0.1 {
+		backoff = 0.1
+	}
+	if backoff*2 > span {
+		backoff = span / 4
+	}
+	effectiveEnd := end - backoff
 	out := make([]float64, n)
 	if n == 1 {
-		out[0] = start + span/2
+		out[0] = start + (effectiveEnd-start)/2
 		return out
 	}
-	step := span / float64(n-1)
+	step := (effectiveEnd - start) / float64(n-1)
 	for i := 0; i < n; i++ {
 		out[i] = start + step*float64(i)
 	}
@@ -631,7 +656,7 @@ func extractThumbnails(parentCtx context.Context, videoPath string, maxN int) ([
 func snapshotFrame(parentCtx context.Context, videoPath string, t float64) (string, error) {
 	tmpDir, err := os.MkdirTemp("", "monika-thumb-*")
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
 	defer os.RemoveAll(tmpDir)
 	framePath := filepath.Join(tmpDir, "thumb.jpg")
@@ -651,11 +676,11 @@ func snapshotFrame(parentCtx context.Context, videoPath string, t float64) (stri
 		framePath,
 	).CombinedOutput()
 	if err != nil {
-		return "", nil, fmt.Errorf("ffmpeg at t=%.2fs: %w: %s", t, err, string(out))
+		return "", fmt.Errorf("ffmpeg at t=%.2fs: %w: %s", t, err, string(out))
 	}
 	data, err := os.ReadFile(framePath)
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
 	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(data), nil
 }

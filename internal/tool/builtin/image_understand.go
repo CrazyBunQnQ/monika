@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"monika/internal/tool"
 	"monika/pkg/engine"
