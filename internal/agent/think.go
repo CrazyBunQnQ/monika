@@ -7,33 +7,65 @@ import (
 
 var thinkTagRe = regexp.MustCompile(`(?s)<think\b[^>]*>.*?</think\s*>`)
 
-// stripThinkTags removes <think>...</think> reasoning blocks from a complete
-// string. Handles closed tags via regex, then strips any residual unclosed
-// <think> tag (from tag start to end of string).
-func stripThinkTags(s string) string {
-	s = thinkTagRe.ReplaceAllString(s, "")
-	if idx := strings.Index(s, "<think"); idx >= 0 {
-		closeIdx := strings.Index(s[idx:], "</think")
+// splitThinkTags separates <think>...</think> reasoning blocks from regular
+// content in a complete (non-streaming) string. Returns (cleanText, thinkContent).
+func splitThinkTags(s string) (text, thinking string) {
+	var thinkParts []string
+	text = thinkTagRe.ReplaceAllStringFunc(s, func(match string) string {
+		openEnd := strings.Index(match, ">")
+		if openEnd < 0 {
+			return ""
+		}
+		rest := match[openEnd+1:]
+		closeIdx := strings.Index(rest, "</think")
 		if closeIdx >= 0 {
-			s = s[:idx] + s[idx+closeIdx+len("</think"):]
+			thinkParts = append(thinkParts, strings.TrimSpace(rest[:closeIdx]))
 		} else {
-			s = s[:idx]
+			thinkParts = append(thinkParts, strings.TrimSpace(rest))
+		}
+		return ""
+	})
+	if idx := strings.Index(text, "<think"); idx >= 0 {
+		openEnd := strings.Index(text[idx:], ">")
+		if openEnd < 0 {
+			thinkParts = append(thinkParts, strings.TrimSpace(text[idx+len("<think"):]))
+			text = text[:idx]
+		} else {
+			cs := idx + openEnd + 1
+			closeIdx := strings.Index(text[cs:], "</think")
+			if closeIdx >= 0 {
+				ce := cs + closeIdx
+				thinkParts = append(thinkParts, strings.TrimSpace(text[cs:ce]))
+				if gt := strings.Index(text[ce:], ">"); gt >= 0 {
+					text = text[:idx] + text[ce+gt+1:]
+				} else {
+					text = text[:idx]
+				}
+			} else {
+				thinkParts = append(thinkParts, strings.TrimSpace(text[cs:]))
+				text = text[:idx]
+			}
 		}
 	}
-	return strings.TrimSpace(s)
+	text = strings.TrimSpace(text)
+	thinking = strings.Join(thinkParts, "\n")
+	return
+}
+
+// stripThinkTags removes <think>...</think> reasoning blocks from a complete
+// string.
+func stripThinkTags(s string) string {
+	text, _ := splitThinkTags(s)
+	return text
 }
 
 // thinkStreamFilter separates <think>...</think> reasoning blocks from
-// regular content in a streaming text channel. It correctly handles tags
-// split across multiple Write calls.
+// regular content in a streaming text channel.
 type thinkStreamFilter struct {
-	pending string // unprocessed text that may contain partial tag boundaries
-	inThink bool   // currently inside a <think> block
+	pending string
+	inThink bool
 }
 
-// Write processes a chunk of streaming text and returns the regular content
-// and thinking content extracted from it. Some text may be buffered
-// internally if it could be part of a tag that spans the next chunk.
 func (f *thinkStreamFilter) Write(chunk string) (text, thinking string) {
 	f.pending += chunk
 	var textBuf, thinkBuf strings.Builder
@@ -53,16 +85,14 @@ func (f *thinkStreamFilter) Write(chunk string) (text, thinking string) {
 				textBuf.WriteString(f.pending[:idx])
 			}
 			f.pending = f.pending[idx:]
-			// Skip past the '>' that ends the opening <think ...> tag
 			gtIdx := strings.Index(f.pending, ">")
 			if gtIdx < 0 {
-				break // opening tag incomplete, wait for more data
+				break
 			}
 			f.pending = f.pending[gtIdx+1:]
 			f.inThink = true
 		}
 
-		// Inside think block — look for closing </think
 		closeIdx := strings.Index(f.pending, "</think")
 		if closeIdx < 0 {
 			safe := safeFlushLen(f.pending, "</think")
@@ -85,7 +115,6 @@ func (f *thinkStreamFilter) Write(chunk string) (text, thinking string) {
 	return textBuf.String(), thinkBuf.String()
 }
 
-// Flush returns any remaining buffered content. Call once after the last Write.
 func (f *thinkStreamFilter) Flush() (text, thinking string) {
 	remaining := f.pending
 	f.pending = ""
@@ -95,9 +124,6 @@ func (f *thinkStreamFilter) Flush() (text, thinking string) {
 	return remaining, ""
 }
 
-// safeFlushLen returns the number of bytes that can be safely emitted
-// without cutting a potential partial tag at the end of s. For example,
-// if s ends with "<thi" and tag is "<think", only len(s)-3 bytes are safe.
 func safeFlushLen(s, tag string) int {
 	n := len(s)
 	maxOverlap := len(tag)

@@ -17,11 +17,12 @@ import (
 )
 
 type chatRequest struct {
-	Model         string               `json:"model"`
-	Messages      []engine.ChatMessage `json:"messages"`
-	Stream        bool                 `json:"stream"`
-	Tools         []engine.ToolDef     `json:"tools,omitempty"`
-	StreamOptions *streamOptions       `json:"stream_options,omitempty"`
+	Model          string               `json:"model"`
+	Messages       []engine.ChatMessage `json:"messages"`
+	Stream         bool                 `json:"stream"`
+	Tools          []engine.ToolDef     `json:"tools,omitempty"`
+	StreamOptions  *streamOptions       `json:"stream_options,omitempty"`
+	ReasoningSplit *bool                `json:"reasoning_split,omitempty"`
 }
 
 type streamOptions struct {
@@ -120,6 +121,13 @@ func StreamChat(ctx context.Context, baseURL, apiKey, model string, messages []e
 	// may not support it and some even buffer the response when it's present.
 	if strings.Contains(baseURL, "api.openai.com") {
 		body.StreamOptions = &streamOptions{IncludeUsage: true}
+	}
+
+	// MiniMax puts <think> tags inside content by default. reasoning_split=true
+	// separates reasoning into reasoning_content, which we already parse.
+	if strings.Contains(baseURL, "minimax") {
+		t := true
+		body.ReasoningSplit = &t
 	}
 
 	bodyJSON, err := json.Marshal(body)
@@ -467,7 +475,7 @@ func parseSSEStream(ctx context.Context, r io.Reader, ch chan<- engine.ChatEvent
 			if rawError.Len() > 0 {
 				errMsg = fmt.Sprintf("%s. Provider raw error: %s", errMsg, rawError.String())
 			}
-			return fmt.Errorf(errMsg)
+			return errors.New(errMsg)
 		}
 
 		for _, buf := range toolCallBuf {

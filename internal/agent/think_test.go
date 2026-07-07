@@ -2,6 +2,35 @@ package agent
 
 import "testing"
 
+func TestSplitThinkTags(t *testing.T) {
+	tests := []struct {
+		name         string
+		input        string
+		wantText     string
+		wantThinking string
+	}{
+		{"closed", "<think>reasoning here</think>actual content", "actual content", "reasoning here"},
+		{"multiline", "<think>\nline 1\nline 2\n</think>\n\nHello", "Hello", "line 1\nline 2"},
+		{"attrs", `<think foo="bar">reasoning</think>text`, "text", "reasoning"},
+		{"unclosed", "<think>still thinking...", "", "still thinking..."},
+		{"no_tags", "just regular text", "just regular text", ""},
+		{"empty_think", "<think></think>after", "after", ""},
+		{"multiple", "<think>a</think>mid<think>b</think>end", "midend", "a\nb"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotText, gotThink := splitThinkTags(tt.input)
+			if gotText != tt.wantText {
+				t.Errorf("text = %q, want %q", gotText, tt.wantText)
+			}
+			if gotThink != tt.wantThinking {
+				t.Errorf("thinking = %q, want %q", gotThink, tt.wantThinking)
+			}
+		})
+	}
+}
+
 func TestStripThinkTags(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -48,7 +48,12 @@ func parseResult(events []engine.ChatEvent) streamResult {
 		}
 	}
 
-	result.Content = stripThinkTags(content.String())
-	result.ReasoningContent = reasoning.String()
+	cleanText, thinkText := splitThinkTags(content.String())
+	result.Content = cleanText
+	if reasoning.Len() > 0 {
+		result.ReasoningContent = reasoning.String()
+	} else if thinkText != "" {
+		result.ReasoningContent = thinkText
+	}
 	return result
 }
