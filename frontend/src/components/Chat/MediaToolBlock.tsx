@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import MarkdownBlock from './MarkdownBlock'
-import { IconVideo, IconImage, IconChevronDown, IconChevronRight, IconClock, IconPlay } from '../Icons'
+import { IconVideo, IconImage, IconFileText, IconMusic, IconChevronDown, IconChevronRight, IconClock, IconPlay } from '../Icons'
 import { Call } from '@wailsio/runtime'
 import { useStore } from '../../store'
 
@@ -35,6 +35,8 @@ interface VideoResult {
 const MEDIA_STYLE: Record<string, { color: string; label: string }> = {
     video_understand: { color: '#c084fc', label: 'video' },   // purple
     image_understand: { color: '#22d3ee', label: 'image' },   // cyan
+    pdf_understand: { color: '#f59e0b', label: 'pdf' },       // amber
+    audio_understand: { color: '#10b981', label: 'audio' },   // emerald
 }
 
 const HEADER_BG = 'var(--bg-sidebar)'
@@ -64,7 +66,9 @@ function formatTimestamp(t: number): string {
 export function MediaToolBlock({ tool, onOpenMedia }: MediaToolBlockProps) {
     const isVideo = tool.name === 'video_understand'
     const isImage = tool.name === 'image_understand'
-    if (!isVideo && !isImage) return null
+    const isPdf = tool.name === 'pdf_understand'
+    const isAudio = tool.name === 'audio_understand'
+    if (!isVideo && !isImage && !isPdf && !isAudio) return null
 
     const isRunning = tool.status === 'running'
     const isError = tool.status === 'error'
@@ -90,7 +94,7 @@ export function MediaToolBlock({ tool, onOpenMedia }: MediaToolBlockProps) {
         // video/mp4 for everything (a known issue), so this still
         // works for the common cases (mp4, png, jpg, webp, gif);
         // webm/mov/heic get the right MIME from the upload path.
-        const mime = parsed.mimeType || (isVideo ? 'video/mp4' : 'image/png')
+        const mime = parsed.mimeType || (isVideo ? 'video/mp4' : isPdf ? 'application/pdf' : isAudio ? 'audio/mpeg' : 'image/png')
         onOpenMedia(parsed.filePath, parsed.fileName || 'media', mime)
     }
 
@@ -100,7 +104,7 @@ export function MediaToolBlock({ tool, onOpenMedia }: MediaToolBlockProps) {
             style={{ background: HEADER_BG, border: BORDER }}
         >
             <div className="flex items-center gap-2 px-3 py-2" style={{ borderBottom: isRunning || (parsed && !isError) ? BORDER : 'none' }}>
-                {isVideo ? <IconVideo size={14} style={{ color: style.color }} /> : <IconImage size={14} style={{ color: style.color }} />}
+                {isVideo ? <IconVideo size={14} style={{ color: style.color }} /> : isPdf ? <IconFileText size={14} style={{ color: style.color }} /> : isAudio ? <IconMusic size={14} style={{ color: style.color }} /> : <IconImage size={14} style={{ color: style.color }} />}
                 <span
                     className="text-[10px] font-mono px-1.5 py-0.5 rounded uppercase tracking-wide"
                     style={{ background: 'rgba(255,255,255,0.04)', color: style.color, border: `1px solid ${style.color}40` }}
@@ -108,7 +112,7 @@ export function MediaToolBlock({ tool, onOpenMedia }: MediaToolBlockProps) {
                     {style.label}
                 </span>
                 <span className="font-medium truncate flex-1" style={{ color: 'var(--text)' }}>
-                    {parsed?.fileName || (isVideo ? 'Video' : 'Image')}
+                    {parsed?.fileName || (isVideo ? 'Video' : isPdf ? 'PDF' : isAudio ? 'Audio' : 'Image')}
                 </span>
                 {parsed?.duration_seconds != null && isVideo && (
                     <span className="text-[10px] flex items-center gap-1" style={{ color: 'var(--text-dim)' }}>
@@ -205,38 +209,18 @@ function ResultState({ toolName, parsed, onOpenMedia }: ResultStateProps) {
     if (toolName === 'image_understand') {
         return <ImageResult parsed={parsed} onOpenMedia={onOpenMedia} />
     }
+    if (toolName === 'pdf_understand') {
+        return <PdfResult parsed={parsed} onOpenMedia={onOpenMedia} />
+    }
+    if (toolName === 'audio_understand') {
+        return <AudioResult parsed={parsed} onOpenMedia={onOpenMedia} />
+    }
     return <VideoResultView parsed={parsed} onOpenMedia={onOpenMedia} />
 }
 
 function ImageResult({ parsed, onOpenMedia }: { parsed: VideoResult; onOpenMedia?: (filePath: string, fileName: string, mime: string) => void }) {
-    // Inline preview is fetched lazily via App.ReadMediaAsBase64 — the
-    // image bytes are NOT included in the LLM-facing tool result
-    // (commit history would otherwise bloat by ~27MB per image call).
-    const [thumb, setThumb] = useState<string | null>(null)
-    const [loading, setLoading] = useState(true)
-    const [error, setError] = useState<string | null>(null)
-    const projectPath = useStore(s => s.projectPath)
-
-    useEffect(() => {
-        let cancelled = false
-        if (!parsed.filePath || !projectPath) {
-            setError('No project open')
-            setLoading(false)
-            return
-        }
-        setLoading(true)
-        Call.ByName('monika/internal/api.App.ReadMediaAsBase64', projectPath, parsed.filePath)
-            .then((res: any) => {
-                if (cancelled) return
-                if (res && res.dataB64) {
-                    const mime = res.mimeType || parsed.mimeType || 'image/png'
-                    setThumb(`data:${mime};base64,${res.dataB64}`)
-                }
-            })
-            .catch((e: any) => { if (!cancelled) setError(e?.message || 'failed to load image') })
-            .finally(() => { if (!cancelled) setLoading(false) })
-        return () => { cancelled = true }
-    }, [parsed.filePath, projectPath, parsed.mimeType])
+    // No need to fetch base64 — the /__media__ endpoint streams the file directly
+    const thumb = parsed.filePath ? `/__media__?path=${encodeURIComponent(parsed.filePath)}` : null
 
     const handleClick = () => {
         if (parsed.filePath && onOpenMedia) {
@@ -255,17 +239,41 @@ function ImageResult({ parsed, onOpenMedia }: { parsed: VideoResult; onOpenMedia
                 {thumb && (
                     <img src={thumb} alt={parsed.fileName || 'image'} style={{ width: '100%', maxHeight: 240, objectFit: 'contain', display: 'block' }} />
                 )}
-                {!thumb && loading && (
-                    <div className="flex items-center justify-center" style={{ height: 120, color: 'var(--text-dim)' }}>
-                        Loading preview…
-                    </div>
-                )}
-                {!thumb && !loading && error && (
-                    <div className="flex items-center justify-center text-[12px]" style={{ height: 120, color: 'var(--red)' }}>
-                        {error}
-                    </div>
-                )}
             </button>
+            {parsed.summary && (
+                <MarkdownBlock content={parsed.summary} streaming={false} />
+            )}
+        </div>
+    )
+}
+
+function PdfResult({ parsed, onOpenMedia }: { parsed: VideoResult; onOpenMedia?: (filePath: string, fileName: string, mime: string) => void }) {
+    return (
+        <div className="space-y-2">
+            {parsed.filePath && (
+                <iframe
+                    src={`/__media__?path=${encodeURIComponent(parsed.filePath)}`}
+                    style={{ width: '100%', height: 400, border: BORDER, borderRadius: 4 }}
+                    title={parsed.fileName || 'PDF'}
+                />
+            )}
+            {parsed.summary && (
+                <MarkdownBlock content={parsed.summary} streaming={false} />
+            )}
+        </div>
+    )
+}
+
+function AudioResult({ parsed, onOpenMedia }: { parsed: VideoResult; onOpenMedia?: (filePath: string, fileName: string, mime: string) => void }) {
+    return (
+        <div className="space-y-2">
+            {parsed.filePath && (
+                <audio
+                    controls
+                    src={`/__media__?path=${encodeURIComponent(parsed.filePath)}`}
+                    style={{ width: '100%' }}
+                />
+            )}
             {parsed.summary && (
                 <MarkdownBlock content={parsed.summary} streaming={false} />
             )}

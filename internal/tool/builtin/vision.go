@@ -10,7 +10,7 @@ import (
 	"monika/pkg/engine"
 )
 
-// VisionCaller runs a single-turn vision call against a configured provider
+// MediaCaller runs a single-turn vision call against a configured provider
 // and returns the full assistant text plus the token usage emitted by the
 // provider. It is injected from main.go (where the provider engines are
 // constructed) so that the builtin package stays free of any reverse
@@ -27,13 +27,13 @@ import (
 // surface it through the same EventUsage channel the chat path uses; without
 // that propagation vision calls are invisible to budget display and
 // compaction decisions.
-type VisionCaller func(ctx context.Context, prompt string, images []engine.ImageRef) (string, *engine.Usage, error)
+type MediaCaller func(ctx context.Context, prompt string, attachments []engine.AttachmentRef) (string, *engine.Usage, error)
 
-// NewDefaultVisionCaller returns a VisionCaller backed by a static map of
+// NewDefaultMediaCaller returns a MediaCaller backed by a static map of
 // provider engines. Callers that already maintain a provider map (main.go
 // uses bootstrap.Result.Providers) pass this directly to RegisterDefaults.
-func NewDefaultVisionCaller(providers map[string]engine.ProviderEngine) VisionCaller {
-	return func(ctx context.Context, prompt string, images []engine.ImageRef) (string, *engine.Usage, error) {
+func NewDefaultMediaCaller(providers map[string]engine.ProviderEngine) MediaCaller {
+	return func(ctx context.Context, prompt string, attachments []engine.AttachmentRef) (string, *engine.Usage, error) {
 		providerID := tool.ProviderFromContext(ctx)
 		model := tool.ModelFromContext(ctx)
 
@@ -46,9 +46,9 @@ func NewDefaultVisionCaller(providers map[string]engine.ProviderEngine) VisionCa
 		}
 
 		msgs := []engine.ChatMessage{{
-			Role:    "user",
-			Content: prompt,
-			Images:  images,
+			Role:        "user",
+			Content:     prompt,
+			Attachments: attachments,
 		}}
 		req := engine.ChatRequest{
 			Provider: providerID,

@@ -87,8 +87,8 @@ func main() {
 	// Wire vision caller for image/video understanding tools. Captures the
 	// already-initialized provider engines so tools can call into the same
 	// configured model the user is chatting with.
-	visionCaller := builtin.NewDefaultVisionCaller(pr.Providers)
-	builtin.RegisterDefaults(registry, "", home, builtin.TSQueryFunc(tsQueryFn), visionCaller)
+	mediaCaller := builtin.NewDefaultMediaCaller(pr.Providers)
+	builtin.RegisterDefaults(registry, "", home, builtin.TSQueryFunc(tsQueryFn), mediaCaller)
 	builtin.RegisterLSP(registry, "", pr.Config.LSP.Servers, pr.Config.Formatters)
 	builtin.WireLSPHooks(registry)
 
@@ -181,6 +181,7 @@ func main() {
 	application.RegisterEvent[update.UpdateInfo]("update-available")
 	application.RegisterEvent[string]("branch-changed")
 	application.RegisterEvent[[]api.NotificationData]("tray-notifications-changed")
+	application.RegisterEvent[[]string]("media-drop")
 
 	ps := agent.PromptForModel(pr.Model)
 	shellPath, _ := builtin.ResolveShell()
@@ -571,6 +572,41 @@ changes as you install or configure them. Always search before assuming:
 			Handler: application.AssetFileServerFS(assets),
 			Middleware: func(next http.Handler) http.Handler {
 				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path == "/__media__" || strings.HasPrefix(r.URL.Path, "/__media__/") {
+						rawPath := r.URL.Query().Get("path")
+						if rawPath == "" {
+							http.NotFound(w, r)
+							return
+						}
+						absPath, err := filepath.Abs(rawPath)
+						if err != nil {
+							http.NotFound(w, r)
+							return
+						}
+						// Defense-in-depth: Clean the path to collapse any .. or . segments.
+						// This endpoint intentionally allows reading from anywhere on disk
+						// (media tools are read-only), but Clean prevents accidental path
+						// injection through query parameter manipulation.
+						absPath = filepath.Clean(absPath)
+						ext := strings.ToLower(filepath.Ext(absPath))
+						allowed := map[string]bool{
+							".png": true, ".jpg": true, ".jpeg": true, ".webp": true, ".gif": true,
+							".mp4": true, ".mov": true, ".webm": true, ".mkv": true, ".avi": true, ".m4v": true,
+							".pdf": true,
+							".mp3": true, ".wav": true, ".flac": true, ".ogg": true, ".m4a": true, ".aac": true,
+						}
+						if !allowed[ext] {
+							http.NotFound(w, r)
+							return
+						}
+						info, err := os.Stat(absPath)
+						if err != nil || info.IsDir() {
+							http.NotFound(w, r)
+							return
+						}
+						http.ServeFile(w, r, absPath)
+						return
+					}
 					if strings.HasPrefix(r.URL.Path, "/__local__/") {
 						relPath := strings.TrimPrefix(r.URL.Path, "/__local__/")
 						relPath = strings.TrimPrefix(relPath, "/")
@@ -604,6 +640,7 @@ changes as you install or configure them. Always search before assuming:
 		StartState:       application.WindowStateMaximised,
 		Hidden:           true,
 		BackgroundColour: application.NewRGB(24, 24, 30),
+		EnableFileDrop:   true,
 	})
 
 	trayMgr := api.NewTrayManager(app, mainWindow, iconPNG)
@@ -617,6 +654,13 @@ changes as you install or configure them. Always search before assuming:
 		})
 		appService.SetTrayManager(trayMgr)
 	}
+
+	mainWindow.RegisterHook(events.Common.WindowFilesDropped, func(e *application.WindowEvent) {
+		files := e.Context().DroppedFiles()
+		if len(files) > 0 {
+			mainWindow.EmitEvent("media-drop", files)
+		}
+	})
 
 	// Show the main window once WebView2 runtime is initialised.
 	// Hidden: true prevents a title-bar flash on startup.
@@ -640,6 +684,7 @@ func syncModelsDev(home string, cfg *config2.Config) {
 		Context  int64
 		Output   int64
 		Provider string
+		Inputs   []string
 	}
 	modelIndex := make(map[string]modelInfo, 4096)
 	for providerID, p := range catalog {
@@ -649,6 +694,7 @@ func syncModelsDev(home string, cfg *config2.Config) {
 					Context:  md.Limit.Context,
 					Output:   md.Limit.Output,
 					Provider: providerID,
+					Inputs:   md.Modalities.Input,
 				}
 			}
 		}
@@ -672,6 +718,10 @@ func syncModelsDev(home string, cfg *config2.Config) {
 					}
 					if m.OutputLimit == 0 && info.Output > 0 {
 						m.OutputLimit = info.Output
+						changed = true
+					}
+					if len(m.SupportedInputs) == 0 && len(info.Inputs) > 0 {
+						m.SupportedInputs = info.Inputs
 						changed = true
 					}
 					if m.DisplayName == "" {
@@ -719,11 +769,12 @@ func syncModelsDev(home string, cfg *config2.Config) {
 						name = modelID
 					}
 					pc.Models = append(pc.Models, config2.ModelEntry{
-						ID:           modelID,
-						DisplayName:  name,
-						ContextLimit: md.Limit.Context,
-						OutputLimit:  md.Limit.Output,
-						Enabled:      false,
+						ID:              modelID,
+						DisplayName:     name,
+						ContextLimit:    md.Limit.Context,
+						OutputLimit:     md.Limit.Output,
+						Enabled:         false,
+						SupportedInputs: md.Modalities.Input,
 					})
 					existingIDs[modelID] = true
 					changed = true

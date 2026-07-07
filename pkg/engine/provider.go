@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"strings"
 )
 
 type ChatRequest struct {
@@ -15,7 +16,7 @@ type ChatRequest struct {
 type ChatMessage struct {
 	Role             string          `json:"role"`
 	Content          string          `json:"content"`
-	Images           []ImageRef      `json:"images,omitempty"`
+	Attachments      []AttachmentRef `json:"attachments,omitempty"`
 	ReasoningContent string          `json:"reasoning_content"`
 	ToolCalls        []ToolCall      `json:"tool_calls,omitempty"`
 	ToolCallID       string          `json:"tool_call_id,omitempty"`
@@ -24,48 +25,97 @@ type ChatMessage struct {
 	QuotedMessages   []QuotedMessage `json:"quoted_messages,omitempty"`
 }
 
-// ImageRef is a reference to an image attached to a chat message.
-// URL may be either a data URL (data:image/jpeg;base64,...) or an https URL.
-// Detail hints at the model's processing resolution: "auto" | "low" | "high".
-type ImageRef struct {
-	URL    string `json:"url,omitempty"`
-	Detail string `json:"detail,omitempty"`
+// AttachmentRef is a reference to a media attachment (image, audio, or PDF)
+// attached to a chat message. URL may be either a data URL
+// (e.g. data:image/jpeg;base64,...) or an https URL. Detail hints at the
+// model's processing resolution: "auto" | "low" | "high" (images only).
+type AttachmentRef struct {
+	URL      string `json:"url,omitempty"`
+	Detail   string `json:"detail,omitempty"`
+	MimeType string `json:"mime_type,omitempty"`
 }
 
 // MarshalJSON renders the message content either as a plain string (the
 // historical behavior, used for text-only messages) or as an OpenAI-style
-// multipart array when one or more images are attached. This keeps the wire
-// format backward-compatible: messages without Images still serialize to
+// multipart array when one or more attachments are present. This keeps the wire
+// format backward-compatible: messages without Attachments still serialize to
 // "role":"user","content":"hello", exactly as before.
 func (m ChatMessage) MarshalJSON() ([]byte, error) {
-	type alias ChatMessage // avoid recursion
-	if len(m.Images) == 0 {
+	type alias ChatMessage
+	if len(m.Attachments) == 0 {
 		return json.Marshal(alias(m))
 	}
-	parts := make([]map[string]any, 0, 1+len(m.Images))
+	parts := make([]map[string]any, 0, 1+len(m.Attachments))
 	if m.Content != "" {
 		parts = append(parts, map[string]any{"type": "text", "text": m.Content})
 	}
-	for _, img := range m.Images {
+	for _, att := range m.Attachments {
+		part := attachmentPart(att)
+		if part != nil {
+			parts = append(parts, part)
+		}
+	}
+	// Marshal the alias to get all ChatMessage fields, then override content
+	raw, err := json.Marshal(alias(m))
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]any)
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	result["content"] = parts
+	return json.Marshal(result)
+}
+
+// attachmentPart renders a single AttachmentRef into the OpenAI-style content
+// part expected by multipart requests, dispatching on MIME type.
+func attachmentPart(att AttachmentRef) map[string]any {
+	mime := att.MimeType
+	switch {
+	case strings.HasPrefix(mime, "image/"):
 		entry := map[string]any{
 			"type":      "image_url",
-			"image_url": map[string]any{"url": img.URL},
+			"image_url": map[string]any{"url": att.URL},
 		}
-		if img.Detail != "" {
-			entry["image_url"].(map[string]any)["detail"] = img.Detail
+		if att.Detail != "" {
+			entry["image_url"].(map[string]any)["detail"] = att.Detail
 		}
-		parts = append(parts, entry)
+		return entry
+	case strings.HasPrefix(mime, "audio/"):
+		// format is the subtype, e.g. "mp3" from "audio/mp3".
+		format := strings.TrimPrefix(mime, "audio/")
+		switch format {
+		case "mp3", "wav", "flac", "ogg":
+			// supported by OpenAI input_audio format
+		default:
+			// Unsupported audio format (e.g. mp4/m4a/aac): fall back to
+			// image_url with the data URL. Most providers can still process
+			// the audio bytes from a data URL even though the OpenAI
+			// input_audio format doesn't accept this codec.
+			return map[string]any{
+				"type":      "image_url",
+				"image_url": map[string]any{"url": att.URL},
+			}
+		}
+		data := att.URL
+		// For data URLs, extract just the base64 payload after the comma.
+		if idx := strings.Index(att.URL, ","); idx >= 0 {
+			data = att.URL[idx+1:]
+		}
+		return map[string]any{
+			"type":        "input_audio",
+			"input_audio": map[string]any{"data": data, "format": format},
+		}
+	case mime == "application/pdf":
+		return map[string]any{
+			"type": "file",
+			"file": map[string]any{"file_data": att.URL},
+		}
+	default:
+		// Unknown MIME type: skip this attachment.
+		return nil
 	}
-	return json.Marshal(map[string]any{
-		"role":              m.Role,
-		"content":           parts,
-		"reasoning_content": m.ReasoningContent,
-		"tool_calls":        m.ToolCalls,
-		"tool_call_id":      m.ToolCallID,
-		"name":              m.Name,
-		"token_usage":       m.TokenUsage,
-		"quoted_messages":   m.QuotedMessages,
-	})
 }
 
 // QuotedMessage is a snapshot of a referenced message used for quoting/forwarding.

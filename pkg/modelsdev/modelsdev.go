@@ -23,8 +23,14 @@ type ProviderEntry struct {
 
 // ModelData holds model data extracted from models.dev.
 type ModelData struct {
-	Name  string     `json:"name"`
-	Limit ModelLimit `json:"limit"`
+	Name       string       `json:"name"`
+	Limit      ModelLimit   `json:"limit"`
+	Modalities ModalityInfo `json:"modalities,omitempty"`
+}
+
+// ModalityInfo holds the input modalities supported by a model.
+type ModalityInfo struct {
+	Input []string `json:"input"`
 }
 
 // ModelLimit holds the context window and output token limits.
@@ -67,6 +73,24 @@ func LookupLimit(homeDir, modelID string) (contextTokens, outputTokens int64) {
 		}
 	}
 	return 0, 0
+}
+
+// LookupInputs searches the local models.dev cache for the given model ID
+// and returns its supported input modalities (e.g. ["text", "image", "audio", "video", "pdf"]).
+// Returns nil if the model is not found or has no modalities data.
+func LookupInputs(homeDir, modelID string) []string {
+	catalog, err := Catalog(homeDir)
+	if err != nil {
+		return nil
+	}
+	for _, p := range catalog {
+		if md, ok := p.Models[modelID]; ok {
+			if len(md.Modalities.Input) > 0 {
+				return md.Modalities.Input
+			}
+		}
+	}
+	return nil
 }
 
 // Refresh fetches the latest models.dev data and writes it to the cache file.

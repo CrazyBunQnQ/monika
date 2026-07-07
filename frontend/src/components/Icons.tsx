@@ -52,6 +52,9 @@ import {
     Clock,
     Film,
     ImageIcon,
+    Paperclip,
+    FileText,
+    Music,
 } from 'lucide-react'
 
 export function IconClose({ size }: { size?: number }) {
@@ -264,4 +267,16 @@ export function IconVideo({ size, className, style }: { size?: number; className
 
 export function IconImage({ size, className, style }: { size?: number; className?: string; style?: React.CSSProperties }) {
     return <ImageIcon size={size || 16} strokeWidth={1.5} className={className} style={style} />
+}
+
+export function IconPaperclip({ size }: { size?: number }) {
+    return <Paperclip size={size || 16} strokeWidth={1.5} />
+}
+
+export function IconFileText({ size, className, style }: { size?: number; className?: string; style?: React.CSSProperties }) {
+    return <FileText size={size || 16} strokeWidth={1.5} className={className} style={style} />
+}
+
+export function IconMusic({ size, className, style }: { size?: number; className?: string; style?: React.CSSProperties }) {
+    return <Music size={size || 16} strokeWidth={1.5} className={className} style={style} />
 }

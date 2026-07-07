@@ -24,18 +24,17 @@ const (
 )
 
 type videoUnderstand struct {
-	projectDir string
-	vision     VisionCaller
+	media MediaCaller
 }
 
-func NewVideoUnderstand(projectDir string, vision VisionCaller) tool.Tool {
-	return &videoUnderstand{projectDir: projectDir, vision: vision}
+func NewVideoUnderstand(media MediaCaller) tool.Tool {
+	return &videoUnderstand{media: media}
 }
 
 func (v *videoUnderstand) Name() string { return "video_understand" }
 
 func (v *videoUnderstand) Description() string {
-	return `Analyze a video file (mp4, mov, webm, mkv, avi) inside the project directory.
+	return `Analyze a video file (mp4, mov, webm, mkv, avi).
 
 The tool samples N frames at fixed time intervals, sends them to a multimodal
 vision model, and returns a structured analysis as JSON with:
@@ -58,7 +57,7 @@ func (v *videoUnderstand) Parameters() map[string]any {
 		"properties": map[string]any{
 			"filePath": map[string]any{
 				"type":        "string",
-				"description": "Absolute path to the video file inside the project directory.",
+				"description": "Absolute path to the video file.",
 			},
 			"question": map[string]any{
 				"type":        "string",
@@ -195,7 +194,7 @@ func (v *videoUnderstand) runAnalysis(ctx context.Context, args json.RawMessage,
 		return "", nil, fmt.Errorf("filePath is required")
 	}
 
-	safe, err := resolveToolPath(p.FilePath, tool.ProjectDirOrDefault(ctx, v.projectDir))
+	safe, err := resolveMediaPath(p.FilePath)
 	if err != nil {
 		return "", nil, err
 	}
@@ -256,7 +255,7 @@ func (v *videoUnderstand) runAnalysis(ctx context.Context, args json.RawMessage,
 		return "", nil, fmt.Errorf("no frames to sample in the given range")
 	}
 
-	if v.vision == nil {
+	if v.media == nil {
 		return "", nil, fmt.Errorf("vision provider not configured")
 	}
 
@@ -281,7 +280,7 @@ func (v *videoUnderstand) runAnalysis(ctx context.Context, args json.RawMessage,
 	}
 
 	prompt := buildVideoPrompt(duration, len(frames), p.FrameInterval, p.Question)
-	resp, usage, err := v.vision(ctx, prompt, frames)
+	resp, usage, err := v.media(ctx, prompt, frames)
 	if err != nil {
 		return "", nil, fmt.Errorf("vision call failed: %w", err)
 	}
@@ -430,11 +429,11 @@ func ffprobeDuration(parentCtx context.Context, path string) (float64, error) {
 // message. The on-disk paths are intentionally not returned — the
 // thumbnails are now fetched lazily via App.GetMediaThumbnails
 // rather than embedded in the tool result.
-func extractFrames(parentCtx context.Context, videoPath, tmpDir string, timestamps []float64) ([]engine.ImageRef, error) {
+func extractFrames(parentCtx context.Context, videoPath, tmpDir string, timestamps []float64) ([]engine.AttachmentRef, error) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		return nil, fmt.Errorf("ffmpeg not found on PATH: %w", err)
 	}
-	images := make([]engine.ImageRef, 0, len(timestamps))
+	images := make([]engine.AttachmentRef, 0, len(timestamps))
 	for i, t := range timestamps {
 		framePath := filepath.Join(tmpDir, fmt.Sprintf("frame-%03d.jpg", i))
 		ctx, cancel := context.WithTimeout(parentCtx, 60*time.Second)
@@ -456,9 +455,10 @@ func extractFrames(parentCtx context.Context, videoPath, tmpDir string, timestam
 		if err != nil {
 			return nil, fmt.Errorf("read frame %d: %w", i, err)
 		}
-		images = append(images, engine.ImageRef{
-			URL:    "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(data),
-			Detail: "low",
+		images = append(images, engine.AttachmentRef{
+			URL:      "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(data),
+			Detail:   "low",
+			MimeType: "image/jpeg",
 		})
 	}
 	return images, nil

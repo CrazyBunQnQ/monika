@@ -15,18 +15,17 @@ import (
 const maxImageBytes = 20 * 1024 * 1024 // 20 MB
 
 type imageUnderstand struct {
-	projectDir string
-	vision     VisionCaller
+	media MediaCaller
 }
 
-func NewImageUnderstand(projectDir string, vision VisionCaller) tool.Tool {
-	return &imageUnderstand{projectDir: projectDir, vision: vision}
+func NewImageUnderstand(media MediaCaller) tool.Tool {
+	return &imageUnderstand{media: media}
 }
 
 func (i *imageUnderstand) Name() string { return "image_understand" }
 
 func (i *imageUnderstand) Description() string {
-	return `Analyze an image file (PNG, JPEG, WebP, GIF) inside the project directory and answer a question about it.
+	return `Analyze an image file (PNG, JPEG, WebP, GIF) on the local filesystem and answer a question about it.
 
 Use this when the user:
 - pastes a screenshot, diagram, photo, or UI mock-up and asks for a description or analysis
@@ -46,7 +45,7 @@ func (i *imageUnderstand) Parameters() map[string]any {
 		"properties": map[string]any{
 			"filePath": map[string]any{
 				"type":        "string",
-				"description": "Absolute path to the image file inside the project directory.",
+				"description": "Absolute path to the image file.",
 			},
 			"question": map[string]any{
 				"type":        "string",
@@ -75,7 +74,7 @@ func (i *imageUnderstand) Execute(ctx context.Context, args json.RawMessage) (to
 		return tool.ExecutionResult{Content: "filePath is required", IsError: true}, nil
 	}
 
-	safe, err := resolveToolPath(p.FilePath, tool.ProjectDirOrDefault(ctx, i.projectDir))
+	safe, err := resolveMediaPath(p.FilePath)
 	if err != nil {
 		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 	}
@@ -120,16 +119,17 @@ func (i *imageUnderstand) Execute(ctx context.Context, args json.RawMessage) (to
 		detail = "auto"
 	}
 
-	if i.vision == nil {
+	if i.media == nil {
 		return tool.ExecutionResult{Content: "vision provider not configured", IsError: true}, nil
 	}
 
-	images := []engine.ImageRef{{
-		URL:    "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data),
-		Detail: detail,
+	images := []engine.AttachmentRef{{
+		URL:      "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data),
+		Detail:   detail,
+		MimeType: mime,
 	}}
 
-	resp, usage, err := i.vision(ctx, prompt, images)
+	resp, usage, err := i.media(ctx, prompt, images)
 	if err != nil {
 		return tool.ExecutionResult{Content: "vision call failed: " + err.Error(), IsError: true}, nil
 	}
@@ -143,7 +143,7 @@ func (i *imageUnderstand) Execute(ctx context.Context, args json.RawMessage) (to
 	// NOT included in the JSON — image_understand returns to the LLM
 	// only the textual summary, mirroring the video_understand shape
 	// after commit 5e7093c. The frontend fetches the inline preview
-	// image via App.ReadMediaAsBase64 on demand when the card renders.
+	// image via /__media__?path=... on demand when the card renders.
 	result := imageResult{
 		FilePath: p.FilePath,
 		FileName: filepath.Base(safe),

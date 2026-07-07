@@ -49,7 +49,7 @@ func main() {
 	// Single-provider engine map.
 	provider := newOpenAIProvider(*baseURL, *apiKey, *model)
 	providers := map[string]engine.ProviderEngine{"smoke": provider}
-	vision := builtin.NewDefaultVisionCaller(providers)
+	media := builtin.NewDefaultMediaCaller(providers)
 
 	dir := filepath.Dir(abs)
 
@@ -61,7 +61,7 @@ func main() {
 	ctx = tool.WithProvider(ctx, "smoke")
 	ctx = tool.WithModel(ctx, *model)
 
-	v := builtin.NewVideoUnderstand("", vision)
+	v := builtin.NewVideoUnderstand(media)
 	args, _ := json.Marshal(map[string]any{
 		"filePath":      abs,
 		"question":      "What does this test video show? Be brief.",
@@ -105,7 +105,7 @@ func main() {
 	ctx2 = tool.WithProvider(ctx2, "smoke")
 	ctx2 = tool.WithModel(ctx2, *model)
 
-	img := builtin.NewImageUnderstand("", vision)
+	img := builtin.NewImageUnderstand(media)
 	imgArgs, _ := json.Marshal(map[string]any{
 		"filePath": imgPath,
 		"question": "Describe this image in one sentence.",

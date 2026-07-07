@@ -145,11 +145,12 @@ type ProviderInfo struct {
 }
 
 type ModelEntryJSON struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	ContextLimit int64  `json:"context_limit,omitempty"`
-	OutputLimit  int64  `json:"output_limit,omitempty"`
-	Enabled      bool   `json:"enabled"`
+	ID              string   `json:"id"`
+	Name            string   `json:"name"`
+	ContextLimit    int64    `json:"context_limit,omitempty"`
+	OutputLimit     int64    `json:"output_limit,omitempty"`
+	Enabled         bool     `json:"enabled"`
+	SupportedInputs []string `json:"supported_inputs,omitempty"`
 }
 
 // AvailableProviderInfo represents a provider available from models.dev for users to add.
@@ -163,10 +164,11 @@ type AvailableProviderInfo struct {
 
 // AvailableModelInfo represents a model from models.dev.
 type AvailableModelInfo struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	ContextLimit int64  `json:"context_limit"`
-	OutputLimit  int64  `json:"output_limit"`
+	ID              string   `json:"id"`
+	Name            string   `json:"name"`
+	ContextLimit    int64    `json:"context_limit"`
+	OutputLimit     int64    `json:"output_limit"`
+	SupportedInputs []string `json:"supported_inputs,omitempty"`
 }
 
 // TaskStoreAccessor provides access to per-session task storage.
@@ -273,29 +275,6 @@ type QueuedMessage struct {
 	Status     string `json:"status"`
 	Error      string `json:"error,omitempty"`
 	CreatedAt  int64  `json:"created_at"`
-}
-
-// MediaUploadResult is returned from App.UploadMedia after a successful drop
-// of a video/image file onto the chat input. Path is project-relative so the
-// frontend can reference the file via [chip] tokens in the message.
-type MediaUploadResult struct {
-	Path     string `json:"path"`
-	FileName string `json:"fileName"`
-	Size     int64  `json:"size"`
-	MimeType string `json:"mimeType"`
-	IsVideo  bool   `json:"isVideo"`
-	IsImage  bool   `json:"isImage"`
-}
-
-// MediaContent is returned from App.ReadMediaAsBase64 for the Preview panel.
-// DataB64 contains the raw file bytes encoded as base64 (no data: prefix);
-// the frontend constructs the data URL itself so it can size the payload.
-type MediaContent struct {
-	Path     string `json:"path"`
-	FileName string `json:"fileName"`
-	MimeType string `json:"mimeType"`
-	DataB64  string `json:"dataB64"`
-	Size     int64  `json:"size"`
 }
 
 // MediaThumbnail is one sampled frame in the response from

@@ -20,7 +20,7 @@ import (
 // Returns (nil, nil) when tree-sitter is unavailable.
 type TSQueryFunc func(ctx context.Context, method string, params map[string]any) (json.RawMessage, error)
 
-func RegisterDefaults(r *tool.ToolRegistry, projectDir, homeDir string, tsQuery TSQueryFunc, vision VisionCaller) error {
+func RegisterDefaults(r *tool.ToolRegistry, projectDir, homeDir string, tsQuery TSQueryFunc, media MediaCaller) error {
 	r.Register(NewFileRead(projectDir, homeDir, tsQuery))
 	r.Register(NewFileWrite(projectDir))
 	r.Register(NewFileEdit(projectDir))
@@ -38,8 +38,10 @@ func RegisterDefaults(r *tool.ToolRegistry, projectDir, homeDir string, tsQuery 
 		return err
 	}
 	r.Register(bt)
-	r.Register(NewImageUnderstand(projectDir, vision))
-	r.Register(NewVideoUnderstand(projectDir, vision))
+	r.Register(NewImageUnderstand(media))
+	r.Register(NewVideoUnderstand(media))
+	r.Register(NewPdfUnderstand(media))
+	r.Register(NewAudioUnderstand(media))
 	return nil
 
 }

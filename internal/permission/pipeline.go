@@ -29,6 +29,8 @@ var readOps = map[string]bool{
 	"db_query":         true,
 	"image_understand": true,
 	"video_understand": true,
+	"pdf_understand":   true,
+	"audio_understand": true,
 }
 
 var writeOps = map[string]bool{

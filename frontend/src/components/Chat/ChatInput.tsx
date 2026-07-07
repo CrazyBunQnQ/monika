@@ -10,8 +10,8 @@ import InputModePicker from './InputModePicker'
 import AutocompleteDropdown, { AcItem, AcState } from './AutocompleteDropdown'
 import { findLabels, LabelRegion, renderChipHTML } from './LabelChip'
 import { App } from '../../../bindings/monika'
-import { Call } from '@wailsio/runtime'
-import { IconSend, IconImage } from '../Icons'
+import { Call, Events } from '@wailsio/runtime'
+import { IconSend, IconPaperclip } from '../Icons'
 import { QueuePanel } from '../QueuePanel/QueuePanel'
 
 const INIT_TEMPLATE = `Please analyze this project and check if an \`AGENTS.md\` file exists in the project root.
@@ -26,6 +26,10 @@ The file should contain:
 4. Framework and library specifics
 
 First, explore the codebase to understand the project, then create or update the AGENTS.md file accordingly.`
+
+// Fallback: allow all media input types. Proper per-model lookup comes later
+// once the store carries supported-inputs data.
+const SUPPORTED_MEDIA_INPUTS = ['image', 'video', 'pdf', 'audio']
 
 interface FileEntry { name: string; path: string; is_dir: boolean; children?: FileEntry[] }
 
@@ -246,9 +250,6 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, isGenerating, quotedM
 
     const [ac, setAc] = useState<AcState>({ open: false, items: [], selectedIdx: 0, prefix: '' })
     const [worktreeManagerOpen, setWorktreeManagerOpen] = useState(false)
-    const [isDraggingMedia, setIsDraggingMedia] = useState(false)
-    const [mediaUploadError, setMediaUploadError] = useState<string | null>(null)
-    const dragCounterRef = useRef(0)
     const acDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
     const projectPath = useStore((s) => s.projectPath)
     const selectedProvider = useStore((s) => s.selectedProvider)
@@ -496,131 +497,59 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, isGenerating, quotedM
         pendingCursorRef.current = cursor + pastedText.length
     }, [])
 
-    const isMediaFile = useCallback((file: File): boolean => {
-        // Browsers often return an empty MIME for less-common extensions
-        // (.m4v, .heic, .webm on some platforms), so fall back to extension
-        // matching when file.type is empty or uninformative.
-        if (file.type) {
-            return file.type.startsWith('video/') || file.type.startsWith('image/')
-        }
-        return /\.(mp4|m4v|mov|webm|mkv|avi|png|jpe?g|webp|gif)$/i.test(file.name)
-    }, [])
-
-    const readFileAsBase64 = useCallback((file: File): Promise<string> => {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader()
-            reader.onload = () => {
-                const result = reader.result as string
-                const comma = result.indexOf(',')
-                resolve(comma >= 0 ? result.slice(comma + 1) : result)
-            }
-            reader.onerror = () => reject(reader.error || new Error('read failed'))
-            reader.readAsDataURL(file)
-        })
-    }, [])
-
-    const insertMediaChips = useCallback((paths: { label: string; path: string }[]) => {
+    const insertMediaChips = useCallback((paths: string[]) => {
         if (paths.length === 0) return
         const el = editorRef.current
         if (!el) return
         const cursor = getTextOffset(el)
-        const joined = paths.map(p => `[${p.label}] `).join('')
+        const usedLabels = new Set<string>()
+        const chips: { label: string; path: string }[] = paths.map(p => {
+            let name = p.replace(/^.*[/\\]/, '')
+            // Disambiguate if basename collides
+            if (usedLabels.has(name)) {
+                const ext = name.lastIndexOf('.')
+                const base = ext > 0 ? name.slice(0, ext) : name
+                const suffix = ext > 0 ? name.slice(ext) : ''
+                let i = 2
+                while (usedLabels.has(`${base}-${i}${suffix}`)) i++
+                name = `${base}-${i}${suffix}`
+            }
+            usedLabels.add(name)
+            return { label: name, path: p }
+        })
+        const joined = chips.map(c => `[${c.label}] `).join('')
         const newValue = valueRef.current.slice(0, cursor) + joined + valueRef.current.slice(cursor)
         // Stash each path under its visible label so the submit resolver
         // expands the chip back to the actual project-relative path.
-        for (const p of paths) {
-            pasteStoreRef.current.set(`[${p.label}]`, p.path)
+        for (const c of chips) {
+            pasteStoreRef.current.set(`[${c.label}]`, c.path)
         }
         setValue(newValue)
         pendingCursorRef.current = cursor + joined.length
-        // The value-change useEffect will re-render the editor DOM (the
-        // chip labels become styled chips via renderContentHTML).
     }, [])
 
-    const handleDragEnter = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-        if (!e.dataTransfer.types.includes('Files')) return
-        dragCounterRef.current += 1
-        setIsDraggingMedia(true)
-        setMediaUploadError(null)
-    }, [])
+    const handlePickMedia = useCallback(async () => {
+        try {
+            const paths = await Call.ByName('monika/internal/api.App.PickMediaFiles', SUPPORTED_MEDIA_INPUTS)
+            if (Array.isArray(paths) && paths.length > 0) {
+                insertMediaChips(paths as string[])
+            }
+        } catch (err: any) {
+            console.error('media pick failed:', err)
+        }
+    }, [insertMediaChips])
 
-    const handleDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-        // Only treat file-drag leaves as a counter event. Text/HTML
-        // drags never entered this branch (the counter was never
-        // incremented for them), so unconditionally decrementing here
-        // would let a stray non-file leave drive the counter to 0
-        // and silently drop the highlight state mid-drag.
-        if (!e.dataTransfer.types.includes('Files')) return
-        e.preventDefault()
-        dragCounterRef.current = Math.max(0, dragCounterRef.current - 1)
-        if (dragCounterRef.current === 0) setIsDraggingMedia(false)
-    }, [])
-
-    const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-        if (!e.dataTransfer.types.includes('Files')) return
-        e.preventDefault()
-        e.dataTransfer.dropEffect = 'copy'
-    }, [])
-
-    // Clear the auto-dismiss timer on unmount so we don't setState on a
-    // detached component (also avoids the earlier timer masking a newer
-    // error from a subsequent drop).
-    const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+    // Native drag-drop is delivered by the Wails runtime (EnableFileDrop).
+    // The Go side emits a `media-drop` event carrying the dropped file paths.
     useEffect(() => {
-        return () => {
-            if (errorTimerRef.current) clearTimeout(errorTimerRef.current)
-        }
-    }, [])
-
-    // Shared upload pipeline used by both drag-drop and the file-picker
-    // button. Returns nothing — all state goes through React setters.
-    const handlePickedFiles = useCallback(async (files: File[]) => {
-        const accepted = files.filter(isMediaFile)
-        const skipped = files.length - accepted.length
-        if (skipped > 0) {
-            setMediaUploadError(`Skipped ${skipped} non-media file${skipped === 1 ? '' : 's'}.`)
-        }
-
-        if (!projectPath) {
-            setMediaUploadError('Open a project before attaching media files.')
-            return
-        }
-
-        const inserted: { label: string; path: string }[] = []
-        for (const file of accepted) {
-            try {
-                const data = await readFileAsBase64(file)
-                const result = await App.UploadMedia(projectPath, file.name, data)
-                if (!result || !result.path) {
-                    setMediaUploadError(`Upload failed for ${file.name}`)
-                    continue
-                }
-                inserted.push({ label: result.fileName || file.name, path: result.path })
-            } catch (err: any) {
-                setMediaUploadError(err?.message || `Upload failed for ${file.name}`)
+        const off = Events.On('media-drop', (ev: any) => {
+            const paths = ev?.data
+            if (Array.isArray(paths) && paths.length > 0) {
+                insertMediaChips(paths as string[])
             }
-        }
-        if (inserted.length > 0) {
-            insertMediaChips(inserted)
-            if (skipped === 0) {
-                // Only auto-dismiss the error when the upload was clean;
-                // partial failures stay visible until the user dismisses.
-                if (errorTimerRef.current) clearTimeout(errorTimerRef.current)
-                errorTimerRef.current = setTimeout(() => setMediaUploadError(null), 2500)
-            }
-        }
-    }, [isMediaFile, insertMediaChips, projectPath, readFileAsBase64])
-
-    const handleDrop = useCallback(async (e: React.DragEvent<HTMLDivElement>) => {
-        dragCounterRef.current = 0
-        setIsDraggingMedia(false)
-        const dropped = Array.from(e.dataTransfer.files || [])
-        // Always preventDefault when something was dropped, even if we end up
-        // rejecting all of it; otherwise the browser navigates to the file.
-        if (dropped.length === 0) return
-        e.preventDefault()
-        await handlePickedFiles(dropped)
-    }, [handlePickedFiles])
+        })
+        return () => { if (off) off() }
+    }, [insertMediaChips])
 
     const COMMANDS: AcItem[] = [
         { name: 'init', detail: 'Create/update AGENTS.md from project analysis', icon: '/', insert: '/init ' },
@@ -996,38 +925,22 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, isGenerating, quotedM
                     onCompositionEnd={handleCompositionEnd}
                     onPaste={handlePaste}
                     onKeyDown={handleKeyDown}
-                    onDragEnter={handleDragEnter}
-                    onDragLeave={handleDragLeave}
-                    onDragOver={handleDragOver}
-                    onDrop={handleDrop}
+                    data-file-drop-target="true"
                     className="text-[13px] text-[var(--text-primary)] outline-none px-[14px] pt-[12px] pb-[6px] resize-none w-full bg-transparent overflow-hidden whitespace-pre-wrap break-words border-0 min-h-[160px]"
                     style={{
                         fontFamily: 'inherit',
                         letterSpacing: 'inherit',
-                        boxShadow: isDraggingMedia ? 'inset 0 0 0 2px var(--accent)' : undefined,
-                        background: isDraggingMedia ? 'color-mix(in srgb, var(--accent) 6%, transparent)' : undefined,
-                        transition: 'box-shadow 0.15s ease, background 0.15s ease',
                     }}
                     data-placeholder={
-                        isDraggingMedia
-                            ? 'Drop video or image to attach'
-                            : disabled
+                        disabled
                             ? 'Generating...'
                             : isGenerating
-                            ? 'Send a message... (will be queued)'
-                            : inputMode === 'shell'
-                            ? 'Run a shell command... (each command runs independently)'
-                            : 'Send a message... (Enter to submit, Shift+Enter for newline)'
+                                ? 'Send a message... (will be queued)'
+                                : inputMode === 'shell'
+                                    ? 'Run a shell command... (each command runs independently)'
+                                    : 'Send a message... (Enter to submit, Shift+Enter for newline)'
                     }
                 />
-                {mediaUploadError && (
-                    <div
-                        className="mx-[14px] mb-1 px-2 py-1 rounded text-[11px]"
-                        style={{ background: 'rgba(239,68,68,0.08)', color: 'var(--red)', border: '1px solid rgba(239,68,68,0.25)' }}
-                    >
-                        {mediaUploadError}
-                    </div>
-                )}
 
                 <div
                     className="flex items-center gap-2 px-[10px] pb-[8px]"
@@ -1047,31 +960,18 @@ function ChatInput({ onSend, onStop, onRunShell, disabled, isGenerating, quotedM
                         />
                     )}
 
-                    {/* File picker fallback for keyboard / screen-reader users.
-                        Native HTML5 drag-drop is mouse-only; this button
-                        covers the rest. Accepts the same media types the
-                        drop handler does. */}
+                    {/* Native file picker (also covers keyboard / screen-reader
+                        access). Drag-drop is handled by the Wails runtime. */}
                     <button
                         type="button"
-                        title="Attach image or video"
-                        aria-label="Attach image or video"
+                        title="Attach media file"
+                        aria-label="Attach media file"
                         disabled={disabled}
-                        onClick={() => {
-                            const input = document.createElement('input')
-                            input.type = 'file'
-                            input.accept = 'image/*,video/*,.mp4,.m4v,.mov,.webm,.mkv,.avi,.png,.jpg,.jpeg,.webp,.gif'
-                            input.multiple = true
-                            input.onchange = () => {
-                                const files = Array.from(input.files || [])
-                                if (files.length === 0) return
-                                handlePickedFiles(files)
-                            }
-                            input.click()
-                        }}
+                        onClick={handlePickMedia}
                         className="flex items-center justify-center w-7 h-7 rounded hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed"
                         style={{ color: 'var(--text-dim)' }}
                     >
-                        <IconImage size={14} />
+                        <IconPaperclip size={16} />
                     </button>
 
                     <span className="text-[11px] text-[var(--text-dim)] select-none" style={{ fontFeatureSettings: '"tnum"' }}>

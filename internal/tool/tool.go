@@ -22,7 +22,7 @@ type ExecutionResult struct {
 	DiskContent string `json:"diskContent,omitempty"` // file on disk (with user edits)
 	AiContent   string `json:"aiContent,omitempty"`   // what AI wants to write
 	// Usage is set by tools that talk to an LLM on their own (e.g.
-	// image/video_understand routing through VisionCaller). The agent
+	// image/video_understand routing through MediaCaller). The agent
 	// loop reads this to emit EventUsage so the tokens count toward
 	// the conversation budget and compaction decisions.
 	Usage any `json:"usage,omitempty"`

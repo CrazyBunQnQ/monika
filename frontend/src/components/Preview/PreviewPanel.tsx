@@ -15,7 +15,7 @@ import { Call } from '@wailsio/runtime'
 import { lspService, LspSymbol, LspDiagnostic } from '../../lib/lspService'
 import { LspSymbolSidebar } from './LspSymbolSidebar'
 
-import { IconSidebar, IconFolder, IconMaximize, IconRestore, IconSearch, IconClose, IconEye, IconEdit, IconExternalLink, IconVideo, IconImage } from '../Icons'
+import { IconSidebar, IconFolder, IconMaximize, IconRestore, IconSearch, IconClose, IconEye, IconEdit, IconVideo, IconImage, IconFileText, IconMusic } from '../Icons'
 import { CodeMinimap } from './CodeMinimap'
 import MarkdownPreview from './MarkdownPreview'
 import { AnsiText } from '../../lib/ansi'
@@ -1996,57 +1996,11 @@ function PreviewPanel(props: IDockviewPanelProps) {
 export default PreviewPanel
 
 function MediaViewer({ filePath, fileName, mime }: { filePath: string; fileName: string; mime: string }) {
-    const projectPath = useStore(s => s.projectPath)
-    const [dataUrl, setDataUrl] = useState<string | null>(null)
-    const [error, setError] = useState<string | null>(null)
-    const [loading, setLoading] = useState(true)
-    const [size, setSize] = useState<number>(0)
-    const [resolvedMime, setResolvedMime] = useState<string>(mime)
-
-    useEffect(() => {
-        let cancelled = false
-        setLoading(true)
-        setError(null)
-        setDataUrl(null)
-        if (!projectPath) {
-            setError('No project open')
-            setLoading(false)
-            return
-        }
-        ;(async () => {
-            try {
-                const result: any = await Call.ByName('monika/internal/api.App.ReadMediaAsBase64', projectPath, filePath)
-                if (cancelled) return
-                if (!result) {
-                    setError('Empty response from server')
-                    return
-                }
-                const m: string = result.mimeType || mime || 'application/octet-stream'
-                setResolvedMime(m)
-                setSize(result.size || 0)
-                setDataUrl(`data:${m};base64,${result.dataB64 || ''}`)
-            } catch (e: any) {
-                if (cancelled) return
-                setError(e?.message || 'Failed to load media')
-            } finally {
-                if (!cancelled) setLoading(false)
-            }
-        })()
-        return () => { cancelled = true }
-    }, [filePath, projectPath, mime])
-
-    const isVideo = resolvedMime.startsWith('video/')
-    const isImage = resolvedMime.startsWith('image/')
-    const sizeStr = size > 0 ? formatBytes(size) : ''
-
-    const openInExplorer = async () => {
-        if (!projectPath) return
-        try {
-            await Call.ByName('monika/internal/api.App.OpenInExplorer', projectPath, filePath)
-        } catch (e) {
-            console.error('OpenInExplorer failed', e)
-        }
-    }
+    const mediaUrl = `/__media__?path=${encodeURIComponent(filePath)}`
+    const isVideo = mime.startsWith('video/')
+    const isImage = mime.startsWith('image/')
+    const isPdf = mime === 'application/pdf' || fileName.toLowerCase().endsWith('.pdf')
+    const isAudio = mime.startsWith('audio/')
 
     return (
         <div className="flex-1 flex flex-col overflow-hidden">
@@ -2054,40 +2008,27 @@ function MediaViewer({ filePath, fileName, mime }: { filePath: string; fileName:
                 className="flex items-center gap-2 px-3 py-2 shrink-0 border-b"
                 style={{ background: 'var(--bg-sidebar)', borderColor: 'var(--border)' }}
             >
-                {isVideo ? <IconVideo size={14} style={{ color: '#c084fc' }} /> : <IconImage size={14} style={{ color: '#22d3ee' }} />}
+                {isVideo ? <IconVideo size={14} style={{ color: '#c084fc' }} /> : isImage ? <IconImage size={14} style={{ color: '#22d3ee' }} /> : isPdf ? <IconFileText size={14} style={{ color: '#f59e0b' }} /> : isAudio ? <IconMusic size={14} style={{ color: '#10b981' }} /> : null}
                 <span className="text-[12px] truncate flex-1" style={{ color: 'var(--text)' }}>{fileName}</span>
-                <span className="text-[10px]" style={{ color: 'var(--text-dim)' }}>{resolvedMime}{sizeStr ? ` · ${sizeStr}` : ''}</span>
-                <button
-                    type="button"
-                    onClick={openInExplorer}
-                    className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded hover:bg-white/5"
-                    style={{ color: 'var(--text-dim)', border: '1px solid var(--border)' }}
-                    title="Open in file manager"
-                >
-                    <IconExternalLink size={11} />
-                    Open
-                </button>
+                <span className="text-[10px]" style={{ color: 'var(--text-dim)' }}>{mime}</span>
             </div>
             <div className="flex-1 overflow-auto flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.2)' }}>
-                {loading && <span className="text-[12px]" style={{ color: 'var(--text-dim)' }}>Loading…</span>}
-                {error && <span className="text-[12px]" style={{ color: 'var(--red)' }}>{error}</span>}
-                {!loading && !error && dataUrl && isImage && (
-                    <img src={dataUrl} alt={fileName} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+                {isImage && (
+                    <img src={mediaUrl} alt={fileName} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
                 )}
-                {!loading && !error && dataUrl && isVideo && (
-                    <video src={dataUrl} controls autoPlay style={{ maxWidth: '100%', maxHeight: '100%' }} />
+                {isVideo && (
+                    <video src={mediaUrl} controls autoPlay style={{ maxWidth: '100%', maxHeight: '100%' }} />
                 )}
-                {!loading && !error && dataUrl && !isImage && !isVideo && (
-                    <span className="text-[12px]" style={{ color: 'var(--text-dim)' }}>Unsupported media type: {resolvedMime}</span>
+                {isPdf && (
+                    <iframe src={mediaUrl} style={{ width: '100%', height: '100%', border: 'none' }} title={fileName} />
+                )}
+                {isAudio && (
+                    <audio controls src={mediaUrl} style={{ width: '100%' }} />
+                )}
+                {!isImage && !isVideo && !isPdf && !isAudio && (
+                    <span className="text-[12px]" style={{ color: 'var(--text-dim)' }}>Unsupported media type: {mime}</span>
                 )}
             </div>
         </div>
     )
-}
-
-function formatBytes(n: number): string {
-    if (n < 1024) return `${n} B`
-    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-    if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
-    return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
 }

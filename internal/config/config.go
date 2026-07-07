@@ -42,11 +42,12 @@ type AgentEntry struct {
 }
 
 type ModelEntry struct {
-	ID           string `yaml:"id" json:"id"`
-	DisplayName  string `yaml:"name" json:"name"`
-	ContextLimit int64  `yaml:"context_limit,omitempty" json:"context_limit,omitempty"`
-	OutputLimit  int64  `yaml:"output_limit,omitempty" json:"output_limit,omitempty"`
-	Enabled      bool   `yaml:"enabled" json:"enabled"`
+	ID              string   `yaml:"id" json:"id"`
+	DisplayName     string   `yaml:"name" json:"name"`
+	ContextLimit    int64    `yaml:"context_limit,omitempty" json:"context_limit,omitempty"`
+	OutputLimit     int64    `yaml:"output_limit,omitempty" json:"output_limit,omitempty"`
+	Enabled         bool     `yaml:"enabled" json:"enabled"`
+	SupportedInputs []string `yaml:"supported_inputs,omitempty" json:"supported_inputs,omitempty"`
 }
 
 type ProviderConfig struct {
@@ -227,6 +228,9 @@ func Merge(dst *Config, src Config) {
 						}
 						if srcModel.OutputLimit > 0 {
 							target.OutputLimit = srcModel.OutputLimit
+						}
+						if len(srcModel.SupportedInputs) > 0 {
+							target.SupportedInputs = srcModel.SupportedInputs
 						}
 						// Enabled stays as-is (user's choice)
 					} else {
