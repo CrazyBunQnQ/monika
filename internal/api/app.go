@@ -5419,18 +5419,13 @@ func (a *App) UploadMedia(projectPath, fileName, dataB64 string) (*MediaUploadRe
 	if err := os.MkdirAll(mediaDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create media dir: %w", err)
 	}
-	// Reject the upload if .monika/media was replaced by a symlink between
-	// MkdirAll and the write below — otherwise a malicious local actor
-	// could redirect the file outside the project.
-	if linfo, lerr := os.Lstat(mediaDir); lerr == nil && linfo.Mode()&os.ModeSymlink != 0 {
-		return nil, fmt.Errorf("media directory is a symlink, refusing to write")
-	}
-	// Same check for the resolved write target.
-	if resolved, rerr := filepath.EvalSymlinks(filepath.Dir(mediaDir)); rerr == nil {
-		realMedia := filepath.Join(resolved, filepath.Base(mediaDir))
-		if linfo2, lerr2 := os.Lstat(realMedia); lerr2 == nil && linfo2.Mode()&os.ModeSymlink != 0 {
-			return nil, fmt.Errorf("media directory is a symlink, refusing to write")
-		}
+	// Reject the upload if the path would resolve outside the project
+	// because .monika (or any intermediate component) is a symlink to
+	// elsewhere on disk. The previous check only verified .monika/media
+	// itself, so a `.monika -> /tmp` redirect slipped through and
+	// uploads landed in /tmp/media instead of inside the project.
+	if err := assertNoSymlinkEscape(absProject, mediaDir); err != nil {
+		return nil, err
 	}
 
 	safe := sanitizeFilename(fileName)
@@ -5636,6 +5631,44 @@ func detectMediaMime(name string, data []byte) string {
 	// a media file, since the whole point of this guard is to prevent
 	// attackers from sneaking arbitrary bytes past the upload pipeline.
 	return ""
+}
+
+// assertNoSymlinkEscape verifies that every component of mediaDir
+// (relative to absProject) resolves to a real path still under the
+// resolved absProject. Catches both `.monika/media` being a symlink
+// AND `.monika` itself being a symlink — either redirects the write
+// outside the project. The caller must have created mediaDir with
+// MkdirAll first; the resolved path is allowed to differ from the
+// original as long as it stays within the project's resolved root.
+func assertNoSymlinkEscape(absProject, mediaDir string) error {
+	resolvedProject, err := filepath.EvalSymlinks(absProject)
+	if err != nil {
+		return fmt.Errorf("resolve project: %w", err)
+	}
+	resolvedMedia, err := filepath.EvalSymlinks(mediaDir)
+	if err != nil {
+		return fmt.Errorf("resolve media dir: %w", err)
+	}
+	// Lstat each component between project and media to reject
+	// intermediate symlinks (e.g. .monika → /tmp).
+	rel, err := filepath.Rel(resolvedProject, resolvedMedia)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return fmt.Errorf("media dir resolves outside project directory")
+	}
+	// Walk every component of the relative path and ensure none of
+	// them is a symlink. EvalSymlinks above already followed them,
+	// but this gives a precise error message.
+	cur := resolvedProject
+	for _, seg := range strings.Split(filepath.ToSlash(rel), "/") {
+		if seg == "" || seg == "." {
+			continue
+		}
+		cur = filepath.Join(cur, seg)
+		if linfo, lerr := os.Lstat(cur); lerr == nil && linfo.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("path component %q is a symlink, refusing to write", seg)
+		}
+	}
+	return nil
 }
 
 // sanitizeFilename strips path separators and a few dangerous characters
