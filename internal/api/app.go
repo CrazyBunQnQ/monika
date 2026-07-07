@@ -5562,7 +5562,13 @@ func (a *App) GetMediaThumbnails(projectPath, filePath string, maxN int) ([]Medi
 		return nil, fmt.Errorf("path %s is outside project directory", filePath)
 	}
 
-	thumbs, err := builtin.ExtractMediaThumbnails(absFile, maxN)
+	// Bound the total work so a request that outlives the caller (e.g.
+	// the frontend unmounts the card mid-flight) still terminates. Wails
+	// v3 doesn't propagate client cancellation through the RPC, so the
+	// best we can do here is a hard timeout.
+	ctx, cancel := context.WithTimeout(a.ctx, 2*time.Minute)
+	defer cancel()
+	thumbs, err := builtin.ExtractMediaThumbnails(ctx, absFile, maxN)
 	if err != nil {
 		return nil, err
 	}

@@ -545,8 +545,8 @@ func parseKeyMoments(arr []any) []keyMoment {
 // with their timestamp. Exposed (capitalized) so the API layer can wire
 // it to App.GetMediaThumbnails; the tool's main flow does not embed
 // thumbnails in the LLM-facing result.
-func ExtractMediaThumbnails(videoPath string, maxN int) ([]mediaThumbnail, error) {
-	return extractThumbnails(context.Background(), videoPath, maxN)
+func ExtractMediaThumbnails(parentCtx context.Context, videoPath string, maxN int) ([]mediaThumbnail, error) {
+	return extractThumbnails(parentCtx, videoPath, maxN)
 }
 
 func extractThumbnails(parentCtx context.Context, videoPath string, maxN int) ([]mediaThumbnail, error) {
@@ -565,7 +565,7 @@ func extractThumbnails(parentCtx context.Context, videoPath string, maxN int) ([
 	}
 	if duration <= 0 || maxN == 1 {
 		ts := duration / 2
-		frame, err := snapshotFrame(videoPath, ts)
+		frame, err := snapshotFrame(parentCtx, videoPath, ts)
 		if err != nil {
 			return nil, err
 		}
@@ -575,7 +575,7 @@ func extractThumbnails(parentCtx context.Context, videoPath string, maxN int) ([
 	step := duration / float64(maxN-1)
 	for i := 0; i < maxN; i++ {
 		ts := step * float64(i)
-		frame, err := snapshotFrame(videoPath, ts)
+		frame, err := snapshotFrame(parentCtx, videoPath, ts)
 		if err != nil {
 			return nil, err
 		}
@@ -584,14 +584,18 @@ func extractThumbnails(parentCtx context.Context, videoPath string, maxN int) ([
 	return out, nil
 }
 
-func snapshotFrame(videoPath string, t float64) (string, error) {
+func snapshotFrame(parentCtx context.Context, videoPath string, t float64) (string, error) {
 	tmpDir, err := os.MkdirTemp("", "monika-thumb-*")
 	if err != nil {
 		return "", err
 	}
 	defer os.RemoveAll(tmpDir)
 	framePath := filepath.Join(tmpDir, "thumb.jpg")
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Derive from parent ctx so frontend cancellation (closing the
+	// preview panel, switching projects) propagates to ffmpeg. The
+	// internal 30s ceiling is the absolute worst case if the parent
+	// never cancels.
+	ctx, cancel := context.WithTimeout(parentCtx, 30*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "ffmpeg",
 		"-ss", strconv.FormatFloat(t, 'f', 3, 64),
