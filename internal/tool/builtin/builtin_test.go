@@ -737,6 +737,346 @@ func TestFileEditInvalidAnchor(t *testing.T) {
 	}
 }
 
+func TestPatch(t *testing.T) {
+	dir := t.TempDir()
+	f := NewFilePatch(dir)
+	if f.Name() != "patch" {
+		t.Fatalf("name = %q", f.Name())
+	}
+	if f.Description() == "" {
+		t.Fatal("description empty")
+	}
+}
+
+func TestPatchBasicReplace(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.txt")
+	os.WriteFile(path, []byte("hello world\n"), 0o644)
+
+	f := NewFilePatch(dir)
+	args, _ := json.Marshal(map[string]any{
+		"filePath": path,
+		"search":   "hello",
+		"replace":  "goodbye",
+	})
+	result, err := f.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Content)
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != "goodbye world\n" {
+		t.Fatalf("content = %q", string(data))
+	}
+}
+
+func TestPatchNotFound(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.txt")
+	os.WriteFile(path, []byte("hello world\n"), 0o644)
+
+	f := NewFilePatch(dir)
+	args, _ := json.Marshal(map[string]any{
+		"filePath": path,
+		"search":   "nonexistent",
+		"replace":  "x",
+	})
+	result, _ := f.Execute(context.Background(), args)
+	if !result.IsError {
+		t.Fatal("expected error for not found")
+	}
+}
+
+func TestPatchMultipleMatch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.txt")
+	os.WriteFile(path, []byte("foo\nfoo\n"), 0o644)
+
+	f := NewFilePatch(dir)
+	args, _ := json.Marshal(map[string]any{
+		"filePath": path,
+		"search":   "foo",
+		"replace":  "bar",
+	})
+	result, _ := f.Execute(context.Background(), args)
+	if !result.IsError {
+		t.Fatal("expected error for multiple matches")
+	}
+}
+
+func TestPatchEmptySearch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.txt")
+	os.WriteFile(path, []byte("hello\n"), 0o644)
+
+	f := NewFilePatch(dir)
+	args, _ := json.Marshal(map[string]any{
+		"filePath": path,
+		"search":   "",
+		"replace":  "x",
+	})
+	result, _ := f.Execute(context.Background(), args)
+	if !result.IsError {
+		t.Fatal("expected error for empty search")
+	}
+}
+
+func TestPatchCRLFPreserved(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.txt")
+	os.WriteFile(path, []byte("line1\r\nline2\r\nline3\r\n"), 0o644)
+
+	f := NewFilePatch(dir)
+	args, _ := json.Marshal(map[string]any{
+		"filePath": path,
+		"search":   "line2",
+		"replace":  "replaced",
+	})
+	result, err := f.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Content)
+	}
+	data, _ := os.ReadFile(path)
+	expected := "line1\r\nreplaced\r\nline3\r\n"
+	if string(data) != expected {
+		t.Fatalf("content = %q, want %q", string(data), expected)
+	}
+}
+
+func TestPatchMixedLineEndings(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.txt")
+	original := "line1\r\nline2\nline3\r\n"
+	os.WriteFile(path, []byte(original), 0o644)
+
+	f := NewFilePatch(dir)
+	args, _ := json.Marshal(map[string]any{
+		"filePath": path,
+		"search":   "line2",
+		"replace":  "replaced",
+	})
+	result, err := f.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Content)
+	}
+	data, _ := os.ReadFile(path)
+	if strings.Contains(string(data), "line2") {
+		t.Fatalf("line2 should have been replaced: %q", string(data))
+	}
+	if strings.Count(string(data), "\r\n") != 2 {
+		t.Fatalf("CRLF count changed: got %q", string(data))
+	}
+	if !strings.Contains(string(data), "replaced\nline3") {
+		t.Fatalf("LF-only line ending should be preserved: %q", string(data))
+	}
+}
+
+func TestPatchConflictPathValidation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.txt")
+	os.WriteFile(path, []byte("foo\nfoo\nbar\n"), 0o644)
+
+	tool.SetFileDirty(path, true)
+	defer tool.SetFileDirty(path, false)
+
+	f := NewFilePatch(dir)
+	args, _ := json.Marshal(map[string]any{
+		"filePath": path,
+		"search":   "foo",
+		"replace":  "baz",
+	})
+	result, err := f.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Fatalf("expected error for multiple matches in dirty file, got: %+v", result)
+	}
+	if result.AiContent != "" {
+		t.Fatalf("should not produce AiContent for ambiguous match, got: %q", result.AiContent)
+	}
+}
+
+func TestPatchConflictPathSingleMatch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.txt")
+	os.WriteFile(path, []byte("alpha\nbeta\n"), 0o644)
+
+	tool.SetFileDirty(path, true)
+	defer tool.SetFileDirty(path, false)
+
+	f := NewFilePatch(dir)
+	args, _ := json.Marshal(map[string]any{
+		"filePath": path,
+		"search":   "alpha",
+		"replace":  "gamma",
+	})
+	result, err := f.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Conflict {
+		t.Fatalf("expected conflict result, got: %+v", result)
+	}
+	if result.AiContent == "" {
+		t.Fatal("expected AiContent for valid single match in dirty file")
+	}
+	if !strings.Contains(result.AiContent, "gamma") {
+		t.Fatalf("AiContent should contain replacement: %q", result.AiContent)
+	}
+}
+
+func TestPatchPartialMatchWarning(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.txt")
+	os.WriteFile(path, []byte("max_value := 1\n"), 0o644)
+
+	f := NewFilePatch(dir)
+	args, _ := json.Marshal(map[string]any{
+		"filePath": path,
+		"search":   "x_value",
+		"replace":  "y_value",
+	})
+	result, err := f.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "partial") && !strings.Contains(result.Content, "mid-line") {
+		t.Fatalf("expected partial-match warning, got: %s", result.Content)
+	}
+}
+
+func TestPatchConflictMarkers(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.txt")
+	content := "\x3c\x3c\x3c\x3c\x3c\x3c\x3c HEAD\nfoo\n=======\nbar\n\x3e\x3e\x3e\x3e\x3e\x3e\x3e branch\n"
+	os.WriteFile(path, []byte(content), 0o644)
+
+	f := NewFilePatch(dir)
+	args, _ := json.Marshal(map[string]any{
+		"filePath": path,
+		"search":   "foo",
+		"replace":  "baz",
+	})
+	result, _ := f.Execute(context.Background(), args)
+	if !result.IsError {
+		t.Fatal("expected error for conflict markers")
+	}
+}
+
+func TestPatchMultiLineReplace(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.txt")
+	os.WriteFile(path, []byte("func old() {\n\treturn nil\n}\n"), 0o644)
+
+	f := NewFilePatch(dir)
+	args, _ := json.Marshal(map[string]any{
+		"filePath": path,
+		"search":   "func old() {\n\treturn nil\n}",
+		"replace":  "func new() {\n\treturn 42\n}",
+	})
+	result, err := f.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Content)
+	}
+	data, _ := os.ReadFile(path)
+	expected := "func new() {\n\treturn 42\n}\n"
+	if string(data) != expected {
+		t.Fatalf("content = %q, want %q", string(data), expected)
+	}
+}
+
+func TestPatchOutsideProject(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.txt")
+	os.WriteFile(path, []byte("hello\n"), 0o644)
+
+	f := NewFilePatch(dir)
+	args, _ := json.Marshal(map[string]any{
+		"filePath": "/etc/passwd",
+		"search":   "root",
+		"replace":  "hacked",
+	})
+	result, _ := f.Execute(context.Background(), args)
+	if !result.IsError {
+		t.Fatal("expected error for path outside project")
+	}
+}
+
+func TestPatchContentNotFound(t *testing.T) {
+	_, _, err := patchContent("hello world", "nonexistent", "x")
+	if err == nil {
+		t.Fatal("expected error for not found")
+	}
+}
+
+func TestPatchContentMultipleMatch(t *testing.T) {
+	_, _, err := patchContent("foo\nfoo\n", "foo", "bar")
+	if err == nil {
+		t.Fatal("expected error for multiple matches")
+	}
+}
+
+func TestPatchContentPartialMatch(t *testing.T) {
+	content := "max_value := 1"
+	newContent, partial, err := patchContent(content, "x_value", "y_value")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !partial {
+		t.Fatal("expected partial match")
+	}
+	if newContent != "may_value := 1" {
+		t.Fatalf("content = %q", newContent)
+	}
+}
+
+func TestPatchContentNoPartialForFullLine(t *testing.T) {
+	content := "max_value := 1\n"
+	newContent, partial, err := patchContent(content, "max_value := 1", "replaced")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if partial {
+		t.Fatal("expected no partial match for full line")
+	}
+	if newContent != "replaced\n" {
+		t.Fatalf("content = %q", newContent)
+	}
+}
+
+func TestApplyEditMixedCRLF(t *testing.T) {
+	content := "line1\r\nline2\nline3\r\n"
+	newString := "replaced"
+	result, err := applyEditToContent(content, lineHash("line2")+":2", newString, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result, "replaced") {
+		t.Fatalf("replacement missing: %q", result)
+	}
+	if !strings.Contains(result, "\r\n") {
+		t.Fatalf("CRLF lines should be preserved: %q", result)
+	}
+	if !strings.Contains(result, "replaced\nline3") {
+		t.Fatalf("LF-only line should be preserved: %q", result)
+	}
+}
+
 func TestHasConflictMarkers(t *testing.T) {
 	tests := []struct {
 		name    string

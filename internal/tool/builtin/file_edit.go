@@ -216,9 +216,8 @@ func (f *fileEdit) editFile(path, anchor, newString string, lineCount int) (tool
 
 // applyEditToContent applies a line-based edit to the given content string
 // and returns the new content. It does NOT write to disk.
+// Preserves per-line line endings (CRLF or LF) without round-trip normalization.
 func applyEditToContent(content, anchor, newString string, lineCount int) (string, error) {
-	hadCRLF := strings.Contains(content, "\r\n")
-	content = strings.ReplaceAll(content, "\r\n", "\n")
 	newString = strings.ReplaceAll(newString, "\r\n", "\n")
 
 	colonIdx := strings.LastIndex(anchor, ":")
@@ -235,6 +234,12 @@ func applyEditToContent(content, anchor, newString string, lineCount int) (strin
 		return "", fmt.Errorf("anchor line beyond file length")
 	}
 
+	// Detect line ending of the anchor line to propagate to replacement lines
+	lineSuffix := ""
+	if lineNum-1 < len(lines) && strings.HasSuffix(lines[lineNum-1], "\r") {
+		lineSuffix = "\r"
+	}
+
 	var result []string
 	if lineCount == 0 {
 		before := lines[:lineNum]
@@ -242,7 +247,9 @@ func applyEditToContent(content, anchor, newString string, lineCount int) (strin
 		insertLines := splitLines(newString)
 		result = make([]string, 0, len(before)+len(insertLines)+len(after))
 		result = append(result, before...)
-		result = append(result, insertLines...)
+		for _, l := range insertLines {
+			result = append(result, l+lineSuffix)
+		}
 		result = append(result, after...)
 	} else {
 		before := lines[:lineNum-1]
@@ -250,15 +257,13 @@ func applyEditToContent(content, anchor, newString string, lineCount int) (strin
 		replacementLines := splitLines(newString)
 		result = make([]string, 0, len(before)+len(replacementLines)+len(after))
 		result = append(result, before...)
-		result = append(result, replacementLines...)
+		for _, l := range replacementLines {
+			result = append(result, l+lineSuffix)
+		}
 		result = append(result, after...)
 	}
 
-	content = strings.Join(result, "\n")
-	if hadCRLF {
-		content = strings.ReplaceAll(content, "\n", "\r\n")
-	}
-	return content, nil
+	return strings.Join(result, "\n"), nil
 }
 
 // checkBracketBalanceDelta detects whether an edit changed the bracket
