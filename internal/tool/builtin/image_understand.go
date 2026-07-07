@@ -53,8 +53,8 @@ func (i *imageUnderstand) Parameters() map[string]any {
 			},
 			"detail": map[string]any{
 				"type":        "string",
-				"enum":        []string{"auto", "low", "high"},
-				"description": "Image processing detail level. 'high' uses more tokens but reads fine text better. Default: auto.",
+				"enum":        []string{"low", "high"},
+				"description": "Image processing detail level. 'high' uses more tokens but reads fine text better. Omit to let the provider choose its default.",
 			},
 		},
 		"required": []string{"filePath"},
@@ -114,10 +114,6 @@ func (i *imageUnderstand) Execute(ctx context.Context, args json.RawMessage) (to
 	if prompt == "" {
 		prompt = "Describe this image in detail."
 	}
-	detail := p.Detail
-	if detail == "" {
-		detail = "auto"
-	}
 
 	if i.media == nil {
 		return tool.ExecutionResult{Content: "vision provider not configured", IsError: true}, nil
@@ -125,7 +121,7 @@ func (i *imageUnderstand) Execute(ctx context.Context, args json.RawMessage) (to
 
 	images := []engine.AttachmentRef{{
 		URL:      "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data),
-		Detail:   detail,
+		Detail:   p.Detail,
 		MimeType: mime,
 	}}
 

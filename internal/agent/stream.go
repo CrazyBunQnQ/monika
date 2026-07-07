@@ -48,7 +48,7 @@ func parseResult(events []engine.ChatEvent) streamResult {
 		}
 	}
 
-	result.Content = content.String()
+	result.Content = stripThinkTags(content.String())
 	result.ReasoningContent = reasoning.String()
 	return result
 }

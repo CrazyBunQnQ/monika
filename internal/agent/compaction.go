@@ -2,7 +2,6 @@ package agent
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 	"unicode/utf8"
 
@@ -15,11 +14,9 @@ const (
 	defaultTailTurns             = 2
 )
 
-var thinkRe = regexp.MustCompile(`(?s)<think.*?</think\s*>`)
-
 // sanitizeCompactionOutput cleans the raw LLM response from the compaction agent.
 func sanitizeCompactionOutput(raw string) string {
-	s := thinkRe.ReplaceAllString(raw, "")
+	s := thinkTagRe.ReplaceAllString(raw, "")
 
 	// Strip leading/trailing ``` fences
 	s = strings.TrimSpace(s)

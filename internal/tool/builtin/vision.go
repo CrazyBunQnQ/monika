@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"monika/internal/tool"
@@ -77,6 +78,24 @@ func NewDefaultMediaCaller(providers map[string]engine.ProviderEngine) MediaCall
 				return "", lastUsage, errors.New("vision: provider returned an error")
 			}
 		}
-		return sb.String(), lastUsage, nil
+		return stripThinkTags(sb.String()), lastUsage, nil
 	}
+}
+
+var thinkTagRe = regexp.MustCompile(`(?s)<think\b[^>]*>.*?</think\s*>`)
+
+// stripThinkTags removes <think>...</think> reasoning blocks that some models
+// (e.g. DeepSeek-R1) embed in the content stream. Handles both closed tags and
+// unclosed <think> tags (strips from <think> to end of string).
+func stripThinkTags(s string) string {
+	s = thinkTagRe.ReplaceAllString(s, "")
+	if idx := strings.Index(s, "<think"); idx >= 0 {
+		closeIdx := strings.Index(s[idx:], "</think")
+		if closeIdx >= 0 {
+			s = s[:idx] + s[idx+closeIdx+len("</think"):]
+		} else {
+			s = s[:idx]
+		}
+	}
+	return strings.TrimSpace(s)
 }

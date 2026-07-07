@@ -803,6 +803,7 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 		var collected []engine.ChatEvent
 		var textBuf strings.Builder
 		var thinkingBuf strings.Builder
+		var thinkFilter thinkStreamFilter
 		flushTick := time.NewTicker(50 * time.Millisecond)
 		defer flushTick.Stop()
 
@@ -844,7 +845,13 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 					if ev.ReasoningContent != "" {
 						thinkingBuf.WriteString(ev.ReasoningContent)
 					} else {
-						textBuf.WriteString(ev.Text)
+						tText, tThink := thinkFilter.Write(ev.Text)
+						if tText != "" {
+							textBuf.WriteString(tText)
+						}
+						if tThink != "" {
+							thinkingBuf.WriteString(tThink)
+						}
 					}
 					if utf8.RuneCountInString(textBuf.String()) >= 10 {
 						flushText()
@@ -902,6 +909,16 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 					flushAll()
 				}
 			}
+		}
+		flushAll()
+
+		// Flush any text still buffered inside the think tag filter.
+		ftText, ftThink := thinkFilter.Flush()
+		if ftText != "" {
+			textBuf.WriteString(ftText)
+		}
+		if ftThink != "" {
+			thinkingBuf.WriteString(ftThink)
 		}
 		flushAll()
 
