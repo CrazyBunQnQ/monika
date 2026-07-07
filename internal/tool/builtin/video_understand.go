@@ -120,11 +120,11 @@ type mediaThumbnail struct {
 }
 
 func (v *videoUnderstand) Execute(ctx context.Context, args json.RawMessage) (tool.ExecutionResult, error) {
-	out, err := v.runAnalysis(ctx, args, nil)
+	out, usage, err := v.runAnalysis(ctx, args, nil)
 	if err != nil {
 		return tool.ExecutionResult{Content: err.Error(), IsError: true}, nil
 	}
-	return tool.ExecutionResult{Content: out}, nil
+	return tool.ExecutionResult{Content: out, Usage: usage}, nil
 }
 
 // ExecuteStreaming returns a channel of progress events so the chat UI
@@ -142,7 +142,7 @@ func (v *videoUnderstand) ExecuteStreaming(ctx context.Context, args json.RawMes
 			case <-ctx.Done():
 			}
 		}
-		out, err := v.runAnalysis(ctx, args, progress)
+		out, usage, err := v.runAnalysis(ctx, args, progress)
 		if err != nil {
 			// Encode the error into a JSON envelope rather than
 			// emitting EventError. EventError is forwarded to the
@@ -156,6 +156,12 @@ func (v *videoUnderstand) ExecuteStreaming(ctx context.Context, args json.RawMes
 			}
 			return
 		}
+		if usage != nil {
+			select {
+			case ch <- agent.Event{Type: agent.EventUsage, Usage: *usage}:
+			case <-ctx.Done():
+			}
+		}
 		select {
 		case ch <- agent.Event{Type: agent.EventTextDelta, Content: out}:
 		case <-ctx.Done():
@@ -164,7 +170,7 @@ func (v *videoUnderstand) ExecuteStreaming(ctx context.Context, args json.RawMes
 	return ch, nil
 }
 
-func (v *videoUnderstand) runAnalysis(ctx context.Context, args json.RawMessage, progress func(string)) (string, error) {
+func (v *videoUnderstand) runAnalysis(ctx context.Context, args json.RawMessage, progress func(string)) (string, *engine.UsageEvent, error) {
 	var p struct {
 		FilePath      string  `json:"filePath"`
 		Question      string  `json:"question"`
@@ -174,23 +180,23 @@ func (v *videoUnderstand) runAnalysis(ctx context.Context, args json.RawMessage,
 		EndTime       float64 `json:"endTime"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+		return "", nil, fmt.Errorf("invalid arguments: %w", err)
 	}
 	if p.FilePath == "" {
-		return "", fmt.Errorf("filePath is required")
+		return "", nil, fmt.Errorf("filePath is required")
 	}
 
 	safe, err := resolveToolPath(p.FilePath, tool.ProjectDirOrDefault(ctx, v.projectDir))
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 
 	info, err := os.Stat(safe)
 	if err != nil {
-		return "", fmt.Errorf("cannot stat video: %w", err)
+		return "", nil, fmt.Errorf("cannot stat video: %w", err)
 	}
 	if info.Size() > maxVideoBytes {
-		return "", fmt.Errorf("video too large: %d bytes (max %d)", info.Size(), maxVideoBytes)
+		return "", nil, fmt.Errorf("video too large: %d bytes (max %d)", info.Size(), maxVideoBytes)
 	}
 
 	// Apply defaults and clamp to sane bounds.
@@ -215,13 +221,13 @@ func (v *videoUnderstand) runAnalysis(ctx context.Context, args json.RawMessage,
 	}
 	duration, err := ffprobeDuration(ctx, safe)
 	if err != nil {
-		return "", fmt.Errorf("ffprobe failed (is ffmpeg installed?): %w", err)
+		return "", nil, fmt.Errorf("ffprobe failed (is ffmpeg installed?): %w", err)
 	}
 	if duration <= 0 {
-		return "", fmt.Errorf("video has no detectable duration")
+		return "", nil, fmt.Errorf("video has no detectable duration")
 	}
 	if duration > maxVideoSecs {
-		return "", fmt.Errorf("video too long: %.0fs (max %ds)", duration, maxVideoSecs)
+		return "", nil, fmt.Errorf("video too long: %.0fs (max %ds)", duration, maxVideoSecs)
 	}
 
 	start := p.StartTime
@@ -233,16 +239,16 @@ func (v *videoUnderstand) runAnalysis(ctx context.Context, args json.RawMessage,
 		end = duration
 	}
 	if end <= start {
-		return "", fmt.Errorf("endTime (%.2f) must be greater than startTime (%.2f)", end, start)
+		return "", nil, fmt.Errorf("endTime (%.2f) must be greater than startTime (%.2f)", end, start)
 	}
 
 	timestamps := sampleTimestamps(start, end, p.FrameInterval, p.MaxFrames)
 	if len(timestamps) == 0 {
-		return "", fmt.Errorf("no frames to sample in the given range")
+		return "", nil, fmt.Errorf("no frames to sample in the given range")
 	}
 
 	if v.vision == nil {
-		return "", fmt.Errorf("vision provider not configured")
+		return "", nil, fmt.Errorf("vision provider not configured")
 	}
 
 	if progress != nil {
@@ -252,13 +258,13 @@ func (v *videoUnderstand) runAnalysis(ctx context.Context, args json.RawMessage,
 
 	tmpDir, err := os.MkdirTemp("", "monika-video-*")
 	if err != nil {
-		return "", fmt.Errorf("cannot create temp dir: %w", err)
+		return "", nil, fmt.Errorf("cannot create temp dir: %w", err)
 	}
 	defer os.RemoveAll(tmpDir)
 
 	frames, err := extractFrames(ctx, safe, tmpDir, timestamps)
 	if err != nil {
-		return "", fmt.Errorf("ffmpeg frame extraction failed: %w", err)
+		return "", nil, fmt.Errorf("ffmpeg frame extraction failed: %w", err)
 	}
 
 	if progress != nil {
@@ -266,9 +272,9 @@ func (v *videoUnderstand) runAnalysis(ctx context.Context, args json.RawMessage,
 	}
 
 	prompt := buildVideoPrompt(duration, len(frames), p.FrameInterval, p.Question)
-	resp, err := v.vision(ctx, prompt, frames)
+	resp, usage, err := v.vision(ctx, prompt, frames)
 	if err != nil {
-		return "", fmt.Errorf("vision call failed: %w", err)
+		return "", nil, fmt.Errorf("vision call failed: %w", err)
 	}
 
 	result := videoResult{
@@ -304,9 +310,9 @@ func (v *videoUnderstand) runAnalysis(ctx context.Context, args json.RawMessage,
 
 	out, err := json.Marshal(result)
 	if err != nil {
-		return "", fmt.Errorf("encode result: %w", err)
+		return "", nil, fmt.Errorf("encode result: %w", err)
 	}
-	return string(out), nil
+	return string(out), usage, nil
 }
 
 func formatBytes(n int64) string {
@@ -587,7 +593,7 @@ func extractThumbnails(parentCtx context.Context, videoPath string, maxN int) ([
 func snapshotFrame(parentCtx context.Context, videoPath string, t float64) (string, error) {
 	tmpDir, err := os.MkdirTemp("", "monika-thumb-*")
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	defer os.RemoveAll(tmpDir)
 	framePath := filepath.Join(tmpDir, "thumb.jpg")
@@ -607,11 +613,11 @@ func snapshotFrame(parentCtx context.Context, videoPath string, t float64) (stri
 		framePath,
 	).CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("ffmpeg at t=%.2fs: %w: %s", t, err, string(out))
+		return "", nil, fmt.Errorf("ffmpeg at t=%.2fs: %w: %s", t, err, string(out))
 	}
 	data, err := os.ReadFile(framePath)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(data), nil
 }

@@ -130,7 +130,7 @@ func (i *imageUnderstand) Execute(ctx context.Context, args json.RawMessage) (to
 		Detail: detail,
 	}}
 
-	resp, err := i.vision(ctx, prompt, images)
+	resp, usage, err := i.vision(ctx, prompt, images)
 	if err != nil {
 		return tool.ExecutionResult{Content: "vision call failed: " + err.Error(), IsError: true}, nil
 	}
@@ -154,7 +154,7 @@ func (i *imageUnderstand) Execute(ctx context.Context, args json.RawMessage) (to
 		Summary:  resp,
 	}
 	out, _ := json.Marshal(result)
-	return tool.ExecutionResult{Content: string(out)}, nil
+	return tool.ExecutionResult{Content: string(out), Usage: usage}, nil
 }
 
 type imageResult struct {

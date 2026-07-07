@@ -1226,6 +1226,15 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 				results[rIdx].conflict = execResult.Conflict
 				results[rIdx].diskContent = execResult.DiskContent
 				results[rIdx].aiContent = execResult.AiContent
+				// Surface token usage from tools that talk to an LLM on
+				// their own (image/video_understand). Without this the
+				// vision calls are invisible to budget tracking and
+				// compaction decisions.
+				if execResult.Usage != nil {
+					if u, ok := execResult.Usage.(engine.UsageEvent); ok {
+						ch <- Event{Type: EventUsage, Usage: u}
+					}
+				}
 				sendToolOutput(pc.tc, results[rIdx].output, results[rIdx].status,
 					execResult.DiffLines, execResult.Conflict, execResult.DiskContent, execResult.AiContent)
 			}(ri, p)
