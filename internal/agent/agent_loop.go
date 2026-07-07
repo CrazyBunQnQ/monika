@@ -1144,6 +1144,7 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 					}
 					var streamOutput strings.Builder
 					childSID := pc.tc.ID
+					streamStatus := "done"
 					for ev := range eventCh {
 						ev.SessionID = childSID
 						switch ev.Type {
@@ -1186,10 +1187,19 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 								return
 							}
 						case EventError:
-							select {
-							case ch <- ev:
-							case <-ctx.Done():
-								return
+							// Tool-internal errors must not propagate as
+							// session-level errors — EventError is the
+							// agent's signal that the whole session is
+							// unrecoverable, but a streaming tool's
+							// failure (e.g. spawn_agent subagent error,
+							// video_understand ffprobe missing) should
+							// only mark the tool itself as failed.
+							// Remember the error and fall through to
+							// apply status="error" on the final
+							// tool_done event.
+							streamStatus = "error"
+							if streamOutput.Len() == 0 {
+								streamOutput.WriteString("error: " + ev.Content)
 							}
 						default:
 							select {
@@ -1204,7 +1214,8 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 						toolContent = "(subtask completed with no output)"
 					}
 					results[rIdx].output = toolContent
-					sendToolOutput(pc.tc, toolContent, "done", nil, false, "", "")
+					results[rIdx].status = streamStatus
+					sendToolOutput(pc.tc, toolContent, streamStatus, nil, false, "", "")
 					return
 				}
 
