@@ -274,3 +274,34 @@ type QueuedMessage struct {
 	Error      string `json:"error,omitempty"`
 	CreatedAt  int64  `json:"created_at"`
 }
+
+// MediaUploadResult is returned from App.UploadMedia after a successful drop
+// of a video/image file onto the chat input. Path is project-relative so the
+// frontend can reference the file via [chip] tokens in the message.
+type MediaUploadResult struct {
+	Path     string `json:"path"`
+	FileName string `json:"fileName"`
+	Size     int64  `json:"size"`
+	MimeType string `json:"mimeType"`
+	IsVideo  bool   `json:"isVideo"`
+	IsImage  bool   `json:"isImage"`
+}
+
+// MediaContent is returned from App.ReadMediaAsBase64 for the Preview panel.
+// DataB64 contains the raw file bytes encoded as base64 (no data: prefix);
+// the frontend constructs the data URL itself so it can size the payload.
+type MediaContent struct {
+	Path     string `json:"path"`
+	FileName string `json:"fileName"`
+	MimeType string `json:"mimeType"`
+	DataB64  string `json:"dataB64"`
+	Size     int64  `json:"size"`
+}
+
+// MediaThumbnail is one sampled frame in the response from
+// App.GetMediaThumbnails. The URL is a data:image/jpeg;base64,... payload
+// ready to drop into an <img src>.
+type MediaThumbnail struct {
+	T   float64 `json:"t"`
+	URL string  `json:"url"`
+}

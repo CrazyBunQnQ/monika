@@ -83,7 +83,12 @@ func main() {
 	// Create a standalone tsBridge for tree-sitter IPC (uses application.Get(), no app ref needed).
 	tsBridge := api.NewTSBridge()
 	tsQueryFn := tsBridge.QueryFunc()
-	builtin.RegisterDefaults(registry, "", home, builtin.TSQueryFunc(tsQueryFn))
+
+	// Wire vision caller for image/video understanding tools. Captures the
+	// already-initialized provider engines so tools can call into the same
+	// configured model the user is chatting with.
+	visionCaller := builtin.NewDefaultVisionCaller(pr.Providers)
+	builtin.RegisterDefaults(registry, "", home, builtin.TSQueryFunc(tsQueryFn), visionCaller)
 	builtin.RegisterLSP(registry, "", pr.Config.LSP.Servers, pr.Config.Formatters)
 	builtin.WireLSPHooks(registry)
 

@@ -288,7 +288,7 @@ func TestBashExecute(t *testing.T) {
 
 func TestRegisterDefaultsAll(t *testing.T) {
 	r := tool.NewRegistry()
-	if err := RegisterDefaults(r, t.TempDir(), "", nil); err != nil {
+	if err := RegisterDefaults(r, t.TempDir(), "", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	expected := []string{"file_read", "file_write", "file_edit", "file_list", "glob", "grep", "bash", "background_task"}

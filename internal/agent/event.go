@@ -16,6 +16,12 @@ const (
 	EventCompaction
 	EventRetrying
 	EventMaxSteps
+	// EventToolProgress is emitted by streaming tools (e.g. video_understand)
+	// for intermediate status messages ("Reading metadata...", "Sampling frames...")
+	// that should reach the chat UI live but must NOT be folded into the
+	// tool's final output text. The agent loop forwards these to the
+	// frontend but does not accumulate them into streamOutput.
+	EventToolProgress
 )
 
 type Event struct {

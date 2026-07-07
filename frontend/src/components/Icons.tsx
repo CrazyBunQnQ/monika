@@ -50,6 +50,8 @@ import {
     ListOrdered,
     SkipForward,
     Clock,
+    Film,
+    ImageIcon,
 } from 'lucide-react'
 
 export function IconClose({ size }: { size?: number }) {
@@ -254,4 +256,12 @@ export function IconSkipForward({ size }: { size?: number }) {
 
 export function IconClock({ size }: { size?: number }) {
     return <Clock size={size || 16} strokeWidth={1.5} />
+}
+
+export function IconVideo({ size, className, style }: { size?: number; className?: string; style?: React.CSSProperties }) {
+    return <Film size={size || 16} strokeWidth={1.5} className={className} style={style} />
+}
+
+export function IconImage({ size, className, style }: { size?: number; className?: string; style?: React.CSSProperties }) {
+    return <ImageIcon size={size || 16} strokeWidth={1.5} className={className} style={style} />
 }

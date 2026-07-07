@@ -1,8 +1,9 @@
 import React, { useState, useMemo } from 'react'
-import { QuotedMessage } from '../../store'
+import { QuotedMessage, useStore } from '../../store'
 import MarkdownBlock from './MarkdownBlock'
 import { IconChevronDown } from '../Icons'
 import SpawnBlock from './SpawnBlock'
+import MediaToolBlock from './MediaToolBlock'
 import { formatTokens } from '../../lib/format'
 import { AnsiText } from '../../lib/ansi'
 
@@ -727,13 +728,20 @@ const MessageBubble = React.memo(function MessageBubble({ message, isGenerating,
                             </MsgBlock>
                         )}
 
-                        {!hideExtras && tools?.map((tool, i) =>
-                            tool.name === 'spawn_agent' ? (
-                                <SpawnBlock key={i} tool={tool} model={model} duration={duration} />
-                            ) : (
-                                <ToolBlock key={i} tool={tool} />
-                            )
-                        )}
+                        {!hideExtras && tools?.map((tool, i) => {
+                            if (tool.name === 'spawn_agent') {
+                                return <SpawnBlock key={i} tool={tool} model={model} duration={duration} />
+                            }
+                            if (tool.name === 'video_understand' || tool.name === 'image_understand') {
+                                return (
+                                    <MediaToolBlockWrapper
+                                        key={i}
+                                        tool={tool}
+                                    />
+                                )
+                            }
+                            return <ToolBlock key={i} tool={tool} />
+                        })}
 
                         {/* "view subagents" hint — matches preview HTML */}
                         {!hideExtras && hasSpawnAgent && (
@@ -758,5 +766,19 @@ const MessageBubble = React.memo(function MessageBubble({ message, isGenerating,
         </div>
     )
 })
+
+// MediaToolBlockWrapper wires MediaToolBlock to the global store so thumbnail
+// clicks open the original file in the Preview panel. Defining it here
+// (instead of inside MediaToolBlock) keeps MediaToolBlock prop-driven and
+// free of store coupling.
+function MediaToolBlockWrapper({ tool }: { tool: ToolCall }) {
+    const setPreviewMedia = useStore(s => s.setPreviewMedia)
+    return (
+        <MediaToolBlock
+            tool={tool}
+            onOpenMedia={(filePath, fileName, mime) => setPreviewMedia(filePath, fileName, mime)}
+        />
+    )
+}
 
 export default MessageBubble

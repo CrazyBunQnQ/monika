@@ -15,7 +15,7 @@ import { Call } from '@wailsio/runtime'
 import { lspService, LspSymbol, LspDiagnostic } from '../../lib/lspService'
 import { LspSymbolSidebar } from './LspSymbolSidebar'
 
-import { IconSidebar, IconFolder, IconMaximize, IconRestore, IconSearch, IconClose, IconEye, IconEdit } from '../Icons'
+import { IconSidebar, IconFolder, IconMaximize, IconRestore, IconSearch, IconClose, IconEye, IconEdit, IconExternalLink, IconVideo, IconImage } from '../Icons'
 import { CodeMinimap } from './CodeMinimap'
 import MarkdownPreview from './MarkdownPreview'
 import { AnsiText } from '../../lib/ansi'
@@ -736,6 +736,7 @@ function PreviewPanel(props: IDockviewPanelProps) {
     const showDiff = preview.mode === 'diff' && preview.diffLines
     const showEmpty = preview.mode === null
     const showCommit = preview.mode === 'commit' && !!commitFiles
+    const showMedia = preview.mode === 'media' && !!preview.filePath
     const isMarkdown = /\.(md|mdx|markdown)$/i.test(preview.filePath || '')
     const showMarkdownPreview = showFile && isMarkdown && mdPreviewMode
 
@@ -1980,7 +1981,113 @@ function PreviewPanel(props: IDockviewPanelProps) {
                     </div>
                 )
             }
+            {
+                showMedia && (
+                    <MediaViewer
+                        filePath={preview.filePath!}
+                        fileName={preview.fileName || ''}
+                        mime={preview.mediaMime || ''}
+                    />
+                )
+            }
         </div >
     )
 }
 export default PreviewPanel
+
+function MediaViewer({ filePath, fileName, mime }: { filePath: string; fileName: string; mime: string }) {
+    const projectPath = useStore(s => s.projectPath)
+    const [dataUrl, setDataUrl] = useState<string | null>(null)
+    const [error, setError] = useState<string | null>(null)
+    const [loading, setLoading] = useState(true)
+    const [size, setSize] = useState<number>(0)
+    const [resolvedMime, setResolvedMime] = useState<string>(mime)
+
+    useEffect(() => {
+        let cancelled = false
+        setLoading(true)
+        setError(null)
+        setDataUrl(null)
+        if (!projectPath) {
+            setError('No project open')
+            setLoading(false)
+            return
+        }
+        ;(async () => {
+            try {
+                const result: any = await Call.ByName('monika/internal/api.App.ReadMediaAsBase64', projectPath, filePath)
+                if (cancelled) return
+                if (!result) {
+                    setError('Empty response from server')
+                    return
+                }
+                const m: string = result.mimeType || mime || 'application/octet-stream'
+                setResolvedMime(m)
+                setSize(result.size || 0)
+                setDataUrl(`data:${m};base64,${result.dataB64 || ''}`)
+            } catch (e: any) {
+                if (cancelled) return
+                setError(e?.message || 'Failed to load media')
+            } finally {
+                if (!cancelled) setLoading(false)
+            }
+        })()
+        return () => { cancelled = true }
+    }, [filePath, projectPath, mime])
+
+    const isVideo = resolvedMime.startsWith('video/')
+    const isImage = resolvedMime.startsWith('image/')
+    const sizeStr = size > 0 ? formatBytes(size) : ''
+
+    const openInExplorer = async () => {
+        if (!projectPath) return
+        try {
+            await Call.ByName('monika/internal/api.App.OpenInExplorer', projectPath, filePath)
+        } catch (e) {
+            console.error('OpenInExplorer failed', e)
+        }
+    }
+
+    return (
+        <div className="flex-1 flex flex-col overflow-hidden">
+            <div
+                className="flex items-center gap-2 px-3 py-2 shrink-0 border-b"
+                style={{ background: 'var(--bg-sidebar)', borderColor: 'var(--border)' }}
+            >
+                {isVideo ? <IconVideo size={14} style={{ color: '#c084fc' }} /> : <IconImage size={14} style={{ color: '#22d3ee' }} />}
+                <span className="text-[12px] truncate flex-1" style={{ color: 'var(--text)' }}>{fileName}</span>
+                <span className="text-[10px]" style={{ color: 'var(--text-dim)' }}>{resolvedMime}{sizeStr ? ` · ${sizeStr}` : ''}</span>
+                <button
+                    type="button"
+                    onClick={openInExplorer}
+                    className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded hover:bg-white/5"
+                    style={{ color: 'var(--text-dim)', border: '1px solid var(--border)' }}
+                    title="Open in file manager"
+                >
+                    <IconExternalLink size={11} />
+                    Open
+                </button>
+            </div>
+            <div className="flex-1 overflow-auto flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.2)' }}>
+                {loading && <span className="text-[12px]" style={{ color: 'var(--text-dim)' }}>Loading…</span>}
+                {error && <span className="text-[12px]" style={{ color: 'var(--red)' }}>{error}</span>}
+                {!loading && !error && dataUrl && isImage && (
+                    <img src={dataUrl} alt={fileName} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+                )}
+                {!loading && !error && dataUrl && isVideo && (
+                    <video src={dataUrl} controls autoPlay style={{ maxWidth: '100%', maxHeight: '100%' }} />
+                )}
+                {!loading && !error && dataUrl && !isImage && !isVideo && (
+                    <span className="text-[12px]" style={{ color: 'var(--text-dim)' }}>Unsupported media type: {resolvedMime}</span>
+                )}
+            </div>
+        </div>
+    )
+}
+
+function formatBytes(n: number): string {
+    if (n < 1024) return `${n} B`
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+    if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
+    return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
+}

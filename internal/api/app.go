@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -2008,6 +2010,9 @@ func (a *App) handleAgentEvent(sessionID, model string, ev agent2.Event) {
 		se.Content = ev.Content
 		se.RetryAttempt = ev.RetryAttempt
 		se.RetryMax = ev.RetryMax
+	case agent2.EventToolProgress:
+		se.Type = "tool_progress"
+		se.Content = ev.Content
 	}
 
 	a.eventBus.Emit(se)
@@ -5427,3 +5432,328 @@ func (a *App) DebugGetKeys(sessionID string, scopesID int) ([]dap.DapScope, erro
 // 		}
 // 	}()
 // }
+
+// UploadMedia saves a base64-encoded video or image dropped onto the chat
+// input into the project directory and returns the project-relative path.
+// Files land in <project>/.monika/media/<timestamp>-<sanitized-name> so
+// they don't clutter normal workspace browsing.
+func (a *App) UploadMedia(projectPath, fileName, dataB64 string) (*MediaUploadResult, error) {
+	if projectPath == "" {
+		return nil, fmt.Errorf("projectPath is required")
+	}
+	if fileName == "" {
+		return nil, fmt.Errorf("fileName is required")
+	}
+
+	// Resolve & validate the project path so we don't accept relative inputs.
+	absProject, err := filepath.Abs(projectPath)
+	if err != nil {
+		return nil, fmt.Errorf("invalid project path: %w", err)
+	}
+	if real, err := filepath.EvalSymlinks(absProject); err == nil {
+		absProject = real
+	}
+	info, err := os.Stat(absProject)
+	if err != nil || !info.IsDir() {
+		return nil, fmt.Errorf("project directory does not exist: %s", projectPath)
+	}
+
+	data, err := base64.StdEncoding.DecodeString(dataB64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid base64: %w", err)
+	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("empty file data")
+	}
+	const maxUploadBytes = 500 * 1024 * 1024 // 500 MB
+	if len(data) > maxUploadBytes {
+		return nil, fmt.Errorf("file too large: %d bytes (max %d)", len(data), maxUploadBytes)
+	}
+
+	mime := detectMediaMime(fileName, data)
+	isVideo := strings.HasPrefix(mime, "video/")
+	isImage := strings.HasPrefix(mime, "image/")
+	if !isVideo && !isImage {
+		return nil, fmt.Errorf("unsupported file type: %s (only images and videos)", fileName)
+	}
+
+	mediaDir := filepath.Join(absProject, ".monika", "media")
+	if err := os.MkdirAll(mediaDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create media dir: %w", err)
+	}
+	// Reject the upload if the path would resolve outside the project
+	// because .monika (or any intermediate component) is a symlink to
+	// elsewhere on disk. The previous check only verified .monika/media
+	// itself, so a `.monika -> /tmp` redirect slipped through and
+	// uploads landed in /tmp/media instead of inside the project.
+	if err := assertNoSymlinkEscape(absProject, mediaDir); err != nil {
+		return nil, err
+	}
+
+	safe := sanitizeFilename(fileName)
+	if safe == "" {
+		safe = "upload.bin"
+	}
+	// Combine second-precision timestamp with a short random suffix so two
+	// drops in the same second with the same filename can't collide on
+	// disk or in the frontend's paste-store key. The suffix flows into
+	// the returned FileName so the chip label is also unique.
+	now := time.Now().UTC()
+	stamp := now.Format("20060102-150405") + "-" + randHex(6)
+	diskName := stamp + "-" + safe
+	relPath := filepath.ToSlash(filepath.Join(".monika", "media", diskName))
+	absPath := filepath.Join(absProject, ".monika", "media", diskName)
+	if err := os.WriteFile(absPath, data, 0o644); err != nil {
+		return nil, fmt.Errorf("write file: %w", err)
+	}
+
+	return &MediaUploadResult{
+		Path:     relPath,
+		FileName: diskName,
+		Size:     int64(len(data)),
+		MimeType: mime,
+		IsVideo:  isVideo,
+		IsImage:  isImage,
+	}, nil
+}
+
+// randHex returns n hex characters of crypto-random data. Used to disambiguate
+// uploads within the same second without needing global locking.
+func randHex(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	b := make([]byte, (n+1)/2)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)[:n]
+}
+
+// ReadMediaAsBase64 returns a base64-encoded copy of a media file inside the
+// project directory so the Preview panel can render images and videos
+// without dragging them through Wails IPC untyped.
+func (a *App) ReadMediaAsBase64(projectPath, filePath string) (*MediaContent, error) {
+	if projectPath == "" {
+		return nil, fmt.Errorf("projectPath is required")
+	}
+	if filePath == "" {
+		return nil, fmt.Errorf("filePath is required")
+	}
+
+	absProject, err := filepath.Abs(projectPath)
+	if err != nil {
+		return nil, fmt.Errorf("invalid project path: %w", err)
+	}
+	if real, err := filepath.EvalSymlinks(absProject); err == nil {
+		absProject = real
+	}
+	absFile := filePath
+	if !filepath.IsAbs(absFile) {
+		absFile = filepath.Join(absProject, filePath)
+	}
+	if real, err := filepath.EvalSymlinks(absFile); err == nil {
+		absFile = real
+	}
+	rel, err := filepath.Rel(absProject, absFile)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return nil, fmt.Errorf("path %s is outside project directory", filePath)
+	}
+
+	const maxReadBytes = 200 * 1024 * 1024 // 200 MB cap on Preview loads
+	info, err := os.Stat(absFile)
+	if err != nil {
+		return nil, fmt.Errorf("stat: %w", err)
+	}
+	if info.Size() > maxReadBytes {
+		return nil, fmt.Errorf("file too large for preview: %d bytes (max %d)", info.Size(), maxReadBytes)
+	}
+
+	data, err := os.ReadFile(absFile)
+	if err != nil {
+		return nil, fmt.Errorf("read: %w", err)
+	}
+	mime := detectMediaMime(filepath.Base(absFile), data)
+
+	return &MediaContent{
+		Path:     filepath.ToSlash(rel),
+		FileName: filepath.Base(absFile),
+		MimeType: mime,
+		DataB64:  base64.StdEncoding.EncodeToString(data),
+		Size:     info.Size(),
+	}, nil
+}
+
+// detectMediaMime identifies a media file by its magic bytes, using the
+// extension only as a tiebreaker to disambiguate formats with shared
+// signatures (e.g. mp4 vs mov both start with `ftyp`). The magic-byte
+// check is authoritative — an attacker who renames a binary blob to
+// .mp4 cannot trick the upload pipeline into passing it to ffmpeg, and
+// a missing/unknown magic rejects the file regardless of extension.
+// Empty string means the format is not supported.
+
+// GetMediaThumbnails extracts up to maxN evenly-spaced thumbnails from a
+// video file inside the project. Used by the frontend MediaToolBlock to
+// lazily load frame strips without bloating the LLM-facing tool result.
+func (a *App) GetMediaThumbnails(projectPath, filePath string, maxN int) ([]MediaThumbnail, error) {
+	if projectPath == "" {
+		return nil, fmt.Errorf("projectPath is required")
+	}
+	if filePath == "" {
+		return nil, fmt.Errorf("filePath is required")
+	}
+	absProject, err := filepath.Abs(projectPath)
+	if err != nil {
+		return nil, fmt.Errorf("invalid project path: %w", err)
+	}
+	if real, err := filepath.EvalSymlinks(absProject); err == nil {
+		absProject = real
+	}
+	absFile := filePath
+	if !filepath.IsAbs(absFile) {
+		absFile = filepath.Join(absProject, filePath)
+	}
+	if real, err := filepath.EvalSymlinks(absFile); err == nil {
+		absFile = real
+	}
+	rel, err := filepath.Rel(absProject, absFile)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return nil, fmt.Errorf("path %s is outside project directory", filePath)
+	}
+
+	// Bound the total work so a request that outlives the caller (e.g.
+	// the frontend unmounts the card mid-flight) still terminates. Wails
+	// v3 doesn't propagate client cancellation through the RPC, so the
+	// best we can do here is a hard timeout.
+	ctx, cancel := context.WithTimeout(a.ctx, 2*time.Minute)
+	defer cancel()
+	thumbs, err := builtin.ExtractMediaThumbnails(ctx, absFile, maxN)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]MediaThumbnail, 0, len(thumbs))
+	for _, t := range thumbs {
+		out = append(out, MediaThumbnail{T: t.T, URL: t.URL})
+	}
+	return out, nil
+}
+
+// Empty string means the format is not supported.
+func detectMediaMime(name string, data []byte) string {
+	ext := strings.ToLower(filepath.Ext(name))
+	// Magic-byte pass first.
+	if len(data) >= 8 {
+		if data[0] == 0x89 && data[1] == 'P' && data[2] == 'N' && data[3] == 'G' {
+			return "image/png"
+		}
+		if data[0] == 0xFF && data[1] == 0xD8 {
+			return "image/jpeg"
+		}
+		if len(data) >= 4 && string(data[0:4]) == "GIF8" {
+			return "image/gif"
+		}
+		if len(data) >= 12 && string(data[0:4]) == "RIFF" && string(data[8:12]) == "WEBP" {
+			return "image/webp"
+		}
+		if len(data) >= 12 && string(data[4:8]) == "ftyp" {
+			// Both mp4 and mov use the ISOBMFF ftyp box. Disambiguate by
+			// the major brand inside the box (bytes 8-12). Fall back to
+			// mp4 if the brand is unknown.
+			if len(data) >= 12 {
+				brand := string(data[8:12])
+				switch brand {
+				case "qt  ":
+					return "video/quicktime"
+				case "mp42", "isom", "avc1", "M4V ", "M4A ", "dash":
+					return "video/mp4"
+				default:
+					_ = ext // unknown brand — accept based on extension below
+				}
+			}
+			switch ext {
+			case ".mov":
+				return "video/quicktime"
+			case ".mp4", ".m4v":
+				return "video/mp4"
+			}
+			// Unknown ftyp box with unknown extension — still a real video
+			// container; default to mp4 since that's the most common.
+			return "video/mp4"
+		}
+		if len(data) >= 4 && data[0] == 0x1A && data[1] == 0x45 && data[2] == 0xDF && data[3] == 0xA3 {
+			// EBML is shared by webm and mkv.
+			if ext == ".mkv" {
+				return "video/x-matroska"
+			}
+			return "video/webm"
+		}
+		if len(data) >= 12 && string(data[0:4]) == "RIFF" && string(data[8:12]) == "AVI " {
+			return "video/x-msvideo"
+		}
+	}
+	// No matching magic bytes — extension alone is not enough to accept
+	// a media file, since the whole point of this guard is to prevent
+	// attackers from sneaking arbitrary bytes past the upload pipeline.
+	return ""
+}
+
+// assertNoSymlinkEscape verifies that every component of mediaDir
+// (relative to absProject) resolves to a real path still under the
+// resolved absProject. Catches both `.monika/media` being a symlink
+// AND `.monika` itself being a symlink — either redirects the write
+// outside the project. The caller must have created mediaDir with
+// MkdirAll first; the resolved path is allowed to differ from the
+// original as long as it stays within the project's resolved root.
+func assertNoSymlinkEscape(absProject, mediaDir string) error {
+	resolvedProject, err := filepath.EvalSymlinks(absProject)
+	if err != nil {
+		return fmt.Errorf("resolve project: %w", err)
+	}
+	resolvedMedia, err := filepath.EvalSymlinks(mediaDir)
+	if err != nil {
+		return fmt.Errorf("resolve media dir: %w", err)
+	}
+	// Lstat each component between project and media to reject
+	// intermediate symlinks (e.g. .monika → /tmp).
+	rel, err := filepath.Rel(resolvedProject, resolvedMedia)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return fmt.Errorf("media dir resolves outside project directory")
+	}
+	// Walk every component of the relative path and ensure none of
+	// them is a symlink. EvalSymlinks above already followed them,
+	// but this gives a precise error message.
+	cur := resolvedProject
+	for _, seg := range strings.Split(filepath.ToSlash(rel), "/") {
+		if seg == "" || seg == "." {
+			continue
+		}
+		cur = filepath.Join(cur, seg)
+		if linfo, lerr := os.Lstat(cur); lerr == nil && linfo.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("path component %q is a symlink, refusing to write", seg)
+		}
+	}
+	return nil
+}
+
+// sanitizeFilename strips path separators and a few dangerous characters
+// from a user-supplied filename so the resulting path stays inside the
+// project's media directory.
+func sanitizeFilename(name string) string {
+	name = filepath.Base(name)
+	replacer := strings.NewReplacer(
+		" ", "_",
+		"..", "_",
+		"/", "_",
+		"\\", "_",
+		":", "_",
+		"\x00", "",
+	)
+	cleaned := replacer.Replace(name)
+	if len(cleaned) > 120 {
+		ext := filepath.Ext(cleaned)
+		base := cleaned[:len(cleaned)-len(ext)]
+		if len(base) > 100 {
+			base = base[:100]
+		}
+		cleaned = base + ext
+	}
+	return cleaned
+}
