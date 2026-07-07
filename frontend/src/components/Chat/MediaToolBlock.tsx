@@ -204,7 +204,35 @@ function ResultState({ toolName, parsed, onOpenMedia }: ResultStateProps) {
 }
 
 function ImageResult({ parsed, onOpenMedia }: { parsed: VideoResult; onOpenMedia?: (filePath: string, fileName: string, mime: string) => void }) {
-    const thumb = parsed.thumbnail || parsed.thumbnails?.[0]?.url
+    // Inline preview is fetched lazily via App.ReadMediaAsBase64 — the
+    // image bytes are NOT included in the LLM-facing tool result
+    // (commit history would otherwise bloat by ~27MB per image call).
+    const [thumb, setThumb] = useState<string | null>(null)
+    const [loading, setLoading] = useState(true)
+    const [error, setError] = useState<string | null>(null)
+    const projectPath = useStore(s => s.projectPath)
+
+    useEffect(() => {
+        let cancelled = false
+        if (!parsed.filePath || !projectPath) {
+            setError('No project open')
+            setLoading(false)
+            return
+        }
+        setLoading(true)
+        Call.ByName('monika/internal/api.App.ReadMediaAsBase64', projectPath, parsed.filePath)
+            .then((res: any) => {
+                if (cancelled) return
+                if (res && res.dataB64) {
+                    const mime = res.mimeType || parsed.mimeType || 'image/png'
+                    setThumb(`data:${mime};base64,${res.dataB64}`)
+                }
+            })
+            .catch((e: any) => { if (!cancelled) setError(e?.message || 'failed to load image') })
+            .finally(() => { if (!cancelled) setLoading(false) })
+        return () => { cancelled = true }
+    }, [parsed.filePath, projectPath, parsed.mimeType])
+
     const handleClick = () => {
         if (parsed.filePath && onOpenMedia) {
             onOpenMedia(parsed.filePath, parsed.fileName || 'image', parsed.mimeType || 'image/png')
@@ -212,17 +240,27 @@ function ImageResult({ parsed, onOpenMedia }: { parsed: VideoResult; onOpenMedia
     }
     return (
         <div className="space-y-2">
-            {thumb && (
-                <button
-                    type="button"
-                    onClick={handleClick}
-                    className="block w-full rounded overflow-hidden text-left"
-                    style={{ background: 'rgba(255,255,255,0.02)', maxHeight: 240, cursor: onOpenMedia ? 'zoom-in' : 'default', border: 0, padding: 0 }}
-                    disabled={!onOpenMedia}
-                >
+            <button
+                type="button"
+                onClick={handleClick}
+                className="block w-full rounded overflow-hidden text-left"
+                style={{ background: 'rgba(255,255,255,0.02)', maxHeight: 240, cursor: onOpenMedia ? 'zoom-in' : 'default', border: 0, padding: 0 }}
+                disabled={!onOpenMedia}
+            >
+                {thumb && (
                     <img src={thumb} alt={parsed.fileName || 'image'} style={{ width: '100%', maxHeight: 240, objectFit: 'contain', display: 'block' }} />
-                </button>
-            )}
+                )}
+                {!thumb && loading && (
+                    <div className="flex items-center justify-center" style={{ height: 120, color: 'var(--text-dim)' }}>
+                        Loading preview…
+                    </div>
+                )}
+                {!thumb && !loading && error && (
+                    <div className="flex items-center justify-center text-[12px]" style={{ height: 120, color: 'var(--red)' }}>
+                        {error}
+                    </div>
+                )}
+            </button>
             {parsed.summary && (
                 <MarkdownBlock content={parsed.summary} streaming={false} />
             )}

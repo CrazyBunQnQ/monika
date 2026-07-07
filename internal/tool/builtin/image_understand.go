@@ -131,31 +131,30 @@ func (i *imageUnderstand) Execute(ctx context.Context, args json.RawMessage) (to
 
 	// Wrap in the same JSON shape MediaToolBlock parses, so the frontend
 	// can render the description and the original image preview uniformly
-	// for both image and video tools. Thumbnails carries the original
-	// image as a single-entry list so the preview button has something
-	// to click; it is dropped from the LLM-facing JSON in a follow-up
-	// patch via GetMediaThumbnails.
+	// for both image and video tools. The thumbnail is intentionally
+	// NOT included in the JSON — image_understand returns to the LLM
+	// only the textual summary, mirroring the video_understand shape
+	// after commit 5e7093c. The frontend fetches the inline preview
+	// image via App.ReadMediaAsBase64 on demand when the card renders.
 	result := imageResult{
-		FilePath:  p.FilePath,
-		FileName:  filepath.Base(safe),
-		MimeType:  mime,
-		Size:      int64(len(data)),
-		Question:  p.Question,
-		Summary:   resp,
-		Thumbnail: "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data),
+		FilePath: p.FilePath,
+		FileName: filepath.Base(safe),
+		MimeType: mime,
+		Size:     int64(len(data)),
+		Question: p.Question,
+		Summary:  resp,
 	}
 	out, _ := json.Marshal(result)
 	return tool.ExecutionResult{Content: string(out)}, nil
 }
 
 type imageResult struct {
-	FilePath  string `json:"filePath"`
-	FileName  string `json:"fileName"`
-	MimeType  string `json:"mimeType"`
-	Size      int64  `json:"size"`
-	Question  string `json:"question,omitempty"`
-	Summary   string `json:"summary"`
-	Thumbnail string `json:"thumbnail,omitempty"`
+	FilePath string `json:"filePath"`
+	FileName string `json:"fileName"`
+	MimeType string `json:"mimeType"`
+	Size     int64  `json:"size"`
+	Question string `json:"question,omitempty"`
+	Summary  string `json:"summary"`
 }
 
 // detectImageMime returns the MIME type from magic bytes only. An
