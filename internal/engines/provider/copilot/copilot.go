@@ -1,0 +1,98 @@
+package copilot
+
+import (
+	"context"
+	"fmt"
+
+	"monika/internal/config"
+	"monika/internal/version"
+	copilotapi "monika/pkg/copilot"
+	"monika/pkg/engine"
+)
+
+func init() {
+	engine.Register(&CopilotProvider{})
+}
+
+type CopilotProvider struct {
+	config         map[string]any
+	onTokenRefresh copilotapi.TokenRefreshCallback
+}
+
+func (p *CopilotProvider) ID() string                 { return "copilot" }
+func (p *CopilotProvider) NewInstance() engine.Engine { return &CopilotProvider{} }
+func (p *CopilotProvider) Capabilities() []engine.Capability {
+	return []engine.Capability{engine.CapProvider}
+}
+
+func (p *CopilotProvider) Init(_ context.Context, cfg map[string]any) error {
+	p.config = cfg
+	return nil
+}
+
+func (p *CopilotProvider) Shutdown(_ context.Context) error { return nil }
+
+// SetOnTokenRefresh injects a callback for persisting refreshed tokens.
+func (p *CopilotProvider) SetOnTokenRefresh(cb copilotapi.TokenRefreshCallback) {
+	p.onTokenRefresh = cb
+}
+
+func (p *CopilotProvider) StreamChat(ctx context.Context, req engine.ChatRequest) (<-chan engine.ChatEvent, error) {
+	baseURL := ""
+	token := ""
+	model := ""
+	refreshToken := ""
+
+	if p.config != nil {
+		if v, ok := p.config["base_url"].(string); ok {
+			baseURL = v
+		}
+		if v, ok := p.config["api_key"].(string); ok {
+			token = v
+		}
+		if v, ok := p.config["refresh_token"].(string); ok {
+			refreshToken = v
+		}
+	}
+	if req.Model != "" {
+		model = req.Model
+	} else if p.config != nil {
+		if v, ok := p.config["model"].(string); ok {
+			model = v
+		}
+	}
+
+	if baseURL == "" {
+		baseURL = copilotapi.CopilotAPIURL
+	}
+	if model == "" {
+		model = "gpt-4o"
+	}
+	if token == "" {
+		return nil, fmt.Errorf("copilot: no token configured")
+	}
+
+	hasVision := copilotapi.DetectVision(req.Messages)
+
+	return copilotapi.StreamChat(ctx, baseURL, token, model, req.Messages, req.Tools,
+		copilotapi.WithEditorVersion("monika/"+version.Version),
+		copilotapi.WithRefreshToken(refreshToken),
+		copilotapi.WithRefreshCallback(p.onTokenRefresh),
+		copilotapi.WithVision(hasVision),
+	)
+}
+
+func (p *CopilotProvider) ListModels(ctx context.Context) ([]engine.Model, error) {
+	if p.config != nil {
+		if raw, ok := p.config["models"]; ok {
+			if entries, ok := raw.([]config.ModelEntry); ok && len(entries) > 0 {
+				models := make([]engine.Model, len(entries))
+				for i, e := range entries {
+					models[i] = engine.Model{ID: e.ID, DisplayName: e.DisplayName}
+				}
+				return models, nil
+			}
+		}
+	}
+	return nil, nil
+}
