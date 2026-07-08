@@ -3832,6 +3832,9 @@ func (a *App) syncCopilotModels(providerID, token string) {
 	}
 	models := make([]config2.ModelEntry, 0, len(apiModels))
 	for _, m := range apiModels {
+		if !m.ModelPickerEnabled {
+			continue
+		}
 		models = append(models, config2.ModelEntry{
 			ID:              m.ID,
 			DisplayName:     m.Name,

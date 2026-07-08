@@ -96,6 +96,9 @@ func (p *CopilotProvider) ListModels(ctx context.Context) ([]engine.Model, error
 		if err == nil && len(apiModels) > 0 {
 			models := make([]engine.Model, 0, len(apiModels))
 			for _, m := range apiModels {
+				if !m.ModelPickerEnabled {
+					continue
+				}
 				models = append(models, engine.Model{ID: m.ID, DisplayName: m.Name})
 			}
 			return models, nil

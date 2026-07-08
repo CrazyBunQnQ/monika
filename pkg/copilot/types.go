@@ -26,9 +26,10 @@ type TokenResponse struct {
 
 // CopilotModel represents a model from GET /models.
 type CopilotModel struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	Capabilities struct {
+	ID                 string `json:"id"`
+	Name               string `json:"name"`
+	ModelPickerEnabled bool   `json:"model_picker_enabled"`
+	Capabilities       struct {
 		Limits struct {
 			MaxContextWindowTokens int `json:"max_context_window_tokens"`
 			MaxOutputTokens        int `json:"max_output_tokens"`
