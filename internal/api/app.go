@@ -3813,6 +3813,47 @@ func (a *App) modelLimits(providerID, modelID string) (contextTokens, outputToke
 	return 0, 0
 }
 
+// syncCopilotModels fetches the real model list from the Copilot API and writes
+// it into the provider's config, replacing any models.dev-sourced entries.
+func (a *App) syncCopilotModels(providerID, token string) {
+	pc, ok := a.cfg.ModelProviders[providerID]
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(a.ctx, 15*time.Second)
+	defer cancel()
+	apiModels, err := copilot.FetchModels(ctx, token)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[monika] syncCopilotModels: %v\n", err)
+		return
+	}
+	if len(apiModels) == 0 {
+		return
+	}
+	models := make([]config2.ModelEntry, 0, len(apiModels))
+	for _, m := range apiModels {
+		models = append(models, config2.ModelEntry{
+			ID:              m.ID,
+			DisplayName:     m.Name,
+			ContextLimit:    int64(m.Capabilities.Limits.MaxContextWindowTokens),
+			OutputLimit:     int64(m.Capabilities.Limits.MaxOutputTokens),
+			Enabled:         true,
+			SupportedInputs: copilotSupportedInputs(m),
+		})
+	}
+	pc.Models = models
+	pc.ModelsDevProvider = "" // Copilot doesn't use models.dev
+	a.cfg.ModelProviders[providerID] = pc
+}
+
+func copilotSupportedInputs(m copilot.CopilotModel) []string {
+	inputs := []string{"text"}
+	if m.Capabilities.Supports.Vision {
+		inputs = append(inputs, "image")
+	}
+	return inputs
+}
+
 // syncProviderFromModelsDev enriches a provider's model list from the models.dev
 // catalog. It populates missing context/output limits for existing models and
 // auto-appends new catalog models (disabled). Providers themselves are never auto-added.
@@ -4663,8 +4704,11 @@ func (a *App) SaveProvider(args json.RawMessage) error {
 	}
 	a.cfg.ModelProviders[req.ID] = pc
 
-	// Auto-populate model limits from models.dev on first save.
-	if len(pc.Models) == 0 || pc.ModelsDevProvider == "" {
+	// Copilot providers: fetch real model list from the Copilot API instead of models.dev.
+	if pc.WireAPI == "copilot" && pc.APIKey != "" {
+		a.syncCopilotModels(req.ID, pc.APIKey)
+	} else if len(pc.Models) == 0 || pc.ModelsDevProvider == "" {
+		// Auto-populate model limits from models.dev on first save.
 		a.syncProviderFromModelsDev(req.ID)
 	}
 
