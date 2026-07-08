@@ -22,6 +22,7 @@ type streamConfig struct {
 	refreshToken  string
 	onRefresh     TokenRefreshCallback
 	hasVision     bool
+	integrationID string
 }
 
 // WithEditorVersion sets the Editor-Version header.
@@ -37,6 +38,9 @@ func WithRefreshCallback(cb TokenRefreshCallback) Option {
 
 // WithVision controls the Copilot-Vision-Request header.
 func WithVision(v bool) Option { return func(c *streamConfig) { c.hasVision = v } }
+
+// WithIntegrationID sets the Copilot-Integration-Id header.
+func WithIntegrationID(id string) Option { return func(c *streamConfig) { c.integrationID = id } }
 
 var refreshMu sync.Mutex
 
@@ -66,6 +70,9 @@ func StreamChat(
 		}
 		if cfg.hasVision {
 			req.Header.Set("Copilot-Vision-Request", "true")
+		}
+		if cfg.integrationID != "" {
+			req.Header.Set("Copilot-Integration-Id", cfg.integrationID)
 		}
 	}
 

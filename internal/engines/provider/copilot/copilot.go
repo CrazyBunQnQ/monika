@@ -79,6 +79,7 @@ func (p *CopilotProvider) StreamChat(ctx context.Context, req engine.ChatRequest
 		copilotapi.WithRefreshToken(refreshToken),
 		copilotapi.WithRefreshCallback(p.onTokenRefresh),
 		copilotapi.WithVision(hasVision),
+		copilotapi.WithIntegrationID("vscode-chat"),
 	)
 }
 
