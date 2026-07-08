@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	DefaultClientID = "Ov23li8tweQw6odWQebz"
+	DefaultClientID = "Ov23liv2lamTy8W1WDGx"
 	GitHubBaseURL   = "https://github.com"
 	CopilotAPIURL   = "https://api.githubcopilot.com"
 	TokenScope      = "read:user"
