@@ -76,6 +76,11 @@ export interface CopilotTokenResult {
     error?: string
 }
 
+export interface ProxyConfig {
+    enabled: boolean
+    url: string
+}
+
 interface ToolCall {
     id?: string
     name: string
@@ -388,6 +393,8 @@ interface AppState {
     loadProviderDetails: () => Promise<void>
     loadAvailableProviders: () => Promise<AvailableProviderInfo[]>
     saveProviderDetail: (cfg: ProviderFull) => Promise<void>
+    loadProxyConfig: () => Promise<ProxyConfig>
+    saveProxyConfig: (cfg: ProxyConfig) => Promise<void>
     startCopilotLogin: () => Promise<CopilotLoginInfo>
     pollCopilotLogin: (deviceCode: string) => Promise<CopilotTokenResult>
     deleteProviderDetail: (id: string) => Promise<void>
@@ -1853,6 +1860,12 @@ export const useStore = create<AppState>((set, get) => ({
     },
     startCopilotLogin: async () => {
         return await Call.ByName('monika/internal/api.App.StartCopilotLogin') as CopilotLoginInfo
+    },
+    loadProxyConfig: async () => {
+        return await Call.ByName('monika/internal/api.App.GetProxyConfig') as ProxyConfig
+    },
+    saveProxyConfig: async (cfg: ProxyConfig) => {
+        await Call.ByName('monika/internal/api.App.SaveProxyConfig', cfg)
     },
     pollCopilotLogin: async (deviceCode: string) => {
         return await Call.ByName('monika/internal/api.App.PollCopilotLogin', deviceCode) as CopilotTokenResult
