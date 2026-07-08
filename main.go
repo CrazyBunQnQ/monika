@@ -715,6 +715,11 @@ func syncModelsDev(home string, cfg *config2.Config) {
 	// users must explicitly add providers through the Settings UI.
 	if len(cfg.ModelProviders) > 0 {
 		for key, pc := range cfg.ModelProviders {
+			// Copilot providers are synced from the Copilot API, not models.dev.
+			if pc.WireAPI == "copilot" {
+				cfg.ModelProviders[key] = pc
+				continue
+			}
 			existingIDs := make(map[string]bool, len(pc.Models))
 			for i := range pc.Models {
 				m := &pc.Models[i]
