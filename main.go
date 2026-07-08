@@ -103,6 +103,9 @@ func main() {
 							ID: srv.ID, Type: srv.Type, Command: srv.Command,
 							Args: srv.Args, Env: srv.Env, URL: srv.URL, Headers: srv.Headers,
 						}
+						if mcp.IsConnected(srv.ID) {
+							continue
+						}
 						mcpCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 						conn, err := mcp.ConnectServer(mcpCtx, cfg)
 						cancel()
@@ -458,7 +461,7 @@ changes as you install or configure them. Always search before assuming:
 		for i, s := range servers {
 			result[i] = builtin.MCPServerInfo{
 				ID: s.ID, Type: s.Type, Command: s.Command,
-				Args: s.Args, Env: s.Env, URL: s.URL, Status: s.Status,
+				Args: s.Args, URL: s.URL, Status: s.Status, Scope: s.Scope,
 			}
 		}
 		return result

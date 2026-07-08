@@ -148,6 +148,7 @@ export interface MCPServerInfo {
     url: string
     headers: Record<string, string>
     status: 'connected' | 'disconnected'
+    scope?: 'project' | 'global'
 }
 
 export interface LSPServerStatus {
@@ -354,7 +355,7 @@ interface AppState {
     setLspDiagnostics: (filePath: string, diags: LspDiagnostic[]) => void
     setLspSymbols: (filePath: string, syms: LspSymbol[]) => void
     saveMCPServer: (srv: MCPServerInfo) => Promise<void>
-    deleteMCPServer: (id: string) => Promise<void>
+    deleteMCPServer: (id: string, scope?: 'project' | 'global') => Promise<void>
     importMCPServers: (json: string) => Promise<string[]>
     testMCPServer: (id: string) => Promise<string[]>
     testMCPServerConfig: (config: { type: string; command: string; args: string[]; env: Record<string, string>; url: string; headers: Record<string, string> }) => Promise<string[]>
@@ -1760,13 +1761,19 @@ export const useStore = create<AppState>((set, get) => ({
         await get().loadMCPServers()
     },
 
-    deleteMCPServer: async (id) => {
-        await Call.ByName('monika/internal/api.App.DeleteMCPServer', { id })
+    deleteMCPServer: async (id, scope) => {
+        await Call.ByName('monika/internal/api.App.DeleteMCPServer', { id, scope: scope || 'project' })
         await get().loadMCPServers()
     },
 
     importMCPServers: async (json) => {
-        const ids = await Call.ByName('monika/internal/api.App.ImportMCPServers', json)
+        let payload = json
+        try {
+            const parsed = JSON.parse(json)
+            if (parsed && !parsed.scope) parsed.scope = 'project'
+            payload = JSON.stringify(parsed)
+        } catch { /* pass through raw json */ }
+        const ids = await Call.ByName('monika/internal/api.App.ImportMCPServers', payload)
         await get().loadMCPServers()
         return ids || []
     },
@@ -2530,6 +2537,18 @@ export function setupWailsEvents() {
         const { sessionId, sessionTitle } = ev.data || {}
         if (sessionId) {
             useStore.getState().openSessionTab(sessionId, sessionTitle || sessionId)
+        }
+    })
+
+    Events.On('mcp-discovered', (ev: any) => {
+        const data = ev.data
+        if (data?.count > 0) {
+            const names = (data.servers || []).map((s: any) => s.id).join(', ')
+            useNotificationStore.getState().pushToast(
+                `Discovered ${data.count} MCP server${data.count !== 1 ? 's' : ''}: ${names}`,
+                'info'
+            )
+            useStore.getState().loadMCPServers()
         }
     })
 }

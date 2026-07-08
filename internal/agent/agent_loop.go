@@ -580,6 +580,23 @@ func (a *AgentLoop) RunBlocking(ctx context.Context, conv *Conversation, userMes
 		})
 
 		for _, tc := range result.ToolCalls {
+			if a.pipeline != nil {
+				pctx := permission.CheckContext{
+					ToolName:   tc.Function.Name,
+					Args:       json.RawMessage(tc.Function.Arguments),
+					SessionID:  a.sessionID,
+					ProjectDir: a.projectDir,
+				}
+				if a.pipeline.Check(ctx, pctx) == permission.Deny {
+					conv.Messages = append(conv.Messages, engine.ChatMessage{
+						Role:       "tool",
+						Content:    fmt.Sprintf("execution of %s was denied by user", tc.Function.Name),
+						ToolCallID: tc.ID,
+					})
+					continue
+				}
+			}
+
 			t, ok := a.tools.Get(tc.Function.Name)
 			if !ok {
 				// Try MCP tools via O(1) resolve
@@ -618,23 +635,6 @@ func (a *AgentLoop) RunBlocking(ctx context.Context, conv *Conversation, userMes
 					})
 				}
 				continue
-			}
-
-			if a.pipeline != nil {
-				pctx := permission.CheckContext{
-					ToolName:   tc.Function.Name,
-					Args:       json.RawMessage(tc.Function.Arguments),
-					SessionID:  a.sessionID,
-					ProjectDir: a.projectDir,
-				}
-				if a.pipeline.Check(ctx, pctx) == permission.Deny {
-					conv.Messages = append(conv.Messages, engine.ChatMessage{
-						Role:       "tool",
-						Content:    fmt.Sprintf("execution of %s was denied by user", tc.Function.Name),
-						ToolCallID: tc.ID,
-					})
-					continue
-				}
 			}
 
 			toolCtx := tool.WithProjectDir(ctx, a.projectDir)
@@ -1005,6 +1005,23 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 				},
 			}
 
+			if a.pipeline != nil {
+				pctx := permission.CheckContext{
+					ToolName:   tc.Function.Name,
+					Args:       json.RawMessage(tc.Function.Arguments),
+					SessionID:  a.sessionID,
+					ProjectDir: a.projectDir,
+				}
+				if a.pipeline.Check(ctx, pctx) == permission.Deny {
+					results[i].output = "execution denied by user"
+					results[i].status = "denied"
+					results[i].preChecked = true
+					executed[dk] = cachedResult{output: "execution denied by user", status: "denied"}
+					sendToolOutput(tc, "execution denied by user", "denied", nil, false, "", "")
+					continue
+				}
+			}
+
 			t, ok := a.tools.Get(tc.Function.Name)
 			if !ok {
 				found := false
@@ -1030,23 +1047,6 @@ func (a *AgentLoop) runStreaming(ctx context.Context, conv *Conversation, userMe
 					sendToolOutput(tc, results[i].output, "error", nil, false, "", "")
 				}
 				continue
-			}
-
-			if a.pipeline != nil {
-				pctx := permission.CheckContext{
-					ToolName:   tc.Function.Name,
-					Args:       json.RawMessage(tc.Function.Arguments),
-					SessionID:  a.sessionID,
-					ProjectDir: a.projectDir,
-				}
-				if a.pipeline.Check(ctx, pctx) == permission.Deny {
-					results[i].output = "execution denied by user"
-					results[i].status = "denied"
-					results[i].preChecked = true
-					executed[dk] = cachedResult{output: "execution denied by user", status: "denied"}
-					sendToolOutput(tc, "execution denied by user", "denied", nil, false, "", "")
-					continue
-				}
 			}
 
 			toolCtx := tool.WithProjectDir(ctx, a.projectDir)
