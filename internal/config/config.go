@@ -27,6 +27,12 @@ type Config struct {
 	Tools          ToolsConfig                    `yaml:"tools" json:"tools"`
 	LSP            LSPConfig                      `yaml:"lsp" json:"lsp"`
 	Formatters     map[string]lsp.FormatterConfig `yaml:"formatters" json:"formatters"`
+	Proxy          ProxyConfig                    `yaml:"proxy" json:"proxy"`
+}
+
+type ProxyConfig struct {
+	Enabled bool   `yaml:"enabled" json:"enabled"`
+	URL     string `yaml:"url" json:"url"`
 }
 
 // AgentEntry defines a configurable agent that can be referenced by name.

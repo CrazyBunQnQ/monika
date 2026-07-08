@@ -27,6 +27,7 @@ import (
 	"monika/internal/update"
 	engine2 "monika/pkg/engine"
 	"monika/pkg/modelsdev"
+	"monika/pkg/proxy"
 
 	_ "monika/internal/engines/mcp"
 	_ "monika/internal/engines/provider/copilot"
@@ -416,6 +417,11 @@ changes as you install or configure them. Always search before assuming:
 
 	appService = api.NewApp(home, "", pr.Config, pr.Providers, pr.Model, registry, loopOpts, taskStoreAccessor, agentRegistry, taskRunner, mcpRegistry, kbStore, systemPrompt)
 	api.InjectCopilotRefreshCallbacks(appService)
+
+	// Initialize proxy from saved config.
+	if pr.Config.Proxy.Enabled && pr.Config.Proxy.URL != "" {
+		proxy.SetURL(pr.Config.Proxy.URL)
+	}
 
 	appService.InitTSBridge(tsBridge)
 	// Background memory maintenance: decay (archive/delete stale) + review (conflict/upgrade detection).

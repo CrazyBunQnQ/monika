@@ -11,6 +11,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"monika/pkg/proxy"
 )
 
 const (
@@ -38,7 +40,7 @@ var authHTTPClient = &http.Client{
 	Timeout: 30 * time.Second,
 	Transport: &http.Transport{
 		MaxIdleConnsPerHost: 2,
-		Proxy:               http.ProxyFromEnvironment,
+		Proxy:               proxy.Func(),
 	},
 }
 

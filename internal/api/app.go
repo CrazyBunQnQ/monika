@@ -36,6 +36,7 @@ import (
 	"monika/pkg/copilot"
 	engine2 "monika/pkg/engine"
 	"monika/pkg/modelsdev"
+	"monika/pkg/proxy"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -610,6 +611,33 @@ func (a *App) GetDefaultModel() map[string]string {
 
 func (a *App) SetDefaultModel(providerID, modelID string) {
 	a.PersistSelection(providerID, modelID)
+}
+
+func (a *App) GetProxyConfig() config2.ProxyConfig {
+	return a.cfg.Proxy
+}
+
+func (a *App) SaveProxyConfig(args json.RawMessage) error {
+	var req struct {
+		Enabled bool   `json:"enabled"`
+		URL     string `json:"url"`
+	}
+	if err := json.Unmarshal(args, &req); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	a.cfg.Proxy = config2.ProxyConfig{Enabled: req.Enabled, URL: req.URL}
+	a.mu.Unlock()
+
+	if req.Enabled && req.URL != "" {
+		proxy.SetURL(req.URL)
+	} else {
+		proxy.SetURL("")
+	}
+
+	return a.writeConfigForScope("global", func(cfg *config2.Config) {
+		cfg.Proxy = config2.ProxyConfig{Enabled: req.Enabled, URL: req.URL}
+	})
 }
 
 func (a *App) GetModels(providerID string) ([]engine2.Model, error) {
