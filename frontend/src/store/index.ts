@@ -49,6 +49,7 @@ export interface AvailableProviderInfo {
     display_name: string
     npm: string
     base_url: string
+    env?: string[]
     models: AvailableModelInfo[]
 }
 
@@ -57,6 +58,22 @@ export interface AvailableModelInfo {
     name: string
     context_limit: number
     output_limit: number
+}
+
+export interface CopilotLoginInfo {
+    device_code: string
+    user_code: string
+    verification_uri: string
+    expires_in: number
+    interval: number
+}
+
+export interface CopilotTokenResult {
+    access_token?: string
+    refresh_token?: string
+    expires_in?: number
+    status: 'success' | 'pending' | 'error'
+    error?: string
 }
 
 interface ToolCall {
@@ -174,6 +191,7 @@ export interface ProviderFull {
     api_key: string
     wire_api: string
     models: { id: string; name: string; context_limit?: number; output_limit?: number; enabled?: boolean }[]
+    token_expires_at?: number
 }
 
 interface AppState {
@@ -369,6 +387,8 @@ interface AppState {
     loadProviderDetails: () => Promise<void>
     loadAvailableProviders: () => Promise<AvailableProviderInfo[]>
     saveProviderDetail: (cfg: ProviderFull) => Promise<void>
+    startCopilotLogin: () => Promise<CopilotLoginInfo>
+    pollCopilotLogin: (deviceCode: string) => Promise<CopilotTokenResult>
     deleteProviderDetail: (id: string) => Promise<void>
     resetProjectState: () => void
     setSettingsScope: (scope: SettingsScope) => void
@@ -1829,6 +1849,12 @@ export const useStore = create<AppState>((set, get) => ({
     saveProviderDetail: async (cfg) => {
         await Call.ByName('monika/internal/api.App.SaveProvider', cfg)
         await get().loadProviderDetails()
+    },
+    startCopilotLogin: async () => {
+        return await Call.ByName('monika/internal/api.App.StartCopilotLogin') as CopilotLoginInfo
+    },
+    pollCopilotLogin: async (deviceCode: string) => {
+        return await Call.ByName('monika/internal/api.App.PollCopilotLogin', deviceCode) as CopilotTokenResult
     },
 
     deleteProviderDetail: async (id) => {
