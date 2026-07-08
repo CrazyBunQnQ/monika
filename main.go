@@ -29,6 +29,7 @@ import (
 	"monika/pkg/modelsdev"
 
 	_ "monika/internal/engines/mcp"
+	_ "monika/internal/engines/provider/copilot"
 	_ "monika/internal/engines/provider/openai"
 	_ "monika/internal/engines/skill"
 
@@ -414,6 +415,7 @@ changes as you install or configure them. Always search before assuming:
 	}
 
 	appService = api.NewApp(home, "", pr.Config, pr.Providers, pr.Model, registry, loopOpts, taskStoreAccessor, agentRegistry, taskRunner, mcpRegistry, kbStore, systemPrompt)
+	api.InjectCopilotRefreshCallbacks(appService)
 
 	appService.InitTSBridge(tsBridge)
 	// Background memory maintenance: decay (archive/delete stale) + review (conflict/upgrade detection).

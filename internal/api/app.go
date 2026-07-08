@@ -26,12 +26,14 @@ import (
 	config2 "monika/internal/config"
 	"monika/internal/dap"
 	"monika/internal/dbdiscovery"
+	copilotprovider "monika/internal/engines/provider/copilot"
 	"monika/internal/lsp"
 	"monika/internal/memory"
 	"monika/internal/permission"
 	tool2 "monika/internal/tool"
 	"monika/internal/tool/builtin"
 	"monika/internal/update"
+	"monika/pkg/copilot"
 	engine2 "monika/pkg/engine"
 	"monika/pkg/modelsdev"
 
@@ -534,12 +536,13 @@ func (a *App) GetProviders() []ProviderInfo {
 			})
 		}
 		result = append(result, ProviderInfo{
-			ID:          id,
-			DisplayName: displayName,
-			BaseURL:     pc.BaseURL,
-			APIKey:      pc.APIKey,
-			WireAPI:     pc.WireAPI,
-			Models:      models,
+			ID:             id,
+			DisplayName:    displayName,
+			BaseURL:        pc.BaseURL,
+			APIKey:         pc.APIKey,
+			WireAPI:        pc.WireAPI,
+			Models:         models,
+			TokenExpiresAt: pc.TokenExpiresAt,
 		})
 	}
 	sort.Slice(result, func(i, j int) bool {
@@ -584,6 +587,7 @@ func (a *App) GetAvailableProviders() ([]AvailableProviderInfo, error) {
 				DisplayName: displayName,
 				Npm:         p.Npm,
 				BaseURL:     p.API,
+				Env:         p.Env,
 				Models:      models,
 			})
 		}
@@ -4562,22 +4566,26 @@ func (a *App) DeleteMCPServer(args json.RawMessage) error {
 // SaveProvider creates or updates a model provider in config.
 func (a *App) SaveProvider(args json.RawMessage) error {
 	var req struct {
-		ID      string               `json:"id"`
-		Name    string               `json:"name"`
-		BaseURL string               `json:"base_url"`
-		APIKey  string               `json:"api_key"`
-		WireAPI string               `json:"wire_api"`
-		Models  []config2.ModelEntry `json:"models"`
+		ID             string               `json:"id"`
+		Name           string               `json:"name"`
+		BaseURL        string               `json:"base_url"`
+		APIKey         string               `json:"api_key"`
+		WireAPI        string               `json:"wire_api"`
+		Models         []config2.ModelEntry `json:"models"`
+		RefreshToken   string               `json:"refresh_token"`
+		TokenExpiresAt int64                `json:"token_expires_at"`
 	}
 	if err := json.Unmarshal(args, &req); err != nil {
 		return err
 	}
 	pc := config2.ProviderConfig{
-		Name:    req.Name,
-		BaseURL: req.BaseURL,
-		APIKey:  req.APIKey,
-		WireAPI: req.WireAPI,
-		Models:  req.Models,
+		Name:           req.Name,
+		BaseURL:        req.BaseURL,
+		APIKey:         req.APIKey,
+		WireAPI:        req.WireAPI,
+		Models:         req.Models,
+		RefreshToken:   req.RefreshToken,
+		TokenExpiresAt: req.TokenExpiresAt,
 	}
 	if existing, ok := a.cfg.ModelProviders[req.ID]; ok {
 		if pc.Name == "" {
@@ -4597,6 +4605,12 @@ func (a *App) SaveProvider(args json.RawMessage) error {
 		}
 		if pc.ModelsDevProvider == "" {
 			pc.ModelsDevProvider = existing.ModelsDevProvider
+		}
+		if pc.RefreshToken == "" {
+			pc.RefreshToken = existing.RefreshToken
+		}
+		if pc.TokenExpiresAt == 0 {
+			pc.TokenExpiresAt = existing.TokenExpiresAt
 		}
 	}
 	if a.cfg.ModelProviders == nil {
@@ -4625,9 +4639,11 @@ func (a *App) SaveProvider(args json.RawMessage) error {
 	}
 	eng := template.NewInstance()
 	if err := eng.Init(a.ctx, map[string]any{
-		"base_url": pc.BaseURL,
-		"api_key":  pc.APIKey,
-		"models":   pc.Models,
+		"base_url":         pc.BaseURL,
+		"api_key":          pc.APIKey,
+		"models":           pc.Models,
+		"refresh_token":    pc.RefreshToken,
+		"token_expires_at": pc.TokenExpiresAt,
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "[monika] SaveProvider: init engine %q failed: %v\n", engineID, err)
 		return nil
@@ -4639,7 +4655,93 @@ func (a *App) SaveProvider(args json.RawMessage) error {
 	}
 	a.providers[req.ID] = providerEng
 
+	// Inject token refresh callback for copilot providers.
+	if cp, ok := providerEng.(*copilotprovider.CopilotProvider); ok {
+		providerID := req.ID
+		cp.SetOnTokenRefresh(func(at, rt string, exp int64) {
+			a.updateCopilotToken(providerID, at, rt, exp)
+		})
+	}
+
 	return nil
+}
+
+// StartCopilotLogin initiates GitHub Device Flow authentication.
+func (a *App) StartCopilotLogin() (*CopilotLoginInfo, error) {
+	resp, err := copilot.RequestDeviceCode(a.ctx)
+	if err != nil {
+		return nil, fmt.Errorf("copilot login: %w", err)
+	}
+	return &CopilotLoginInfo{
+		DeviceCode:      resp.DeviceCode,
+		UserCode:        resp.UserCode,
+		VerificationURI: resp.VerificationURI,
+		ExpiresIn:       resp.ExpiresIn,
+		Interval:        resp.Interval,
+	}, nil
+}
+
+// PollCopilotLogin polls the OAuth token endpoint once.
+func (a *App) PollCopilotLogin(deviceCode string) (*CopilotTokenResult, error) {
+	resp, err := copilot.PollForToken(a.ctx, deviceCode)
+	if err != nil {
+		switch {
+		case errors.Is(err, copilot.ErrAuthorizationPending):
+			return &CopilotTokenResult{Status: "pending"}, nil
+		case errors.Is(err, copilot.ErrSlowDown):
+			return &CopilotTokenResult{Status: "pending", Error: "slow_down"}, nil
+		case errors.Is(err, copilot.ErrExpiredToken):
+			return &CopilotTokenResult{Status: "error", Error: "Device code expired"}, nil
+		case errors.Is(err, copilot.ErrAccessDenied):
+			return &CopilotTokenResult{Status: "error", Error: "Access denied by user"}, nil
+		default:
+			return &CopilotTokenResult{Status: "error", Error: err.Error()}, nil
+		}
+	}
+	return &CopilotTokenResult{
+		AccessToken:  resp.AccessToken,
+		RefreshToken: resp.RefreshToken,
+		ExpiresIn:    resp.ExpiresIn,
+		Status:       "success",
+	}, nil
+}
+
+// updateCopilotToken persists refreshed tokens to config.
+func (a *App) updateCopilotToken(providerID, accessToken, refreshToken string, expiresAt int64) {
+	a.mu.Lock()
+	if pc, ok := a.cfg.ModelProviders[providerID]; ok {
+		pc.APIKey = accessToken
+		if refreshToken != "" {
+			pc.RefreshToken = refreshToken
+		}
+		pc.TokenExpiresAt = expiresAt
+		a.cfg.ModelProviders[providerID] = pc
+	}
+	a.mu.Unlock()
+
+	a.writeConfigForScope("global", func(cfg *config2.Config) {
+		if pc, ok := cfg.ModelProviders[providerID]; ok {
+			pc.APIKey = accessToken
+			if refreshToken != "" {
+				pc.RefreshToken = refreshToken
+			}
+			pc.TokenExpiresAt = expiresAt
+			cfg.ModelProviders[providerID] = pc
+		}
+	})
+}
+
+// InjectCopilotRefreshCallbacks injects token refresh callbacks into all
+// existing copilot providers. Called once after App creation in main.go.
+func InjectCopilotRefreshCallbacks(a *App) {
+	for id, eng := range a.providers {
+		if cp, ok := eng.(*copilotprovider.CopilotProvider); ok {
+			providerID := id
+			cp.SetOnTokenRefresh(func(at, rt string, exp int64) {
+				a.updateCopilotToken(providerID, at, rt, exp)
+			})
+		}
+	}
 }
 
 // DeleteProvider removes a model provider from config by ID.
