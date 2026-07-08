@@ -83,12 +83,34 @@ func (p *CopilotProvider) StreamChat(ctx context.Context, req engine.ChatRequest
 }
 
 func (p *CopilotProvider) ListModels(ctx context.Context) ([]engine.Model, error) {
+	token := ""
+	if p.config != nil {
+		if v, ok := p.config["api_key"].(string); ok {
+			token = v
+		}
+	}
+
+	// Try fetching live model list from Copilot API.
+	if token != "" {
+		apiModels, err := copilotapi.FetchModels(ctx, token)
+		if err == nil && len(apiModels) > 0 {
+			models := make([]engine.Model, 0, len(apiModels))
+			for _, m := range apiModels {
+				models = append(models, engine.Model{ID: m.ID, DisplayName: m.Name})
+			}
+			return models, nil
+		}
+	}
+
+	// Fallback to config models.
 	if p.config != nil {
 		if raw, ok := p.config["models"]; ok {
 			if entries, ok := raw.([]config.ModelEntry); ok && len(entries) > 0 {
-				models := make([]engine.Model, len(entries))
-				for i, e := range entries {
-					models[i] = engine.Model{ID: e.ID, DisplayName: e.DisplayName}
+				models := make([]engine.Model, 0, len(entries))
+				for _, e := range entries {
+					if e.Enabled {
+						models = append(models, engine.Model{ID: e.ID, DisplayName: e.DisplayName})
+					}
 				}
 				return models, nil
 			}
