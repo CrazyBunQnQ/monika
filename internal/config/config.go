@@ -57,6 +57,8 @@ type ProviderConfig struct {
 	WireAPI           string       `yaml:"wire_api" json:"wire_api"`
 	ModelsDevProvider string       `yaml:"modelsdev_provider,omitempty" json:"modelsdev_provider,omitempty"`
 	Models            []ModelEntry `yaml:"models" json:"models"`
+	RefreshToken      string       `yaml:"refresh_token,omitempty" json:"refresh_token,omitempty"`
+	TokenExpiresAt    int64        `yaml:"token_expires_at,omitempty" json:"token_expires_at,omitempty"`
 }
 
 type SkillConfig struct {
