@@ -18,36 +18,46 @@ import (
 type Option func(*streamConfig)
 
 type streamConfig struct {
-	editorVersion string
-	refreshToken  string
-	onRefresh     TokenRefreshCallback
-	hasVision     bool
-	integrationID string
-}
-
-// WithEditorVersion sets the Editor-Version header.
-func WithEditorVersion(v string) Option { return func(c *streamConfig) { c.editorVersion = v } }
-
-// WithRefreshToken enables automatic token refresh on 401.
-func WithRefreshToken(rt string) Option { return func(c *streamConfig) { c.refreshToken = rt } }
-
-// WithRefreshCallback registers a callback for token refresh persistence.
-func WithRefreshCallback(cb TokenRefreshCallback) Option {
-	return func(c *streamConfig) { c.onRefresh = cb }
+	hasVision bool
 }
 
 // WithVision controls the Copilot-Vision-Request header.
 func WithVision(v bool) Option { return func(c *streamConfig) { c.hasVision = v } }
 
-// WithIntegrationID sets the Copilot-Integration-Id header.
-func WithIntegrationID(id string) Option { return func(c *streamConfig) { c.integrationID = id } }
+// sessionCache caches the short-lived session token per OAuth token.
+var (
+	sessionMu sync.Mutex
+	sessions  = make(map[string]*SessionToken) // keyed by oauth token
+)
 
-var refreshMu sync.Mutex
+// getOrCreateSession returns a valid session token, refreshing if expired.
+func getOrCreateSession(ctx context.Context, oauthToken string) (*SessionToken, error) {
+	sessionMu.Lock()
+	sess, ok := sessions[oauthToken]
+	sessionMu.Unlock()
+
+	if ok && time.Now().Unix() < sess.ExpiresAt-60 {
+		return sess, nil
+	}
+
+	sess, err := ExchangeToken(ctx, oauthToken)
+	if err != nil {
+		return nil, err
+	}
+
+	sessionMu.Lock()
+	sessions[oauthToken] = sess
+	sessionMu.Unlock()
+	return sess, nil
+}
 
 // StreamChat sends a streaming chat request to the Copilot API.
+// oauthToken is the long-lived GitHub OAuth token (ghu_xxx).
+// It automatically exchanges it for a session token (tid=xxx) and uses
+// the dynamically returned API endpoint.
 func StreamChat(
 	ctx context.Context,
-	baseURL, token, model string,
+	oauthToken, model string,
 	messages []engine.ChatMessage,
 	tools []engine.ToolDef,
 	opts ...Option,
@@ -57,6 +67,14 @@ func StreamChat(
 		o(cfg)
 	}
 
+	sess, err := getOrCreateSession(ctx, oauthToken)
+	if err != nil {
+		return nil, fmt.Errorf("copilot: failed to get session token: %w", err)
+	}
+
+	baseURL := sess.API
+	sessionToken := sess.Token
+
 	bodyJSON, err := oaiclient.BuildChatRequest(model, messages, tools, true)
 	if err != nil {
 		return nil, err
@@ -65,14 +83,12 @@ func StreamChat(
 	setHeaders := func(req *http.Request, authToken string) {
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+authToken)
-		if cfg.editorVersion != "" {
-			req.Header.Set("Editor-Version", cfg.editorVersion)
-		}
+		req.Header.Set("Editor-Version", EditorVersion)
+		req.Header.Set("Editor-Plugin-Version", EditorPluginVersion)
+		req.Header.Set("Copilot-Integration-Id", "vscode-chat")
+		req.Header.Set("Openai-Intent", "conversation-panel")
 		if cfg.hasVision {
 			req.Header.Set("Copilot-Vision-Request", "true")
-		}
-		if cfg.integrationID != "" {
-			req.Header.Set("Copilot-Integration-Id", cfg.integrationID)
 		}
 	}
 
@@ -86,18 +102,22 @@ func StreamChat(
 	}
 
 	// First attempt
-	resp, err := doRequest(token)
+	resp, err := doRequest(sessionToken)
 	if err != nil {
 		if !oaiclient.RetryableHTTPError(err) {
 			return nil, err
 		}
-	} else if resp.StatusCode == http.StatusUnauthorized && cfg.refreshToken != "" {
+	} else if resp.StatusCode == http.StatusUnauthorized {
+		// Session token expired — refresh and retry
 		resp.Body.Close()
-		newToken, refreshErr := doRefresh(cfg)
+		sess, refreshErr := ExchangeToken(ctx, oauthToken)
 		if refreshErr == nil {
-			resp, err = doRequest(newToken)
+			sessionMu.Lock()
+			sessions[oauthToken] = sess
+			sessionMu.Unlock()
+			resp, err = doRequest(sess.Token)
 		} else {
-			return nil, fmt.Errorf("copilot: token expired and refresh failed: %w", refreshErr)
+			return nil, fmt.Errorf("copilot: session token refresh failed: %w", refreshErr)
 		}
 	}
 
@@ -140,7 +160,7 @@ func StreamChat(
 			}
 
 			req, _ := http.NewRequestWithContext(ctx, "POST", baseURL+"/chat/completions", bytes.NewReader(bodyJSON))
-			setHeaders(req, token)
+			setHeaders(req, sessionToken)
 
 			r, e := oaiclient.HTTPClientFor(baseURL).Do(req)
 			if e != nil {
@@ -171,21 +191,6 @@ func StreamChat(
 		oaiclient.SendError(ch, fmt.Errorf("copilot: stream failed after %d attempts", maxAttempts))
 	}()
 	return ch, nil
-}
-
-func doRefresh(cfg *streamConfig) (string, error) {
-	refreshMu.Lock()
-	defer refreshMu.Unlock()
-
-	resp, err := RefreshToken(context.Background(), cfg.refreshToken)
-	if err != nil {
-		return "", err
-	}
-	expiresAt := time.Now().Unix() + int64(resp.ExpiresIn)
-	if cfg.onRefresh != nil {
-		cfg.onRefresh(resp.AccessToken, resp.RefreshToken, expiresAt)
-	}
-	return resp.AccessToken, nil
 }
 
 // DetectVision checks if any message has image attachments.

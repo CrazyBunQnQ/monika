@@ -16,11 +16,21 @@ import (
 )
 
 const (
-	DefaultClientID = "Iv1.b507a08c87ecfe98"
-	GitHubBaseURL   = "https://github.com"
-	CopilotAPIURL   = "https://api.githubcopilot.com"
-	TokenScope      = "copilot"
+	DefaultClientID     = "Iv1.b507a08c87ecfe98"
+	GitHubBaseURL       = "https://github.com"
+	CopilotAPIURL       = "https://api.githubcopilot.com"
+	CopilotTokenURL     = "https://api.github.com/copilot_internal/v2/token"
+	TokenScope          = "copilot"
+	EditorVersion       = "vscode/1.100.0"
+	EditorPluginVersion = "copilot-chat/0.43.0"
 )
+
+// SessionToken holds the short-lived Copilot session token and dynamic API endpoint.
+type SessionToken struct {
+	Token     string
+	API       string
+	ExpiresAt int64
+}
 
 var (
 	ErrAuthorizationPending = errors.New("authorization_pending")
@@ -159,9 +169,23 @@ func RefreshToken(ctx context.Context, refreshToken string) (*TokenResponse, err
 	return &result, nil
 }
 
-// FetchModels retrieves the model list from the Copilot API.
-func FetchModels(ctx context.Context, token string) ([]CopilotModel, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", CopilotAPIURL+"/models", nil)
+// FetchModelsWithSession fetches models using a session token and dynamic API endpoint.
+func FetchModelsWithSession(ctx context.Context, sessionToken, apiURL string) ([]CopilotModel, error) {
+	return fetchModelsInternal(ctx, sessionToken, apiURL)
+}
+
+// FetchModels retrieves the model list from the Copilot API using an OAuth token.
+// It automatically exchanges for a session token first.
+func FetchModels(ctx context.Context, oauthToken string) ([]CopilotModel, error) {
+	sess, err := ExchangeToken(ctx, oauthToken)
+	if err != nil {
+		return nil, err
+	}
+	return fetchModelsInternal(ctx, sess.Token, sess.API)
+}
+
+func fetchModelsInternal(ctx context.Context, token, apiURL string) ([]CopilotModel, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL+"/models", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -186,4 +210,46 @@ func FetchModels(ctx context.Context, token string) ([]CopilotModel, error) {
 		return nil, fmt.Errorf("models parse: %w", err)
 	}
 	return result.Data, nil
+}
+
+// ExchangeToken exchanges an OAuth token for a short-lived Copilot session token.
+func ExchangeToken(ctx context.Context, oauthToken string) (*SessionToken, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", CopilotTokenURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "token "+oauthToken)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Editor-Version", EditorVersion)
+	req.Header.Set("Editor-Plugin-Version", EditorPluginVersion)
+
+	resp, err := authHTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("session token exchange: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("session token exchange: HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Token     string `json:"token"`
+		ExpiresAt int64  `json:"expires_at"`
+		Endpoints struct {
+			API string `json:"api"`
+		} `json:"endpoints"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("session token parse: %w", err)
+	}
+	if result.Token == "" || result.Endpoints.API == "" {
+		return nil, fmt.Errorf("session token response missing fields")
+	}
+	return &SessionToken{
+		Token:     result.Token,
+		API:       result.Endpoints.API,
+		ExpiresAt: result.ExpiresAt,
+	}, nil
 }

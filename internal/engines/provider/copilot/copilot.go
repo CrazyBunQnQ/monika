@@ -37,20 +37,12 @@ func (p *CopilotProvider) SetOnTokenRefresh(cb copilotapi.TokenRefreshCallback) 
 }
 
 func (p *CopilotProvider) StreamChat(ctx context.Context, req engine.ChatRequest) (<-chan engine.ChatEvent, error) {
-	baseURL := ""
-	token := ""
+	oauthToken := ""
 	model := ""
-	refreshToken := ""
 
 	if p.config != nil {
-		if v, ok := p.config["base_url"].(string); ok {
-			baseURL = v
-		}
 		if v, ok := p.config["api_key"].(string); ok {
-			token = v
-		}
-		if v, ok := p.config["refresh_token"].(string); ok {
-			refreshToken = v
+			oauthToken = v
 		}
 	}
 	if req.Model != "" {
@@ -61,46 +53,44 @@ func (p *CopilotProvider) StreamChat(ctx context.Context, req engine.ChatRequest
 		}
 	}
 
-	if baseURL == "" {
-		baseURL = copilotapi.CopilotAPIURL
-	}
 	if model == "" {
 		model = "gpt-4o"
 	}
-	if token == "" {
+	if oauthToken == "" {
 		return nil, fmt.Errorf("copilot: no token configured")
 	}
 
 	hasVision := copilotapi.DetectVision(req.Messages)
 
-	return copilotapi.StreamChat(ctx, baseURL, token, model, req.Messages, req.Tools,
-		copilotapi.WithEditorVersion("vscode/1.85.0"),
-		copilotapi.WithRefreshToken(refreshToken),
-		copilotapi.WithRefreshCallback(p.onTokenRefresh),
+	return copilotapi.StreamChat(ctx, oauthToken, model, req.Messages, req.Tools,
 		copilotapi.WithVision(hasVision),
 	)
 }
 
 func (p *CopilotProvider) ListModels(ctx context.Context) ([]engine.Model, error) {
-	token := ""
+	oauthToken := ""
 	if p.config != nil {
 		if v, ok := p.config["api_key"].(string); ok {
-			token = v
+			oauthToken = v
 		}
 	}
 
 	// Try fetching live model list from Copilot API.
-	if token != "" {
-		apiModels, err := copilotapi.FetchModels(ctx, token)
-		if err == nil && len(apiModels) > 0 {
-			models := make([]engine.Model, 0, len(apiModels))
-			for _, m := range apiModels {
-				if !m.ModelPickerEnabled {
-					continue
+	if oauthToken != "" {
+		// Get a session token first, then fetch models from the dynamic endpoint.
+		sess, err := copilotapi.ExchangeToken(ctx, oauthToken)
+		if err == nil {
+			apiModels, err := copilotapi.FetchModelsWithSession(ctx, sess.Token, sess.API)
+			if err == nil && len(apiModels) > 0 {
+				models := make([]engine.Model, 0, len(apiModels))
+				for _, m := range apiModels {
+					if !m.ModelPickerEnabled {
+						continue
+					}
+					models = append(models, engine.Model{ID: m.ID, DisplayName: m.Name})
 				}
-				models = append(models, engine.Model{ID: m.ID, DisplayName: m.Name})
+				return models, nil
 			}
-			return models, nil
 		}
 	}
 
