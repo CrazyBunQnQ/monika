@@ -191,6 +191,7 @@ export interface ProviderFull {
     api_key: string
     wire_api: string
     models: { id: string; name: string; context_limit?: number; output_limit?: number; enabled?: boolean }[]
+    refresh_token?: string
     token_expires_at?: number
 }
 

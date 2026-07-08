@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useStore, AvailableProviderInfo } from '../../store'
+import { CopilotLoginSection } from './CopilotLogin'
 import Modal, { ModalHeader, ModalBody, ModalFooter, ModalButton } from '../ui/Modal'
 import ConfirmModal from '../Chat/ConfirmModal'
 import { IconDatabase, IconEdit, IconPlus, IconTrash, IconChevronDown } from '../Icons'
@@ -127,6 +128,11 @@ export default function ModelsTab() {
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
+  const [authMode, setAuthMode] = useState<'api_key' | 'oauth'>('api_key')
+  const [copilotToken, setCopilotToken] = useState<{
+    refreshToken: string
+    expiresIn: number
+  } | null>(null)
 
   useEffect(() => {
     loadProviders()
@@ -141,6 +147,8 @@ export default function ModelsTab() {
     setBaseURL(p.base_url)
     setApiKey(p.api_key)
     setWireAPI(p.wire_api || '')
+    setAuthMode(p.wire_api === 'copilot' ? 'oauth' : 'api_key')
+    setCopilotToken(null)
     setSelectedAvailableProvider('')
     setError('')
     setSaved(false)
@@ -156,6 +164,8 @@ export default function ModelsTab() {
     setWireAPI('openai')
     setSelectedAvailableProvider('')
     setError('')
+    setAuthMode('api_key')
+    setCopilotToken(null)
     setSaved(false)
   }
 
@@ -164,7 +174,17 @@ export default function ModelsTab() {
     setProvId(catalog.id)
     setName(catalog.display_name || catalog.id.split('-').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(' '))
     setBaseURL(catalog.base_url || '')
-    setWireAPI('openai')
+
+    const isOAuth = catalog.env?.includes('GITHUB_TOKEN')
+    if (isOAuth) {
+      setAuthMode('oauth')
+      setWireAPI('copilot')
+      setApiKey('')
+      setCopilotToken(null)
+    } else {
+      setAuthMode('api_key')
+      setWireAPI('openai')
+    }
   }
 
   const closeModal = () => {
@@ -176,6 +196,10 @@ export default function ModelsTab() {
     if (!provId.trim() || !name.trim()) { setError('ID and Name are required'); return }
     if (isAdding) {
       if (!apiKey.trim()) { setError('API Key is required when adding a provider'); return }
+    }
+    if (authMode === 'oauth' && !apiKey.trim()) {
+      setError('Please login with GitHub first')
+      return
     }
     setLoading(true); setError('')
     try {
@@ -190,16 +214,21 @@ export default function ModelsTab() {
           id: m.id, name: m.name, context_limit: m.context_limit || 0, output_limit: m.output_limit || 0, enabled: true,
         }))
       }
+      const tokenExpiresAt = copilotToken
+        ? Math.floor(Date.now() / 1000) + copilotToken.expiresIn
+        : 0
       await saveProvider({
         id: provId.trim(), display_name: name.trim(), name: name.trim(), base_url: baseURL.trim(),
         api_key: apiKey.trim(), wire_api: wireAPI.trim(),
+        refresh_token: copilotToken?.refreshToken || '',
+        token_expires_at: tokenExpiresAt,
         models,
       })
       setSaved(true)
       closeModal()
     } catch { setError('Failed to save provider') }
     finally { setLoading(false) }
-  }, [isAdding, provId, name, baseURL, apiKey, wireAPI, providers, editingId, selectedAvailableProvider, availableProvidersCatalog, saveProvider])
+  }, [isAdding, provId, name, baseURL, apiKey, wireAPI, providers, editingId, selectedAvailableProvider, availableProvidersCatalog, saveProvider, authMode, copilotToken])
 
   const handleDelete = useCallback(async () => {
     if (!deleteTarget) return
@@ -280,7 +309,7 @@ export default function ModelsTab() {
                 {p.api_key && (
                   <div className="flex gap-4 text-[11px] text-[var(--text-dim)] mb-2 ml-7">
                     <span className="font-mono">{p.base_url || '\u2014'}</span>
-                    <span>Key: {maskKey(p.api_key)}</span>
+                    <span>{p.wire_api === 'copilot' ? 'Token' : 'Key'}: {maskKey(p.api_key)}</span>
                   </div>
                 )}
                 {(p.models || []).length > 0 && (
@@ -341,10 +370,24 @@ export default function ModelsTab() {
                 <label className={labelCls}>Base URL</label>
                 <input className={inputCls} value={baseURL} onChange={e => setBaseURL(e.target.value)} placeholder="https://api.openai.com/v1" />
               </div>
-              <div>
-                <label className={labelCls}>API Key</label>
-                <input type="password" className={inputCls} value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="Enter your API key" autoFocus={!isAdding} />
-              </div>
+              {authMode === 'api_key' ? (
+                <div>
+                  <label className={labelCls}>API Key</label>
+                  <input type="password" className={inputCls} value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="Enter your API key" autoFocus={!isAdding} />
+                </div>
+              ) : (
+                <div>
+                  <label className={labelCls}>Authentication</label>
+                  <CopilotLoginSection
+                    existingToken={editingId ? apiKey : undefined}
+                    onToken={(at, rt, exp) => {
+                      setApiKey(at)
+                      setCopilotToken({ refreshToken: rt, expiresIn: exp })
+                    }}
+                    onError={setError}
+                  />
+                </div>
+              )}
             </div>
             {error && <p className="text-[11px] text-[var(--red)] m-0 mt-4">{error}</p>}
             {saved && !error && (
