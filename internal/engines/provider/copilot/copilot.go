@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"monika/internal/config"
-	"monika/internal/version"
 	copilotapi "monika/pkg/copilot"
 	"monika/pkg/engine"
 )
@@ -75,11 +74,10 @@ func (p *CopilotProvider) StreamChat(ctx context.Context, req engine.ChatRequest
 	hasVision := copilotapi.DetectVision(req.Messages)
 
 	return copilotapi.StreamChat(ctx, baseURL, token, model, req.Messages, req.Tools,
-		copilotapi.WithEditorVersion("monika/"+version.Version),
+		copilotapi.WithEditorVersion("vscode/1.85.0"),
 		copilotapi.WithRefreshToken(refreshToken),
 		copilotapi.WithRefreshCallback(p.onTokenRefresh),
 		copilotapi.WithVision(hasVision),
-		copilotapi.WithIntegrationID("vscode-chat"),
 	)
 }
 
