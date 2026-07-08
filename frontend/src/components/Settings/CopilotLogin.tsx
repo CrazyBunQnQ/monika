@@ -1,13 +1,31 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
+import { KeyRound } from 'lucide-react'
 import { useStore } from '../../store'
 import type { CopilotLoginInfo, CopilotTokenResult } from '../../store'
 
-type LoginState = 'idle' | 'waiting' | 'success' | 'error'
+type LoginState = 'idle' | 'connecting' | 'waiting' | 'success' | 'error'
 
 interface Props {
     onToken: (accessToken: string, refreshToken: string, expiresIn: number) => void
     onError: (msg: string) => void
     existingToken?: string
+}
+
+function friendlyError(msg: string): string {
+    const lower = msg.toLowerCase()
+    if (lower.includes('context deadline exceeded') || lower.includes('timeout')) {
+        return 'Connection timed out. Please check your network or configure a proxy in Settings > Network.'
+    }
+    if (lower.includes('dial tcp') || lower.includes('connectex') || lower.includes('no such host')) {
+        return 'Cannot reach GitHub. If you need a proxy, configure it in Settings > Network.'
+    }
+    if (lower.includes('proxy')) {
+        return 'Proxy connection failed. Check your proxy settings in Settings > Network.'
+    }
+    if (lower.includes('tls') || lower.includes('certificate')) {
+        return 'TLS/certificate error. Check your system time and certificates.'
+    }
+    return msg
 }
 
 export function CopilotLoginSection({ onToken, onError, existingToken }: Props) {
@@ -29,11 +47,12 @@ export function CopilotLoginSection({ onToken, onError, existingToken }: Props) 
     useEffect(() => cleanup, [cleanup])
 
     const handleLogin = useCallback(async () => {
-        setState('waiting')
+        setState('connecting')
         setErrorMsg('')
         try {
             const info = await startCopilotLogin()
             setLoginInfo(info)
+            setState('waiting')
             window.open(info.verification_uri, '_blank')
 
             let interval = info.interval
@@ -48,14 +67,15 @@ export function CopilotLoginSection({ onToken, onError, existingToken }: Props) 
                     } else if (result.status === 'error') {
                         cleanup()
                         setState('error')
-                        setErrorMsg(result.error || 'Unknown error')
-                        onError(result.error || 'Unknown error')
+                        const msg = result.error || 'Unknown error'
+                        setErrorMsg(friendlyError(msg))
+                        onError(msg)
                     } else if (result.error === 'slow_down') {
                         cleanup()
                         interval += 5
                         timerRef.current = setInterval(pollFn, (interval + 1) * 1000)
                     }
-                } catch (e) {
+                } catch {
                     // Network error on poll — keep polling silently
                 }
             }
@@ -63,7 +83,8 @@ export function CopilotLoginSection({ onToken, onError, existingToken }: Props) 
             timerRef.current = setInterval(pollFn, (interval + 1) * 1000)
         } catch (e) {
             setState('error')
-            const msg = e instanceof Error ? e.message : (typeof e === 'string' ? e : 'Login failed')
+            const raw = e instanceof Error ? e.message : (typeof e === 'string' ? e : 'Login failed')
+            const msg = friendlyError(raw)
             setErrorMsg(msg)
             onError(msg)
         }
@@ -75,8 +96,18 @@ export function CopilotLoginSection({ onToken, onError, existingToken }: Props) 
                 onClick={handleLogin}
                 className="w-full px-4 py-2.5 text-[12px] font-medium rounded-md border border-[var(--border-strong)] bg-[var(--bg-elevated)] text-[var(--text-primary)] cursor-pointer hover:bg-[var(--bg-hover)] transition-colors flex items-center justify-center gap-2"
             >
-                <span>🔑 Login with GitHub</span>
+                <KeyRound size={13} strokeWidth={1.5} />
+                <span>Login with GitHub</span>
             </button>
+        )
+    }
+
+    if (state === 'connecting') {
+        return (
+            <div className="flex items-center justify-center gap-2 py-3">
+                <span className="inline-block w-3 h-3 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+                <span className="text-[12px] text-[var(--text-dim)]">Connecting to GitHub...</span>
+            </div>
         )
     }
 

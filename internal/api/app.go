@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -638,6 +639,22 @@ func (a *App) SaveProxyConfig(args json.RawMessage) error {
 	return a.writeConfigForScope("global", func(cfg *config2.Config) {
 		cfg.Proxy = config2.ProxyConfig{Enabled: req.Enabled, URL: req.URL}
 	})
+}
+
+// TestProxyConnection tests connectivity to GitHub through the current proxy.
+func (a *App) TestProxyConnection() (string, error) {
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			Proxy: proxy.Func(),
+		},
+	}
+	resp, err := client.Get("https://github.com")
+	if err != nil {
+		return "", fmt.Errorf("connection failed: %w", err)
+	}
+	defer resp.Body.Close()
+	return fmt.Sprintf("OK — GitHub reachable (HTTP %d)", resp.StatusCode), nil
 }
 
 func (a *App) GetModels(providerID string) ([]engine2.Model, error) {

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { Call } from '@wailsio/runtime'
 import { useStore } from '../../store'
 import type { ProxyConfig } from '../../store'
 
@@ -12,6 +13,8 @@ export default function NetworkTab() {
     const [saving, setSaving] = useState(false)
     const [saved, setSaved] = useState(false)
     const [error, setError] = useState('')
+    const [testing, setTesting] = useState(false)
+    const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null)
 
     useEffect(() => {
         loadProxyConfig().then((cfg: ProxyConfig) => {
@@ -25,6 +28,7 @@ export default function NetworkTab() {
         setSaving(true)
         setError('')
         setSaved(false)
+        setTestResult(null)
         try {
             await saveProxyConfig({ enabled, url: url.trim() })
             setSaved(true)
@@ -34,6 +38,20 @@ export default function NetworkTab() {
             setSaving(false)
         }
     }, [enabled, url, saveProxyConfig])
+
+    const handleTest = useCallback(async () => {
+        setTesting(true)
+        setTestResult(null)
+        try {
+            const result = await Call.ByName('monika/internal/api.App.TestProxyConnection') as string
+            setTestResult({ ok: true, msg: result })
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : 'Connection failed'
+            setTestResult({ ok: false, msg })
+        } finally {
+            setTesting(false)
+        }
+    }, [])
 
     if (loading) {
         return <div className="text-[12px] text-[var(--text-dim)]">Loading...</div>
@@ -80,15 +98,29 @@ export default function NetworkTab() {
                             placeholder="http://127.0.0.1:10808"
                         />
                         <p className="text-[10px] text-[var(--text-dim)] m-0 mt-1">
-                            Supports HTTP and SOCKS5 proxies. Example: http://127.0.0.1:10808
+                            HTTP proxy (CONNECT). Example: http://127.0.0.1:10808
                         </p>
                     </div>
                 )}
 
                 {error && <p className="text-[11px] text-[var(--red)] m-0">{error}</p>}
-                {saved && <p className="text-[11px] m-0" style={{ color: 'var(--green)' }}>Saved. Restart may be required for all changes to take effect.</p>}
+                {saved && !testResult && <p className="text-[11px] m-0" style={{ color: 'var(--green)' }}>Proxy settings saved.</p>}
 
-                <div className="flex justify-end">
+                {testResult && (
+                    <p className="text-[11px] m-0" style={{ color: testResult.ok ? 'var(--green)' : 'var(--red)' }}>
+                        {testResult.msg}
+                    </p>
+                )}
+
+                <div className="flex justify-end gap-2">
+                    <button
+                        onClick={handleTest}
+                        disabled={testing}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] rounded border border-[var(--border-strong)] bg-[var(--bg-elevated)] text-[var(--text-primary)] cursor-pointer hover:bg-[var(--bg-hover)] transition-colors disabled:opacity-50"
+                        style={{ color: 'var(--text-primary)' }}
+                    >
+                        {testing ? 'Testing...' : 'Test Connection'}
+                    </button>
                     <button
                         onClick={handleSave}
                         disabled={saving}
