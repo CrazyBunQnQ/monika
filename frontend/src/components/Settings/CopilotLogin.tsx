@@ -55,16 +55,17 @@ export function CopilotLoginSection({ onToken, onError, existingToken }: Props) 
                         interval += 5
                         timerRef.current = setInterval(pollFn, (interval + 1) * 1000)
                     }
-                } catch {
-                    // Network error — keep polling
+                } catch (e) {
+                    // Network error on poll — keep polling silently
                 }
             }
 
             timerRef.current = setInterval(pollFn, (interval + 1) * 1000)
         } catch (e) {
             setState('error')
-            setErrorMsg(String(e))
-            onError(String(e))
+            const msg = e instanceof Error ? e.message : (typeof e === 'string' ? e : 'Login failed')
+            setErrorMsg(msg)
+            onError(msg)
         }
     }, [startCopilotLogin, pollCopilotLogin, onToken, onError, cleanup])
 
@@ -101,7 +102,7 @@ export function CopilotLoginSection({ onToken, onError, existingToken }: Props) 
         return (
             <div className="space-y-2">
                 <div className="flex items-center gap-2 text-[12px]" style={{ color: 'var(--green)' }}>
-                    <span>✓ Logged in</span>
+                    <span>Logged in</span>
                 </div>
                 <button
                     onClick={handleLogin}
